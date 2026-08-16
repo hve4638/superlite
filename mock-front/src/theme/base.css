@@ -1,0 +1,69 @@
+/* 워크벤치 공통 베이스. 색은 전부 tokens.css 의 --vscode-* 변수만 사용한다. */
+
+@font-face {
+  /* Seti file icon font — vscode-oss extensions/theme-seti (MIT) 에서 복사 */
+  font-family: 'seti';
+  src: url('../assets/seti.woff') format('woff');
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  /* WHY: 레퍼런스(Code OSS web/Linux)의 워크벤치 폰트 스택과 동일해야 픽셀 비교가 성립한다 */
+  font-family: system-ui, 'Ubuntu', 'Droid Sans', sans-serif;
+  font-size: 13px;
+  color: var(--vscode-foreground);
+  background-color: var(--vscode-editor-background);
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+/* VS Code 워크벤치 스크롤바 근사 (shadow-dom 커스텀 스크롤바 대신 네이티브 스타일링) */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--vscode-scrollbarSlider-background);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--vscode-scrollbarSlider-hoverBackground);
+}
+::-webkit-scrollbar-thumb:active {
+  background: var(--vscode-scrollbarSlider-activeBackground);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+input, textarea {
+  font-family: inherit;
+}
+
+/* Seti 파일 아이콘 공통 — FileIcon.vue 가 문자/색을 채운다 */
+.file-icon {
+  display: inline-block;
+  font-family: 'seti';
+  /* WHY: seti 테마 정의(vs-seti-icon-theme.json fonts[0].size)가 150% 라서 그대로 따른다 */
+  font-size: 150%;
+  width: 16px;
+  flex-shrink: 0;
+  text-align: left;
+  vertical-align: top;
+  speak: none;
+  font-style: normal;
+  font-weight: normal;
+}

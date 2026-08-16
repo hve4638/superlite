@@ -1,0 +1,531 @@
+import type {
+  DirEntry, FileSearchResult, GitStatus, TerminalSession, ThinBackend, WorkspaceInfo,
+} from './types';
+
+// WHY: 이 픽스처는 tools/refspec/mock-workspace 와 파일/내용/git 상태가 1:1 이다.
+//      레퍼런스(Code OSS)에 같은 폴더를 열어 두 구현을 differential 비교하기 위한 전제이므로,
+//      한쪽을 바꾸면 반드시 다른 쪽도 같이 바꿔야 한다.
+
+const FORMAT_TS_HEAD = `const UNITS = ['B', 'KB', 'MB', 'GB'];
+
+export function formatBytes(n: number): string {
+  let i = 0;
+  while (n >= 1024 && i < UNITS.length - 1) {
+    n /= 1024;
+    i += 1;
+  }
+  return \`\${n.toFixed(1)} \${UNITS[i]}\`;
+}
+
+export function formatDate(d: Date): string {
+  return d.toISOString().slice(0, 19).replace('T', ' ');
+}
+`;
+
+const FILES: Record<string, string> = {
+  'package.json': `{
+  "name": "acme-server",
+  "version": "1.2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/index.ts",
+    "test": "node --test"
+  }
+}
+`,
+  'README.md': `# acme-server
+
+Example HTTP API server used as a fixture workspace.
+
+## Run
+
+\`\`\`sh
+npm run dev
+\`\`\`
+
+## Layout
+
+- \`src/index.ts\` — entry point
+- \`src/app.ts\` — request routing
+- \`src/utils/format.ts\` — formatting helpers
+`,
+  '.gitignore': `node_modules/
+dist/
+`,
+  'NOTES.md': `# Notes
+
+Scratch notes for the fixture.
+`,
+  'docs/guide.md': `# Guide
+
+## Configuration
+
+Set \`PORT\` to change the listen port. Defaults to \`3000\`.
+
+## Endpoints
+
+| Path | Description |
+| --- | --- |
+| \`/health\` | Liveness probe |
+| \`/stats\` | Memory statistics |
+`,
+  'src/index.ts': `import { createApp } from './app.ts';
+
+const port = Number(process.env.PORT ?? 3000);
+const app = createApp();
+
+app.listen(port, () => {
+  console.log(\`listening on :\${port}\`);
+});
+`,
+  'src/app.ts': `import { formatDate, formatBytes } from './utils/format.ts';
+
+interface Route {
+  method: 'GET' | 'POST';
+  path: string;
+  handler: (req: Request) => Response;
+}
+
+const routes: Route[] = [
+  {
+    method: 'GET',
+    path: '/health',
+    handler: () => Response.json({ ok: true, at: formatDate(new Date()) }),
+  },
+  {
+    method: 'GET',
+    path: '/stats',
+    handler: () => Response.json({ heap: formatBytes(process.memoryUsage().heapUsed) }),
+  },
+];
+
+export function createApp() {
+  return {
+    listen(port: number, onReady?: () => void) {
+      // A real server would bind here; the fixture only logs.
+      void routes;
+      void port;
+      onReady?.();
+    },
+  };
+}
+`,
+  'src/utils/format.ts': `${FORMAT_TS_HEAD}
+export function formatPercent(v: number): string {
+  return \`\${(v * 100).toFixed(1)}%\`;
+}
+`,
+};
+
+// HEAD 스냅샷 — 초기 커밋 시점의 추적 파일들. NOTES.md 는 untracked 라 제외,
+// format.ts 는 워킹트리에 formatPercent 가 추가되기 전 내용이다.
+let HEAD: Record<string, string> = (() => {
+  const head = { ...FILES };
+  delete head['NOTES.md'];
+  head['src/utils/format.ts'] = FORMAT_TS_HEAD;
+  return head;
+})();
+
+function delay<T>(v: T): Promise<T> {
+  // WHY: 실제 백엔드는 네트워크 왕복이 있다. 0ms resolve 로도 마이크로태스크 경계가 생겨,
+  //      동기 가정으로 작성된 UI 코드를 개발 단계에서 걸러낸다.
+  return Promise.resolve(v);
+}
+
+export class MockBackend implements ThinBackend {
+  workspace(): Promise<WorkspaceInfo> {
+    return delay({ name: 'mock-workspace', rootPath: '/workspace/mock-workspace' });
+  }
+
+  readDir(path: string): Promise<DirEntry[]> {
+    const prefix = path === '' ? '' : `${path}/`;
+    const seen = new Map<string, DirEntry>();
+    for (const file of Object.keys(FILES)) {
+      if (!file.startsWith(prefix)) continue;
+      const rest = file.slice(prefix.length);
+      const slash = rest.indexOf('/');
+      if (slash === -1) {
+        seen.set(rest, { name: rest, path: file, kind: 'file' });
+      } else {
+        const dir = rest.slice(0, slash);
+        seen.set(dir, { name: dir, path: `${prefix}${dir}`, kind: 'directory' });
+      }
+    }
+    return delay([...seen.values()]);
+  }
+
+  readFile(path: string): Promise<string> {
+    const content = FILES[path];
+    if (content === undefined) return Promise.reject(new Error(`ENOENT: ${path}`));
+    return delay(content);
+  }
+
+  writeFile(path: string, content: string): Promise<void> {
+    FILES[path] = content;
+    return delay(undefined);
+  }
+
+  listFiles(): Promise<string[]> {
+    return delay(Object.keys(FILES).sort());
+  }
+
+  search(query: string, opts?: { caseSensitive?: boolean }): Promise<FileSearchResult[]> {
+    if (!query) return delay([]);
+    const needle = opts?.caseSensitive ? query : query.toLowerCase();
+    const results: FileSearchResult[] = [];
+    for (const [path, content] of Object.entries(FILES)) {
+      const lines = content.split('\n');
+      const matches = [];
+      for (let i = 0; i < lines.length; i++) {
+        const hay = opts?.caseSensitive ? lines[i] : lines[i].toLowerCase();
+        const ranges: [number, number][] = [];
+        let at = hay.indexOf(needle);
+        while (at !== -1) {
+          ranges.push([at, at + needle.length]);
+          at = hay.indexOf(needle, at + needle.length);
+        }
+        if (ranges.length) matches.push({ line: i, lineText: lines[i], ranges });
+      }
+      if (matches.length) results.push({ path, matches });
+    }
+    return delay(results);
+  }
+
+  gitStatus(): Promise<GitStatus> {
+    // 워킹트리(FILES) vs HEAD 를 매번 비교해 실제 git 처럼 동적으로 계산한다
+    const changes: GitStatus['changes'] = [];
+    for (const path of Object.keys(FILES)) {
+      if (!(path in HEAD)) changes.push({ path, kind: 'untracked' });
+      else if (FILES[path] !== HEAD[path]) changes.push({ path, kind: 'modified' });
+    }
+    for (const path of Object.keys(HEAD)) {
+      if (!(path in FILES)) changes.push({ path, kind: 'deleted' });
+    }
+    changes.sort((a, b) => a.path.localeCompare(b.path));
+    return delay({ branch: 'main', dirty: changes.length > 0, changes });
+  }
+
+  gitOriginalContent(path: string): Promise<string> {
+    return delay(HEAD[path] ?? '');
+  }
+
+  gitCommit(_message: string): Promise<void> {
+    HEAD = { ...FILES };
+    return delay(undefined);
+  }
+
+  createTerminal(cols: number, rows: number): TerminalSession {
+    return new MockPty(cols, rows);
+  }
+}
+
+/** 아주 작은 가짜 셸 — 프롬프트/echo/몇 개 명령만. 터미널 UI 개발용. */
+class MockPty implements TerminalSession {
+  private cb: ((data: string) => void) | null = null;
+  private buf = '';
+  /** buf 내 커서 위치 (0..buf.length) */
+  private pos = 0;
+  private history: string[] = [];
+  /** -1 = 새 줄 편집 중, 그 외 = history 인덱스 */
+  private histIdx = -1;
+  /** 히스토리 탐색 진입 시점의 편집 중이던 줄 */
+  private savedBuf = '';
+  private cwd = '~/mock-workspace';
+  /** 터미널 폭 — 줄바꿈된 입력의 커서 계산에 필요 (resize 로 갱신) */
+  private cols: number;
+  /** 청크 경계에서 잘린 미완결 ESC 시퀀스 조각 */
+  private pendingEsc = '';
+
+  constructor(cols: number, _rows: number) {
+    this.cols = Math.max(2, cols);
+    queueMicrotask(() => this.prompt());
+  }
+
+  private out(s: string) {
+    this.cb?.(s);
+  }
+
+  private prompt() {
+    this.out(`\x1b[01;32muser@superlight\x1b[00m:\x1b[01;34m${this.cwd}\x1b[00m$ `);
+  }
+
+  private run(cmd: string) {
+    const [name, ...args] = cmd.trim().split(/\s+/);
+    switch (name) {
+      case '':
+        break;
+      case 'ls':
+        this.out('NOTES.md  README.md  \x1b[01;34mdocs\x1b[0m  package.json  \x1b[01;34msrc\x1b[0m\r\n');
+        break;
+      case 'pwd':
+        this.out('/home/user/mock-workspace\r\n');
+        break;
+      case 'echo':
+        this.out(`${args.join(' ')}\r\n`);
+        break;
+      case 'clear':
+        this.out('\x1b[2J\x1b[H');
+        break;
+      default:
+        this.out(`bash: ${name}: command not found\r\n`);
+    }
+  }
+
+  // ── 라인 편집 (readline 근사) ──
+  // WHY: xterm 은 Home/End/화살표를 이스케이프 시퀀스(\x1b[D 등)로 보낸다.
+  //      파싱하지 않으면 ESC 만 버려지고 "[D" 가 입력으로 새어 들어간다.
+
+  /** 프롬프트의 표시 길이 (ANSI 색 제외) — 커서 절대 위치 계산의 기준 */
+  private promptLen(): number {
+    return `user@superlight:${this.cwd}$ `.length;
+  }
+
+  /**
+   * 커서를 buf 위치 fromP → toP 로 이동. 입력이 줄바꿈된 경우까지 처리한다.
+   * WHY: CUB/CUF(\x1b[D/C)는 행 경계를 넘지 못한다 — 절대 행/열을 계산해
+   *      행 이동(A/B) + \r + 열 이동(C)으로 움직여야 긴 명령에서 화면이 안 깨진다.
+   *      (한 줄이 정확히 cols 에서 끝나는 pending-wrap 경계의 1행 오차는 허용)
+   */
+  private cursorMove(fromP: number, toP: number) {
+    if (fromP === toP) return;
+    const base = this.promptLen();
+    const fromRow = Math.floor((base + fromP) / this.cols);
+    const toRow = Math.floor((base + toP) / this.cols);
+    const toCol = (base + toP) % this.cols;
+    if (toRow < fromRow) this.out(`\x1b[${fromRow - toRow}A`);
+    else if (toRow > fromRow) this.out(`\x1b[${toRow - fromRow}B`);
+    this.out('\r');
+    if (toCol > 0) this.out(`\x1b[${toCol}C`);
+  }
+
+  private insert(ch: string) {
+    this.buf = this.buf.slice(0, this.pos) + ch + this.buf.slice(this.pos);
+    const tail = this.buf.slice(this.pos);
+    this.out(tail); // 출력 후 커서는 buf 끝
+    this.pos += 1;
+    this.cursorMove(this.buf.length, this.pos);
+  }
+
+  private backspace() {
+    if (this.pos === 0) return;
+    this.buf = this.buf.slice(0, this.pos - 1) + this.buf.slice(this.pos);
+    this.cursorMove(this.pos, this.pos - 1);
+    this.pos -= 1;
+    const tail = this.buf.slice(this.pos);
+    this.out(`${tail} `); // 지워진 마지막 칸 덮기 — 커서는 len+1
+    this.cursorMove(this.buf.length + 1, this.pos);
+  }
+
+  private deleteForward() {
+    if (this.pos >= this.buf.length) return;
+    this.buf = this.buf.slice(0, this.pos) + this.buf.slice(this.pos + 1);
+    const tail = this.buf.slice(this.pos);
+    this.out(`${tail} `);
+    this.cursorMove(this.buf.length + 1, this.pos);
+  }
+
+  /** 현재 입력 줄을 s 로 교체해 다시 그린다 (히스토리 탐색용) */
+  private setLine(s: string) {
+    this.cursorMove(this.pos, 0);
+    // WHY: \x1b[K 는 현재 행만 지운다 — 여러 행에 걸친 입력은 화면 끝까지(\x1b[J) 지워야 한다
+    this.out('\x1b[J');
+    this.buf = s;
+    this.pos = s.length;
+    this.out(s);
+  }
+
+  /** 단어 시작으로 (Ctrl+Left) */
+  private wordLeft(): number {
+    let p = this.pos;
+    while (p > 0 && this.buf[p - 1] === ' ') p -= 1;
+    while (p > 0 && this.buf[p - 1] !== ' ') p -= 1;
+    return p;
+  }
+
+  /** 다음 단어 끝으로 (Ctrl+Right) */
+  private wordRight(): number {
+    let p = this.pos;
+    while (p < this.buf.length && this.buf[p] === ' ') p += 1;
+    while (p < this.buf.length && this.buf[p] !== ' ') p += 1;
+    return p;
+  }
+
+  private historyUp() {
+    if (this.history.length === 0) return;
+    if (this.histIdx === -1) {
+      this.savedBuf = this.buf;
+      this.histIdx = this.history.length - 1;
+    } else if (this.histIdx > 0) {
+      this.histIdx -= 1;
+    } else {
+      return;
+    }
+    this.setLine(this.history[this.histIdx]);
+  }
+
+  private historyDown() {
+    if (this.histIdx === -1) return;
+    if (this.histIdx < this.history.length - 1) {
+      this.histIdx += 1;
+      this.setLine(this.history[this.histIdx]);
+    } else {
+      this.histIdx = -1;
+      this.setLine(this.savedBuf);
+    }
+  }
+
+  private enter() {
+    this.cursorMove(this.pos, this.buf.length); // 출력이 입력 끝 다음 줄에서 시작하도록
+    this.out('\r\n');
+    const cmd = this.buf;
+    if (cmd.trim()) this.history.push(cmd);
+    this.buf = '';
+    this.pos = 0;
+    this.histIdx = -1;
+    this.run(cmd);
+    this.prompt();
+  }
+
+  private interrupt() {
+    this.cursorMove(this.pos, this.buf.length);
+    this.out('^C\r\n');
+    this.buf = '';
+    this.pos = 0;
+    this.histIdx = -1;
+    this.prompt();
+  }
+
+  /**
+   * ESC 시퀀스 파싱: 소비 길이와 액션 키를 돌려준다. 모르는 시퀀스는 조용히 소비.
+   * 청크 끝에서 시퀀스가 잘리면 kind 'incomplete' (len 0) — 호출자가 나머지를 보관한다.
+   */
+  private parseEsc(data: string, i: number): { len: number; kind: string | null } {
+    const next = data[i + 1];
+    if (next === undefined) return { len: 0, kind: 'incomplete' };
+    if (next === '[') {
+      // CSI: \x1b[ <params> <final @-~>
+      let j = i + 2;
+      while (j < data.length && !(data[j] >= '@' && data[j] <= '~')) j += 1;
+      if (j >= data.length) return { len: 0, kind: 'incomplete' };
+      const params = data.slice(i + 2, j);
+      const final = data[j];
+      const len = j - i + 1;
+      const ctrl = params.endsWith(';5');
+      if (final === 'A') return { len, kind: 'up' };
+      if (final === 'B') return { len, kind: 'down' };
+      if (final === 'C') return { len, kind: ctrl ? 'word-right' : 'right' };
+      if (final === 'D') return { len, kind: ctrl ? 'word-left' : 'left' };
+      if (final === 'H') return { len, kind: 'home' };
+      if (final === 'F') return { len, kind: 'end' };
+      if (final === '~') {
+        if (params === '1' || params === '7') return { len, kind: 'home' };
+        if (params === '4' || params === '8') return { len, kind: 'end' };
+        if (params === '3') return { len, kind: 'delete' };
+      }
+      return { len, kind: null };
+    }
+    if (next === 'O') {
+      // SS3 (application 모드 Home/End/화살표)
+      if (i + 2 >= data.length) return { len: 0, kind: 'incomplete' };
+      const final = data[i + 2];
+      const map: Record<string, string> = { A: 'up', B: 'down', C: 'right', D: 'left', H: 'home', F: 'end' };
+      return { len: 3, kind: map[final] ?? null };
+    }
+    return { len: 1, kind: null };
+  }
+
+  write(data: string): void {
+    // WHY: 스트리밍 전송(실백엔드)에서는 ESC 시퀀스가 청크 경계에서 잘릴 수 있다 —
+    //      잘린 조각을 보관했다가 다음 청크 앞에 붙여 "[D" 누수를 막는다.
+    if (this.pendingEsc) {
+      data = this.pendingEsc + data;
+      this.pendingEsc = '';
+    }
+    let i = 0;
+    let lastWasCR = false;
+    while (i < data.length) {
+      const ch = data[i];
+      if (ch === '\x1b') {
+        const { len, kind } = this.parseEsc(data, i);
+        if (kind === 'incomplete') {
+          this.pendingEsc = data.slice(i);
+          return;
+        }
+        i += len;
+        switch (kind) {
+          case 'left':
+            if (this.pos > 0) { this.cursorMove(this.pos, this.pos - 1); this.pos -= 1; }
+            break;
+          case 'right':
+            if (this.pos < this.buf.length) { this.cursorMove(this.pos, this.pos + 1); this.pos += 1; }
+            break;
+          case 'word-left': {
+            const p = this.wordLeft();
+            this.cursorMove(this.pos, p);
+            this.pos = p;
+            break;
+          }
+          case 'word-right': {
+            const p = this.wordRight();
+            this.cursorMove(this.pos, p);
+            this.pos = p;
+            break;
+          }
+          case 'home':
+            this.cursorMove(this.pos, 0);
+            this.pos = 0;
+            break;
+          case 'end':
+            this.cursorMove(this.pos, this.buf.length);
+            this.pos = this.buf.length;
+            break;
+          case 'delete':
+            this.deleteForward();
+            break;
+          case 'up':
+            this.historyUp();
+            break;
+          case 'down':
+            this.historyDown();
+            break;
+        }
+        lastWasCR = false;
+        continue;
+      }
+      i += 1;
+      if (ch === '\r') {
+        this.enter();
+        lastWasCR = true;
+        continue;
+      }
+      if (ch === '\n') {
+        // Ctrl+J 단독은 제출, \r\n 페어의 \n 은 무시
+        if (!lastWasCR) this.enter();
+        lastWasCR = false;
+        continue;
+      }
+      lastWasCR = false;
+      if (ch === '\x7f') this.backspace();
+      else if (ch === '\x03') this.interrupt();
+      else if (ch === '\x0c') {
+        // Ctrl+L: 화면 클리어 후 현재 입력 줄 유지
+        this.out('\x1b[2J\x1b[H');
+        this.prompt();
+        this.out(this.buf);
+        this.cursorMove(this.buf.length, this.pos);
+      } else if (ch >= ' ') this.insert(ch);
+    }
+  }
+
+  onData(cb: (data: string) => void): void {
+    this.cb = cb;
+  }
+
+  resize(cols: number): void {
+    this.cols = Math.max(2, cols);
+  }
+
+  dispose(): void {
+    this.cb = null;
+  }
+}
