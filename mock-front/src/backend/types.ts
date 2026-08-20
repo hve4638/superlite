@@ -48,6 +48,12 @@ export interface GitStatus {
   changes: GitChange[];
 }
 
+export interface FsChange {
+  /** 루트 기준 상대 경로 */
+  path: string;
+  kind: 'create' | 'change' | 'delete';
+}
+
 /** mock PTY 세션. 실제 백엔드에서는 원격 PTY 로 대체된다. */
 export interface TerminalSession {
   write(data: string): void;
@@ -72,4 +78,9 @@ export interface ThinBackend {
   /** 전체 변경을 커밋 (git add -A && git commit). 성공 후 gitStatus 는 clean 이 된다. */
   gitCommit(message: string): Promise<void>;
   createTerminal(cols: number, rows: number): TerminalSession;
+  /**
+   * 파일시스템 변경 푸시 구독 (외부 편집·터미널 작업 반영). overflow 면 changes 는 비어
+   * 있고 전체 리프레시가 필요하다. mock 은 미구현 — 구독 자체가 없으면 감시도 없다.
+   */
+  onFsChanges?(cb: (changes: FsChange[], overflow: boolean) => void): void;
 }

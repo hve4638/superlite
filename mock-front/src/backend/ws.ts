@@ -7,6 +7,7 @@
 import type {
   DirEntry,
   FileSearchResult,
+  FsChange,
   GitStatus,
   TerminalSession,
   ThinBackend,
@@ -27,6 +28,7 @@ export class WsBackend implements ThinBackend {
   private nextTerm = 1;
   private pending = new Map<number, Pending>();
   private termHandlers = new Map<number, (data: string) => void>();
+  private fsHandler: ((changes: FsChange[], overflow: boolean) => void) | null = null;
 
   constructor(url: string) {
     this.ws = new WebSocket(url);
@@ -44,6 +46,10 @@ export class WsBackend implements ThinBackend {
       }
       if (msg.event === 'termData') {
         this.termHandlers.get(msg.term)?.(msg.data);
+        return;
+      }
+      if (msg.event === 'fsChanges') {
+        this.fsHandler?.(msg.changes ?? [], msg.overflow === true);
         return;
       }
       if (msg.event === 'termExit') {
@@ -105,6 +111,10 @@ export class WsBackend implements ThinBackend {
   }
   gitCommit(message: string): Promise<void> {
     return this.call('gitCommit', { message });
+  }
+
+  onFsChanges(cb: (changes: FsChange[], overflow: boolean) => void): void {
+    this.fsHandler = cb;
   }
 
   createTerminal(cols: number, rows: number): TerminalSession {

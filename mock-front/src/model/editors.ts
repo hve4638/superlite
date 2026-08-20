@@ -179,6 +179,28 @@ export function updateContent(path: string, content: string): void {
   }
 }
 
+/**
+ * 외부 변경을 열린 monaco 모델에 편집으로 반영하는 훅 — ui/editor/monaco.ts 가 등록한다.
+ * (model 계층이 UI 를 모른 채 재로드를 완결하기 위한 seam)
+ */
+let applyExternalEdit: ((path: string, content: string) => void) | null = null;
+export function setApplyExternalEdit(fn: (path: string, content: string) => void): void {
+  applyExternalEdit = fn;
+}
+
+/**
+ * 외부(디스크) 변경 반영. 깨끗한 문서만 조용히 재로드한다 — dirty 는 안 건드리고
+ * 충돌은 저장 시점 검사로 일원화한다 (VS Code 동일).
+ */
+export function reloadDocFromDisk(path: string, content: string): void {
+  const doc = editors.docs.get(path);
+  if (!doc || doc.content !== doc.savedContent || doc.savedContent === content) return;
+  doc.savedContent = content;
+  applyExternalEdit?.(path, content);
+  // 모델 편집이 change 리스너로 이미 갱신했어도 무해(같은 값) — 모델이 없던 경우를 커버한다
+  updateContent(path, content);
+}
+
 export async function saveActive(): Promise<void> {
   // diff 탭의 modified 쪽 편집도 같은 문서이므로 kind 와 무관하게 저장한다
   const tab = activeTab();

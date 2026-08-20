@@ -9,7 +9,7 @@ import tsWorker from 'monaco-editor/languages/features/typescript/ts.worker?work
 import jsonWorker from 'monaco-editor/languages/features/json/json.worker?worker';
 import cssWorker from 'monaco-editor/languages/features/css/css.worker?worker';
 import htmlWorker from 'monaco-editor/languages/features/html/html.worker?worker';
-import { editors, languageOf, updateContent } from '../../model/editors';
+import { editors, languageOf, setApplyExternalEdit, updateContent } from '../../model/editors';
 import { backend } from '../../model/host';
 import { scm } from '../../model/scm';
 import { EDITOR_FONT_SIZE, MONO_FONT_FAMILY } from '../../theme/fonts';
@@ -133,6 +133,42 @@ export function modelFor(path: string): monaco.editor.ITextModel {
   }
   return model;
 }
+
+// 외부(디스크) 변경을 열린 모델에 반영 — 공통 프리픽스/서픽스를 제외한 단일 최소 편집으로
+// 적용해, 변경 지점 밖의 커서·선택·접기를 보존한다 (VS Code 의 조용한 재로드 근사).
+setApplyExternalEdit((path, content) => {
+  const model = models.get(path) ?? monaco.editor.getModel(monaco.Uri.file('/' + path));
+  if (!model || model.isDisposed()) return;
+  const old = model.getValue();
+  if (old === content) return;
+  let s = 0;
+  while (s < old.length && s < content.length && old[s] === content[s]) s++;
+  let eOld = old.length;
+  let eNew = content.length;
+  while (eOld > s && eNew > s && old[eOld - 1] === content[eNew - 1]) {
+    eOld--;
+    eNew--;
+  }
+  // 경계가 서로게이트 쌍을 가르면 쌍 단위로 물러난다 — 잘린 코드포인트가 모델에 들어가면
+  // 이후 저장이 손상된 내용을 디스크에 쓴다
+  const isHigh = (code: number) => code >= 0xd800 && code <= 0xdbff;
+  if (s > 0 && isHigh(old.charCodeAt(s - 1))) s--;
+  if (eOld < old.length && eNew < content.length && isHigh(old.charCodeAt(eOld - 1))) {
+    eOld++;
+    eNew++;
+  }
+  const start = model.getPositionAt(s);
+  const end = model.getPositionAt(eOld);
+  // pushEditOperations — 편집이 undo 스택 위에 쌓여 이전 상태로의 undo 가 일관된다
+  model.pushEditOperations(
+    null,
+    [{
+      range: new monaco.Range(start.lineNumber, start.column, end.lineNumber, end.column),
+      text: content.slice(s, eNew),
+    }],
+    () => null,
+  );
+});
 
 /** diff original(HEAD 시점) 모델 — 커밋(headVersion)마다 무효화되는 버전 키 캐시.
  *  이전 버전 모델은 살아 있는 diff 에디터에 물려 있을 수 있어 dispose 하지 않는다
