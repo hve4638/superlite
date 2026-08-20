@@ -1,0 +1,11 @@
+[package]
+name = "superlight-daemon"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "process", "sync", "io-util"] }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+serde_json = "1"
+portable-pty = "0.8"
