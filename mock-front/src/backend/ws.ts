@@ -1,8 +1,8 @@
 /**
- * WsBackend — 로컬 데몬(daemon/)에 WebSocket 으로 붙는 ThinBackend 구현.
+ * WsBackend — 백엔드(backend/)의 /ws 에 붙는 ThinBackend 구현. 백엔드가 데몬으로 중계한다.
  *
  * 프로토콜(임시 v0): {id,method,params} 요청/응답 + termData/termExit 이벤트.
- * 와이어 계약 확정은 보류 중 (_docs/decisions.md) — 확정되면 이 파일과 daemon 만 바뀐다.
+ * 와이어 계약 확정은 보류 중 (_docs/decisions.md) — 확정되면 이 파일과 backend/daemon 만 바뀐다.
  */
 import type {
   DirEntry,
@@ -60,7 +60,7 @@ export class WsBackend implements ThinBackend {
     };
     this.ws.onclose = () => {
       // ponytail: 재연결 없음(와이어 계약 보류) — 진행 중 요청만 실패 처리
-      for (const p of this.pending.values()) p.reject(new Error('데몬 연결이 끊겼다'));
+      for (const p of this.pending.values()) p.reject(new Error('백엔드 연결이 끊겼다'));
       this.pending.clear();
     };
   }

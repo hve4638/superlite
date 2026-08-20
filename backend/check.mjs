@@ -1,5 +1,6 @@
-// daemon 계약 스모크 — 데몬이 repo 루트(code-superlight/)를 서빙 중일 때:
-//   node daemon/check.mjs
+// 계약 스모크 (프론트 WS → 백엔드 → 데몬 전 구간) — 백엔드가 repo 루트를 서빙 중일 때:
+//   cargo run -p superlight-backend   (데몬은 자동 기동)
+//   node backend/check.mjs
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 
@@ -8,7 +9,7 @@ const deadline = setTimeout(() => {
   process.exit(1);
 }, 15000);
 
-const ws = new WebSocket('ws://127.0.0.1:8794');
+const ws = new WebSocket(process.env.SUPERLIGHT_WS ?? 'ws://127.0.0.1:8795/ws');
 let nextId = 1;
 const pending = new Map();
 const termData = [];
@@ -36,7 +37,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 await new Promise((resolve, reject) => {
   ws.onopen = resolve;
-  ws.onerror = () => reject(new Error('데몬 미기동 — cargo run -- <root> 먼저'));
+  ws.onerror = () => reject(new Error('백엔드 미기동 — cargo run -p superlight-backend 먼저'));
 });
 
 const info = await call('workspace');
@@ -90,6 +91,6 @@ await sleep(700);
 assert.ok(termData.join('').includes('sl-23'), `terminal echo: ${JSON.stringify(termData)}`);
 send('disposeTerminal', { term: 1 });
 
-console.log('daemon check: OK');
+console.log('contract check: OK');
 clearTimeout(deadline);
 ws.close();
