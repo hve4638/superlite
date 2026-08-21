@@ -1,0 +1,13 @@
+import { FsChange } from '../backend/types'
+import { backend } from './host'
+import { editors, reloadDocFromDisk } from './editors'
+import { loadedDirPaths, refreshAllFiles, refreshDir } from './files'
+import { refreshScm } from './scm'
+
+role: 데몬 fsChanges 배치 소비 — 소비자별 고정 창 디바운스 (에디터 100ms · 탐색기 500ms · git 1000ms), 창 포커스 시 전체 리프레시 안전망
+
+export fn initWatch() {
+  role: onFsChanges 구독 + 포커스 안전망 등록 (mock 은 구독 자체가 없어 no-op)
+  depends: { reloadDocFromDisk, refreshDir, refreshScm }
+  effects: { 외부 변경이 열린 문서·트리·SCM 에 흘러든다 }
+}

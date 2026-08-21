@@ -1,0 +1,8 @@
+[project]
+source_root = "."
+
+[target]
+languages = ["typescript", "rust"]
+
+[boundary]
+assembly = ["mock-front/src/model/host.ts"]

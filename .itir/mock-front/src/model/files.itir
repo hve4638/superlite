@@ -1,0 +1,26 @@
+import { backend } from './host'
+import { DirEntry } from '../backend/types'
+
+role: 탐색기 파일 트리 — lazy 디렉토리 로드, 외부 변경 시 로드된 디렉토리만 병합 리프레시
+
+export type TreeNode
+export type files
+
+export fn initFiles() {
+  role: 루트 나열로 트리 초기화
+}
+export fn toggleDir(node) {
+  role: 디렉토리 펼침/접힘 (첫 펼침에 자식 로드)
+}
+export fn refreshDir(path) {
+  role: 한 디렉토리 재나열 후 기존 노드와 병합 — 펼침 상태·로드된 자식 보존
+}
+export fn loadedDirPaths() -> paths {
+  role: 로드된 디렉토리 경로 나열 (전체 리프레시 대상)
+}
+export fn refreshAllFiles() {
+  role: Quick Open 파일 목록 재조회
+}
+export fn visibleNodes() -> nodes {
+  role: 펼침 상태 기준 평탄화 — 렌더링용
+}

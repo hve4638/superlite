@@ -1,0 +1,13 @@
+role: HTTP 진입점 (127.0.0.1 전용) — 정적 프론트 서빙 + /ws ↔ 데몬 unix socket 중계, 데몬 spawn·attach
+
+import { socket_path } from '../../common/src'
+
+fn relay() {
+  role: WebSocket ↔ unix socket 양방향 중계 — 라인 프레이밍만 알고 내용은 불투명 (데몬이 유일한 해석자)
+}
+fn daemon_conn() {
+  role: 데몬 소켓 접속, 없으면 spawn 후 재시도
+}
+fn control_loop() {
+  role: 백엔드 자체 수명 — 마지막 클라이언트 이탈 후 grace 뒤 종료
+}

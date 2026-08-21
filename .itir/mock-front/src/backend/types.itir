@@ -1,0 +1,51 @@
+role: ThinBackend 계약 — 와이어 프로토콜(백엔드 /ws JSON-RPC)의 TS 사영. 와이어 쪽 대응은 daemon/src 참조
+
+port ThinBackend {
+  role: 워크스페이스 파일·검색·git·터미널 접근 계약. 구현체 선택은 model/host 조립 지점 한 곳
+  impls: { MockBackend, WsBackend }
+  fn workspace() -> WorkspaceInfo {
+    role: 워크스페이스 이름·루트 경로
+  }
+  fn readDir(path) -> entries {
+    role: 디렉토리 1층 나열 (트리 lazy 로드 단위)
+  }
+  fn readFile(path) -> FileContent {
+    role: 파일 내용 + 그 시점 디스크 etag
+  }
+  fn writeFile(path, content, etag) -> WriteResult {
+    role: 저장. etag 제시 시 낙관적 충돌 검사 — stale 이면 미기록으로 conflict 반환, 생략 시 무조건 쓰기
+  }
+  fn listFiles() -> paths {
+    role: Quick Open 용 전체 파일 나열
+  }
+  fn search(query, opts) -> results {
+    role: 내용 전문 검색 (디스크 기준, dirty 버퍼 미반영)
+  }
+  fn gitStatus() -> GitStatus {
+    role: 브랜치 + 워킹트리 변경 목록
+  }
+  fn gitOriginalContent(path) -> content {
+    role: diff 의 original 쪽 — HEAD 시점 내용
+  }
+  fn gitCommit(message) {
+    role: 스테이징 전체 커밋
+  }
+  fn createTerminal(cols, rows) -> TerminalSession {
+    role: PTY 세션 생성 (동기 핸들, 데이터는 콜백)
+  }
+  fn onFsChanges(cb) {
+    role: 외부 파일 변경 배치 구독 (옵셔널 — mock 은 외부 변경이 없다)
+  }
+}
+
+export type WorkspaceInfo
+export type DirEntry
+export type SearchMatch
+export type FileSearchResult
+export type GitChangeKind
+export type GitChange
+export type GitStatus
+export type FsChange
+export type FileContent
+export type WriteResult
+export type TerminalSession

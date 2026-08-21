@@ -1,0 +1,17 @@
+import { backend } from './host'
+import { TerminalSession } from '../backend/types'
+
+role: 터미널 인스턴스 목록 — 세션 핸들 보유, 렌더링(xterm)은 UI 몫
+
+export type TerminalInstance
+export type terminals
+
+export fn createTerminal() -> TerminalInstance {
+  role: 백엔드 PTY 세션 생성 + 목록 등록 + 활성화
+}
+export fn disposeTerminal(id) {
+  role: 세션 정리 + 목록 제거, 활성 이양
+}
+export fn setActiveTerminal(id) {
+  role: 활성 터미널 전환
+}

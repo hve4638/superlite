@@ -1,0 +1,22 @@
+// 지금은 단일 main.rs — watch/term/fs 분할 후 파일 수준 .itir 로 승격 예정.
+// 와이어 계약(JSON-RPC 메서드·이벤트)은 import 가 아니라 여기서 강제 못 한다 —
+// TS 쪽 사영은 mock-front/src/backend/types.itir 의 port ThinBackend.
+role: 워크스페이스 데몬 — unix socket 전용 JSON-RPC, fs·git·rg·PTY·파일 감시, tmux 식 수명 (마지막 접속 후 grace 뒤 종료)
+
+import { socket_path } from '../../common/src'
+
+fn handle_conn() {
+  role: 연결 수명 — 라인 프레이밍 요청 디스패치 + fsChanges 푸시, 종료 시 워처·PTY 정리
+}
+fn handle_req() {
+  role: fs·git·검색 RPC 디스패치 — 모든 경로는 safe_join 루트 격리, writeFile 은 etag 낙관적 충돌 검사 (WRITE_LOCK 직렬화)
+}
+fn start_watcher() {
+  role: 연결별 재귀 inotify — 75ms 집계, 경로별 coalesce, 1000건 초과 overflow 강등
+}
+fn safe_join() {
+  role: 루트 탈출 방지 경로 결합 — 모든 RPC 경로가 지나는 관문
+}
+fn spawn_term() {
+  role: PTY 생성 + 출력 UTF-8 경계 분할 스트리밍
+}

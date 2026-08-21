@@ -1,0 +1,32 @@
+import { backend } from './host'
+
+role: 셸 상태 — 사이드바/패널/뷰릿 토글, Quick Input, 컨텍스트 메뉴
+
+export type ViewletId
+export type ContextMenuItem
+export type workbench
+
+export fn initWorkbench() {
+  role: 워크스페이스 이름 로드 (타이틀 표시)
+}
+export fn toggleSideBar() {
+  role: 사이드바 접기/펴기
+}
+export fn showViewlet(id, toggle) {
+  role: 뷰릿 전환 — 같은 것 재클릭은 토글
+}
+export fn togglePanel() {
+  role: 하단 패널 접기/펴기
+}
+export fn openQuickInput(mode) {
+  role: Ctrl+P(files) / Ctrl+Shift+P(commands) 열기
+}
+export fn closeQuickInput() {
+  role: Quick Input 닫기
+}
+export fn openContextMenu(x, y, items) {
+  role: 좌표에 컨텍스트 메뉴 열기
+}
+export fn closeContextMenu() {
+  role: 컨텍스트 메뉴 닫기
+}

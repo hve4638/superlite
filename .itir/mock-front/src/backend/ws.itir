@@ -1,0 +1,7 @@
+import { ThinBackend } from './types'
+
+role: 실 백엔드 — 같은 오리진 /ws WebSocket 위 JSON-RPC (id 매칭) + 이벤트(fsChanges, 터미널) 디스패치
+
+export class WsBackend {
+  role: 요청마다 id 발급·응답 매칭, event 프레임은 구독자에게 라우팅. 재연결은 아직 없다
+}

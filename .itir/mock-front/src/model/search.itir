@@ -1,0 +1,22 @@
+import { backend } from './host'
+import { FileSearchResult } from '../backend/types'
+
+role: 전문 검색 뷰 상태 — 실행 시점 스냅샷, 자동 재실행 없음
+
+export type search
+
+export fn setQuery(q) {
+  role: 질의 갱신 (디바운스 실행은 뷰 쪽)
+}
+export fn runSearch() {
+  role: 검색 실행 — 결과와 접힘 상태 초기화
+}
+export fn matchCount() -> n {
+  role: 총 매치 수 (요약 라벨)
+}
+export fn toggleCase() {
+  role: 대소문자 구분 토글 + 재실행
+}
+export fn toggleFileCollapsed(path) {
+  role: 파일 그룹 접힘 토글
+}

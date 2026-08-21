@@ -1,0 +1,6 @@
+import { editors, languageOf, setApplyExternalEdit, updateContent } from '../../model/editors'
+import { backend } from '../../model/host'
+import { scm } from '../../model/scm'
+import { EDITOR_FONT_SIZE, MONO_FONT_FAMILY } from '../../theme/fonts'
+
+role: 에디터 영역 — monaco 수명주기(monaco.ts)와 그룹/탭바/diff 렌더링(.vue). monaco 모델은 path 당 하나, 그룹 간 공유
