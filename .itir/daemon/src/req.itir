@@ -1,0 +1,26 @@
+// crate::err(main.rs) 참조 — 추출기가 crate:: 를 '../..' 로 정규화한다 (./main 은 불만족)
+import { err } from '../..'
+
+role: RPC 요청 처리 — fs 읽기/쓰기(etag 낙관적 충돌 검사), rg 검색, git 상태·커밋. 모든 경로는 safe_join 관문
+
+fn handle_req() {
+  role: 메서드 디스패치 — 요청은 태스크로 병렬, 쓰기 경합은 WRITE_LOCK 직렬화
+}
+fn safe_join() {
+  role: 루트 이탈 방지 — 렉시컬 검사 + 심링크 해소 실경로 확인, 모든 RPC 경로의 관문
+}
+fn file_etag() {
+  role: (mtime_ms, size) etag — VS Code 동일 구성, stat 스냅샷
+}
+fn search() {
+  role: rg --json 파싱 — 바이트 오프셋을 UTF-16 코드유닛으로 변환 (프론트 slice 좌표계)
+}
+fn git_status() {
+  role: porcelain v2 파싱 — quotePath 끔, rename 은 새 경로만
+}
+fn run_rg() {
+  role: rg 실행 — exit 1(무매치)도 성공 취급
+}
+fn run() {
+  role: 외부 명령 실행 — 실패 시 stderr, 비면 stdout 을 에러로
+}

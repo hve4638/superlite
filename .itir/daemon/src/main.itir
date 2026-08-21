@@ -1,0 +1,14 @@
+role: 수명과 연결 — flock 단독 보장, accept 루프, 유휴 grace 자진 종료, 연결당 read 루프
+
+fn main() {
+  role: 소켓 확보(flock 승자만 bind·unlink) + 유휴 감시 태스크 + accept 루프
+}
+fn acquire_lock() {
+  role: 단독 데몬 보장 — connect 검사 대신 flock (검사→unlink→bind 는 원자적이지 않다)
+}
+fn handle_conn() {
+  role: 연결 수명 — 라인 프레이밍 요청 디스패치(단일 writer 태스크로 응답 직렬화) + attach 1회 규칙, 종료 시 워처·PTY 정리
+}
+fn err() {
+  role: Display → String 에러 축약 (크레이트 공용)
+}

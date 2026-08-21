@@ -1,0 +1,20 @@
+// crate::err(main.rs) 참조 — 추출기가 crate:: 를 '../..' 로 정규화한다 (./main 은 불만족)
+import { err } from '../..'
+
+role: PTY 터미널 — 생성·입출력·리사이즈·정리. 입력 순서 보장을 위해 read 루프에서 논블로킹 즉시 처리
+
+class Term {
+  role: PTY 한 벌 — writer, master, child 핸들
+}
+fn handle_term() {
+  role: 터미널 계열 메서드 디스패치 — 같은 id 재생성 무시 (PTY 누수 방지)
+}
+fn spawn_term() {
+  role: PTY 생성 + 전용 리더 스레드 — 출력은 UTF-8 경계 분할로 termData 푸시, 셸 자연 종료 시 자기 정리
+}
+fn kill_term() {
+  role: SIGHUP + wait 를 스레드로 — read 루프를 안 막고 좀비를 안 남긴다
+}
+fn split_valid_utf8() {
+  role: 청크 경계에서 잘린 UTF-8 꼬리 분리 (진짜 깨진 바이트는 손실 변환)
+}
