@@ -1,5 +1,6 @@
 import type {
-  DirEntry, FileSearchResult, GitStatus, TerminalSession, ThinBackend, WorkspaceInfo,
+  DirEntry, FileContent, FileSearchResult, GitStatus, TerminalSession, ThinBackend,
+  WorkspaceInfo, WriteResult,
 } from './types';
 
 // WHY: 이 픽스처는 tools/refspec/mock-workspace 와 파일/내용/git 상태가 1:1 이다.
@@ -21,6 +22,9 @@ export function formatDate(d: Date): string {
   return d.toISOString().slice(0, 19).replace('T', ' ');
 }
 `;
+
+/** path → 쓰기 세대. mock 의 etag 원천 (미기록 = 0). */
+const ETAGS = new Map<string, number>();
 
 const FILES: Record<string, string> = {
   'package.json': `{
@@ -154,15 +158,18 @@ export class MockBackend implements ThinBackend {
     return delay([...seen.values()]);
   }
 
-  readFile(path: string): Promise<string> {
+  readFile(path: string): Promise<FileContent> {
     const content = FILES[path];
     if (content === undefined) return Promise.reject(new Error(`ENOENT: ${path}`));
-    return delay(content);
+    return delay({ content, etag: String(ETAGS.get(path) ?? 0) });
   }
 
-  writeFile(path: string, content: string): Promise<void> {
+  // ponytail: mock 엔 외부 쓰기 주체가 없어 충돌이 생길 수 없다 — 검사 생략, etag 만 굴린다
+  writeFile(path: string, content: string): Promise<WriteResult> {
     FILES[path] = content;
-    return delay(undefined);
+    const v = (ETAGS.get(path) ?? 0) + 1;
+    ETAGS.set(path, v);
+    return delay({ etag: String(v) });
   }
 
   listFiles(): Promise<string[]> {

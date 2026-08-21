@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted } from 'vue';
 import { workbench } from '../model/workbench';
+import { editors } from '../model/editors';
 import TitleBar from './TitleBar.vue';
 import ActivityBar from './ActivityBar.vue';
 import SideBar from './SideBar.vue';
@@ -10,6 +11,7 @@ import PanelArea from './panel/PanelArea.vue';
 import QuickInput from './QuickInput.vue';
 import ContextMenu from './ContextMenu.vue';
 import Sash from './widgets/Sash.vue';
+import ConflictToast from './widgets/ConflictToast.vue';
 
 const SIDEBAR_MIN = 170;
 const PANEL_MIN = 77;
@@ -60,6 +62,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', onWindowResize));
     <StatusBar />
     <QuickInput v-if="workbench.quickInput.open" />
     <ContextMenu v-if="workbench.contextMenu.open" />
+    <ConflictToast v-if="editors.saveConflict !== null" />
   </div>
 </template>
 

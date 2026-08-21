@@ -19,8 +19,8 @@ use std::collections::HashMap;
 use std::io::{Read as _, Write as _};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::{Duration, UNIX_EPOCH};
 
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde_json::{json, Value};
@@ -39,6 +39,22 @@ type Terms = Arc<Mutex<HashMap<u64, Term>>>;
 fn err<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
+
+/// (mtime_ms, size) 기반 etag — VS Code 와 동일한 구성. 내용 해시가 아니라 stat 스냅샷이다.
+fn file_etag(meta: &std::fs::Metadata) -> String {
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_millis())
+        // mtime 미지원 fs 에선 0 — etag 가 크기 전용으로 강등된다 (리눅스에선 사실상 없음)
+        .unwrap_or(0);
+    format!("{mtime}-{}", meta.len())
+}
+
+// WHY: 요청은 태스크로 병렬 처리된다 — etag 검사→쓰기가 다른 쓰기와 끼어들면 검사가 무의미.
+// ponytail: 전역 쓰기 락 + 락 안 블로킹 fs 호출 — 병목이 실측되면 경로별 락 + spawn_blocking.
+static WRITE_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 #[tokio::main]
 async fn main() {
@@ -455,13 +471,39 @@ async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<Value, Strin
             Ok(Value::Array(out))
         }
         "readFile" => {
-            Ok(json!(std::fs::read_to_string(safe_join(root, req_path(p)?)?).map_err(err)?))
+            let path = safe_join(root, req_path(p)?)?;
+            let _g = WRITE_LOCK.lock().await;
+            // WHY: stat 이 read 뒤면 etag 가 내용보다 새것일 수 있다 — 그 etag 로 저장하면
+            //      최신 내용을 조용히 덮는다. stat 먼저면 최악이 스퓨리어스 충돌(내용 비교
+            //      탈출구가 거른다). 데몬 자신의 쓰기와는 락으로 안 겹친다.
+            let meta = std::fs::metadata(&path).map_err(err)?;
+            let content = std::fs::read_to_string(&path).map_err(err)?;
+            Ok(json!({"content": content, "etag": file_etag(&meta)}))
         }
         "writeFile" => {
             // WHY: content 누락을 "" 로 해석하면 깨진 요청이 파일을 비운다 — 명시적 에러
             let content = p["content"].as_str().ok_or("content 필요")?;
-            std::fs::write(safe_join(root, req_path(p)?)?, content).map_err(err)?;
-            Ok(Value::Null)
+            let path = safe_join(root, req_path(p)?)?;
+            let _g = WRITE_LOCK.lock().await;
+            // 낙관적 충돌 검사 (VS Code FILE_MODIFIED_SINCE 상당). etag 없으면 무조건 쓴다
+            // (덮어쓰기·신규 파일). 파일이 사라진 경우는 쓰기로 진행 — 저장이 파일을 되살린다.
+            if let Some(expected) = p["etag"].as_str() {
+                match std::fs::metadata(&path) {
+                    // etag 불일치라도 디스크가 이미 쓰려는 내용이면 충돌이 아니다 (탈출구).
+                    // read 실패(EISDIR 등)는 충돌로 위장하지 않고 에러로 낸다.
+                    Ok(meta) => {
+                        if file_etag(&meta) != expected
+                            && std::fs::read(&path).map_err(err)? != content.as_bytes()
+                        {
+                            return Ok(json!({"conflict": true}));
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(err(e)), // 권한 등 — "없음" 으로 오독하면 검사가 무단 통과
+                }
+            }
+            std::fs::write(&path, content).map_err(err)?;
+            Ok(json!({"etag": file_etag(&std::fs::metadata(&path).map_err(err)?)}))
         }
         "listFiles" => {
             // 부팅이 이 호출을 await 하므로 실패 시 앱이 안 뜬다 — exit 1(0건)은 성공이다

@@ -6,12 +6,14 @@
  */
 import type {
   DirEntry,
+  FileContent,
   FileSearchResult,
   FsChange,
   GitStatus,
   TerminalSession,
   ThinBackend,
   WorkspaceInfo,
+  WriteResult,
 } from './types';
 
 interface Pending {
@@ -91,11 +93,12 @@ export class WsBackend implements ThinBackend {
   readDir(path: string): Promise<DirEntry[]> {
     return this.call('readDir', { path });
   }
-  readFile(path: string): Promise<string> {
+  readFile(path: string): Promise<FileContent> {
     return this.call('readFile', { path });
   }
-  writeFile(path: string, content: string): Promise<void> {
-    return this.call('writeFile', { path, content });
+  writeFile(path: string, content: string, etag?: string): Promise<WriteResult> {
+    // etag 가 undefined 면 JSON.stringify 가 키를 떨군다 — 데몬은 부재로 본다
+    return this.call('writeFile', { path, content, etag });
   }
   listFiles(): Promise<string[]> {
     return this.call('listFiles');

@@ -47,7 +47,8 @@ const entries = await call('readDir', { path: '' });
 assert.ok(entries.some((e) => e.name === 'mock-front' && e.kind === 'directory'), 'readDir');
 
 const pkg = await call('readFile', { path: 'mock-front/package.json' });
-assert.ok(pkg.includes('"code-superlight"'), 'readFile');
+assert.ok(pkg.content.includes('"code-superlight"'), 'readFile content');
+assert.match(pkg.etag, /^\d+-\d+$/, 'readFile etag');
 
 await assert.rejects(call('readFile', { path: '../etc/passwd' }), /이탈/, 'safe_join');
 

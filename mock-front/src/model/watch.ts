@@ -43,7 +43,13 @@ const reload = consumer<Set<string>>(
       const doc = editors.docs.get(path);
       // dirty 는 안 건드린다 — readFile 전에 거르고, 적용 시점에 reloadDocFromDisk 가 재확인
       if (!doc || doc.content !== doc.savedContent) continue;
-      swallow(backend.readFile(path).then((content) => reloadDocFromDisk(path, content)));
+      const issuedSaved = doc.savedContent;
+      swallow(backend.readFile(path).then(({ content, etag }) => {
+        // WHY: 왕복 중 저장이 끝났으면 이 스냅샷이 더 낡다 — 적용하면 방금 저장을 되돌리고
+        //      etag 도 되감겨 다음 저장이 스퓨리어스 충돌을 낸다
+        if (editors.docs.get(path)?.savedContent !== issuedSaved) return;
+        reloadDocFromDisk(path, content, etag);
+      }));
     }
   },
   () => new Set(),

@@ -54,6 +54,17 @@ export interface FsChange {
   kind: 'create' | 'change' | 'delete';
 }
 
+export interface FileContent {
+  content: string;
+  /** (mtime,size) 기반 불투명 토큰 — writeFile 낙관적 충돌 검사용. 내용 해시가 아니다. */
+  etag: string;
+}
+
+/** conflict 면 쓰지 않았다 — etag 시점 이후 디스크가 바뀌었고 내용도 다르다. */
+export type WriteResult =
+  | { etag: string; conflict?: undefined }
+  | { etag?: undefined; conflict: true };
+
 /** mock PTY 세션. 실제 백엔드에서는 원격 PTY 로 대체된다. */
 export interface TerminalSession {
   write(data: string): void;
@@ -66,8 +77,9 @@ export interface ThinBackend {
   workspace(): Promise<WorkspaceInfo>;
   /** path 디렉토리의 직계 엔트리. 정렬은 호출자 책임. */
   readDir(path: string): Promise<DirEntry[]>;
-  readFile(path: string): Promise<string>;
-  writeFile(path: string, content: string): Promise<void>;
+  readFile(path: string): Promise<FileContent>;
+  /** etag 를 주면 낙관적 충돌 검사 — 불일치(+내용 상이) 시 쓰지 않고 conflict. 생략 시 무조건 쓴다. */
+  writeFile(path: string, content: string, etag?: string): Promise<WriteResult>;
   /** 워크스페이스 전체 파일 경로 목록 (quick open 용) */
   listFiles(): Promise<string[]>;
   /** 단순 부분 문자열 검색. 대소문자 무시 여부는 옵션. */
