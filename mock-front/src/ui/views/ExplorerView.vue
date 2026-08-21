@@ -1,23 +1,161 @@
 <script setup lang="ts">
-import { files, visibleNodes, toggleDir, type TreeNode } from '../../model/files';
-import { openFile } from '../../model/editors';
+import { computed, ref } from 'vue';
+import { files, parentOf, visibleNodes, toggleDir, type TreeNode } from '../../model/files';
+import { editors, openFile } from '../../model/editors';
+import { createDir, createFile, deleteEntry, renameEntry, undoFileOp } from '../../model/fileops';
 import { decorationFor } from '../../model/scm';
 import { workbench, openContextMenu, type ContextMenuItem } from '../../model/workbench';
 import FileIcon from '../widgets/FileIcon.vue';
+import InlineNameInput from '../widgets/InlineNameInput.vue';
+import ConfirmDialog from '../widgets/ConfirmDialog.vue';
 
-const noop = () => {};
+type EditMode = 'createFile' | 'createDir' | 'rename';
+interface Editing {
+  mode: EditMode;
+  /** 입력이 속한 디렉토리 ('' = 루트) */
+  dir: string;
+  /** rename 대상의 원래 경로 */
+  path?: string;
+  initial: string;
+}
 
-// VS Code Explorer 컨텍스트 메뉴 구성 (run 은 전부 no-op mock)
-const ROW_MENU: ContextMenuItem[] = [
-  { label: 'New File...', run: noop },
-  { label: 'New Folder...', run: noop },
-  { separator: true },
-  { label: 'Cut', keybinding: 'Ctrl+X', enabled: false },
-  { label: 'Copy', keybinding: 'Ctrl+C', enabled: false },
-  { label: 'Copy Path', keybinding: 'Shift+Alt+C', run: noop },
-  { separator: true },
-  { label: 'Rename...', keybinding: 'F2', run: noop },
-  { label: 'Delete', keybinding: 'Delete', run: noop },
+const editing = ref<Editing | null>(null);
+/** 백엔드 거부(동시 생성 등) — 입력을 남겨 정정 기회를 준다 */
+const opError = ref<string | null>(null);
+const confirming = ref<TreeNode | null>(null);
+
+/** 트리 행 + (생성 중이면) 입력 행. 입력 행은 대상 디렉토리 바로 아래 — 정렬 위치는 커밋 후 리프레시가 잡는다 */
+const rows = computed(() => {
+  const out: Array<{ node?: TreeNode; inputDepth?: number }> = visibleNodes().map((n) => ({ node: n }));
+  const ed = editing.value;
+  if (!ed || ed.mode === 'rename') return out;
+  if (ed.dir === '') {
+    out.unshift({ inputDepth: 0 });
+  } else {
+    const i = out.findIndex((r) => r.node?.path === ed.dir);
+    if (i !== -1) out.splice(i + 1, 0, { inputDepth: out[i].node!.depth + 1 });
+  }
+  return out;
+});
+
+function isRenaming(node: TreeNode): boolean {
+  return editing.value?.mode === 'rename' && editing.value.path === node.path;
+}
+
+async function startCreate(mode: 'createFile' | 'createDir', node: TreeNode | null): Promise<void> {
+  let dir = '';
+  if (node) {
+    if (node.kind === 'directory') {
+      dir = node.path;
+      if (!files.expanded.has(node.path)) await toggleDir(node); // 입력 행이 보이려면 펼쳐야 한다
+    } else {
+      dir = parentOf(node.path);
+    }
+  }
+  opError.value = null;
+  editing.value = { mode, dir, initial: '' };
+}
+
+function startRename(node: TreeNode): void {
+  opError.value = null;
+  editing.value = { mode: 'rename', dir: parentOf(node.path), path: node.path, initial: node.name };
+}
+
+/** VS Code explorer 검증 — 빈 이름/중복/부적합 문자. 생성은 a/b/c 중첩 허용, rename 은 불허 */
+function validateName(value: string): string | null {
+  const ed = editing.value;
+  if (!ed) return null;
+  const name = value.trim();
+  if (!name) return 'A file or folder name must be provided.';
+  const allowSlash = ed.mode !== 'rename';
+  const segments = name.split('/');
+  if (
+    (!allowSlash && name.includes('/')) ||
+    name.includes('\\') ||
+    name.endsWith('/') ||
+    segments.some((s) => s === '' || s === '.' || s === '..')
+  ) {
+    return `The name "${name}" is not valid as a file or folder name. Please choose a different name.`;
+  }
+  // 중복은 로드된 형제 기준 — 중첩 경로의 심층 중복은 백엔드(배타적 생성)가 최종 거부한다
+  const first = segments[0];
+  const dup = visibleNodes().some(
+    (n) => parentOf(n.path) === ed.dir && n.path !== ed.path && n.name === first
+      // 중첩 생성에서 첫 세그먼트가 기존 "디렉토리" 와 겹치는 건 정상 (그 안에 만든다)
+      && !(ed.mode !== 'rename' && segments.length > 1 && n.kind === 'directory'),
+  );
+  if (dup) {
+    return `A file or folder ${first} already exists at this location. Please choose a different name.`;
+  }
+  return null;
+}
+
+async function commitEdit(name: string): Promise<void> {
+  const ed = editing.value;
+  if (!ed) return;
+  const target = ed.dir === '' ? name : `${ed.dir}/${name}`;
+  try {
+    if (ed.mode === 'rename') {
+      if (target !== ed.path) await renameEntry(ed.path!, target);
+      editing.value = null;
+    } else if (ed.mode === 'createFile') {
+      await createFile(target);
+      editing.value = null;
+      await openFile(target); // VS Code: 새 파일은 바로 연다
+    } else {
+      await createDir(target);
+      // 새 폴더는 접힌 채 둔다 — expanded 에만 넣으면 children 미로드 모순 상태가 된다
+      editing.value = null;
+    }
+    files.selectedPath = target;
+  } catch (e) {
+    opError.value = e instanceof Error ? e.message : String(e);
+  }
+}
+
+function cancelEdit(): void {
+  editing.value = null;
+  opError.value = null;
+}
+
+const confirmMessage = computed(() => {
+  const node = confirming.value;
+  if (!node) return { message: '', detail: '' };
+  const dirty = [...editors.docs].some(
+    ([p, d]) => (p === node.path || p.startsWith(`${node.path}/`)) && d.content !== d.savedContent,
+  );
+  return {
+    message: dirty
+      ? `Are you sure you want to delete '${node.name}' with unsaved changes? Your changes will be lost.`
+      : `Are you sure you want to permanently delete '${node.name}'${node.kind === 'directory' ? ' and its contents' : ''}?`,
+    detail: 'This action is irreversible!',
+  };
+});
+
+function onConfirmDelete(): void {
+  const node = confirming.value;
+  confirming.value = null;
+  // 실패(외부 선삭제 등)는 삼킨다 — 다음 리프레시가 진실을 보여준다. 표면화는 에러 UX 단계에서
+  if (node) deleteEntry(node.path, node.kind).catch(() => {});
+}
+
+function menuFor(node: TreeNode): ContextMenuItem[] {
+  return [
+    { label: 'New File...', run: () => void startCreate('createFile', node) },
+    { label: 'New Folder...', run: () => void startCreate('createDir', node) },
+    { separator: true },
+    { label: 'Cut', keybinding: 'Ctrl+X', enabled: false },
+    { label: 'Copy', keybinding: 'Ctrl+C', enabled: false },
+    { label: 'Copy Path', keybinding: 'Shift+Alt+C', run: () => void navigator.clipboard.writeText(node.path) },
+    { separator: true },
+    { label: 'Rename...', keybinding: 'F2', run: () => startRename(node) },
+    { label: 'Delete', keybinding: 'Delete', run: () => (confirming.value = node) },
+  ];
+}
+
+const BACKGROUND_MENU: ContextMenuItem[] = [
+  { label: 'New File...', run: () => void startCreate('createFile', null) },
+  { label: 'New Folder...', run: () => void startCreate('createDir', null) },
 ];
 
 function onRowClick(node: TreeNode): void {
@@ -35,7 +173,35 @@ function onRowDblClick(node: TreeNode): void {
 
 function onRowContextMenu(node: TreeNode, e: MouseEvent): void {
   files.selectedPath = node.path;
-  openContextMenu(e.clientX, e.clientY, ROW_MENU);
+  openContextMenu(e.clientX, e.clientY, menuFor(node));
+}
+
+function onTreeContextMenu(e: MouseEvent): void {
+  openContextMenu(e.clientX, e.clientY, BACKGROUND_MENU);
+}
+
+/** 트리 포커스 한정 키 — F2/Delete/Ctrl+Z. 에디터의 같은 키와 충돌하지 않는다 */
+function onTreeKeydown(e: KeyboardEvent): void {
+  // 입력 행이 유실된 채 editing 만 남는 상태(대상 디렉토리 외부 소멸 등)의 탈출구
+  if (e.key === 'Escape' && editing.value) {
+    cancelEdit();
+    return;
+  }
+  if (editing.value || confirming.value) return;
+  const sel = files.selectedPath !== null
+    ? visibleNodes().find((n) => n.path === files.selectedPath) ?? null
+    : null;
+  if (e.key === 'F2' && sel) {
+    e.preventDefault();
+    startRename(sel);
+  } else if (e.key === 'Delete' && sel) {
+    e.preventDefault();
+    confirming.value = sel;
+  } else if (e.key === 'z' && e.ctrlKey && !e.shiftKey && !e.altKey) {
+    e.preventDefault();
+    // 스택 항목의 경로가 이후 조작으로 낡았을 수 있다 — 실패한 항목은 버려진다 (redo 없음)
+    undoFileOp().catch(() => {});
+  }
 }
 
 function decoColor(node: TreeNode): string | undefined {
@@ -51,43 +217,85 @@ function decoColor(node: TreeNode): string | undefined {
         <span class="codicon codicon-chevron-down twisty" />
         <span class="title">{{ workbench.workspaceName }}</span>
         <div class="actions">
-          <span class="codicon codicon-new-file" title="New File..." />
-          <span class="codicon codicon-new-folder" title="New Folder..." />
+          <span class="codicon codicon-new-file" title="New File..." @click="startCreate('createFile', null)" />
+          <span class="codicon codicon-new-folder" title="New Folder..." @click="startCreate('createDir', null)" />
           <span class="codicon codicon-refresh" title="Refresh Explorer" />
           <span class="codicon codicon-collapse-all" title="Collapse Folders in Explorer" />
         </div>
       </div>
-      <div class="tree" @click.self="files.selectedPath = null">
-        <div
-          v-for="node in visibleNodes()"
-          :key="node.path"
-          class="row"
-          :class="{ selected: files.selectedPath === node.path }"
-          :style="{ paddingLeft: `${node.depth * 8}px` }"
-          @click="onRowClick(node)"
-          @dblclick="onRowDblClick(node)"
-          @contextmenu.prevent="onRowContextMenu(node, $event)"
-        >
-          <span
-            v-if="node.kind === 'directory'"
-            class="twistie codicon"
-            :class="files.expanded.has(node.path) ? 'codicon-chevron-down' : 'codicon-chevron-right'"
-          />
-          <!-- WHY: 파일 행은 twistie 폭 없이 8px 패딩만 갖는다 (spec: 파일명이 폴더명과 같은 x 에 정렬) -->
-          <span v-else class="twistie leaf" />
-          <FileIcon v-if="node.kind === 'file'" :name="node.name" />
-          <span class="label" :style="{ color: decoColor(node) }">{{ node.name }}</span>
-          <template v-if="decorationFor(node.path, node.kind === 'directory')">
+      <div
+        class="tree"
+        tabindex="0"
+        @keydown="onTreeKeydown"
+        @click.self="files.selectedPath = null"
+        @contextmenu.self.prevent="onTreeContextMenu($event)"
+      >
+        <template v-for="row in rows" :key="row.node?.path ?? '__edit'">
+          <!-- rename 중인 행 — 라벨 자리에 인라인 입력 -->
+          <div
+            v-if="row.node && isRenaming(row.node)"
+            class="row editing"
+            :style="{ paddingLeft: `${row.node.depth * 8}px` }"
+          >
             <span
-              v-if="node.kind === 'directory'"
-              class="badge dot codicon codicon-circle-filled"
-              :style="{ color: decoColor(node) }"
+              v-if="row.node.kind === 'directory'"
+              class="twistie codicon"
+              :class="files.expanded.has(row.node.path) ? 'codicon-chevron-down' : 'codicon-chevron-right'"
             />
-            <span v-else class="badge letter" :style="{ color: decoColor(node) }">
-              {{ decorationFor(node.path, false)!.letter }}
-            </span>
-          </template>
-        </div>
+            <span v-else class="twistie leaf" />
+            <FileIcon v-if="row.node.kind === 'file'" :name="row.node.name" />
+            <InlineNameInput
+              :initial="row.node.name"
+              :select-stem="row.node.kind === 'file'"
+              :validate="validateName"
+              :external-error="opError"
+              @commit="commitEdit"
+              @cancel="cancelEdit"
+              @input="opError = null"
+            />
+          </div>
+          <div
+            v-else-if="row.node"
+            class="row"
+            :class="{ selected: files.selectedPath === row.node.path }"
+            :style="{ paddingLeft: `${row.node.depth * 8}px` }"
+            @click="onRowClick(row.node)"
+            @dblclick="onRowDblClick(row.node)"
+            @contextmenu.prevent="onRowContextMenu(row.node, $event)"
+          >
+            <span
+              v-if="row.node.kind === 'directory'"
+              class="twistie codicon"
+              :class="files.expanded.has(row.node.path) ? 'codicon-chevron-down' : 'codicon-chevron-right'"
+            />
+            <!-- WHY: 파일 행은 twistie 폭 없이 8px 패딩만 갖는다 (spec: 파일명이 폴더명과 같은 x 에 정렬) -->
+            <span v-else class="twistie leaf" />
+            <FileIcon v-if="row.node.kind === 'file'" :name="row.node.name" />
+            <span class="label" :style="{ color: decoColor(row.node) }">{{ row.node.name }}</span>
+            <template v-if="decorationFor(row.node.path, row.node.kind === 'directory')">
+              <span
+                v-if="row.node.kind === 'directory'"
+                class="badge dot codicon codicon-circle-filled"
+                :style="{ color: decoColor(row.node) }"
+              />
+              <span v-else class="badge letter" :style="{ color: decoColor(row.node) }">
+                {{ decorationFor(row.node.path, false)!.letter }}
+              </span>
+            </template>
+          </div>
+          <!-- 생성 입력 행 (ponytail: 파일 아이콘 실시간 반영 생략 — 커밋 후 리프레시가 그린다) -->
+          <div v-else class="row editing" :style="{ paddingLeft: `${row.inputDepth! * 8}px` }">
+            <span class="twistie leaf" />
+            <InlineNameInput
+              initial=""
+              :validate="validateName"
+              :external-error="opError"
+              @commit="commitEdit"
+              @cancel="cancelEdit"
+              @input="opError = null"
+            />
+          </div>
+        </template>
       </div>
     </div>
     <div class="pane-header collapsed">
@@ -98,6 +306,14 @@ function decoColor(node: TreeNode): string | undefined {
       <span class="codicon codicon-chevron-right twisty" />
       <span class="title">Timeline</span>
     </div>
+    <ConfirmDialog
+      v-if="confirming"
+      :message="confirmMessage.message"
+      :detail="confirmMessage.detail"
+      confirm-label="Delete"
+      @confirm="onConfirmDelete"
+      @cancel="confirming = null"
+    />
   </div>
 </template>
 
@@ -172,6 +388,7 @@ function decoColor(node: TreeNode): string | undefined {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  outline: none; /* tabindex 포커스 링 억제 — VS Code 트리도 컨테이너 링이 없다 */
 }
 .row {
   display: flex;
@@ -187,6 +404,11 @@ function decoColor(node: TreeNode): string | undefined {
 }
 .row.selected {
   background: var(--vscode-list-inactiveSelectionBackground);
+}
+/* 인라인 입력 행 — 에러 박스가 다음 행 위로 떠야 하므로 overflow 를 만들지 않는다 */
+.row.editing {
+  overflow: visible;
+  cursor: default;
 }
 /* spec .monaco-tl-twistie: 16px 아이콘 + 합 30px 박스.
    WHY: 레퍼런스 렌더에서 chevron 글리프가 박스 좌측 기준 +10px 에 있어 (rect x=51)

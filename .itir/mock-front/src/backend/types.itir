@@ -9,8 +9,8 @@ port ThinBackend {
   fn readDir(path) -> entries {
     role: 디렉토리 1층 나열 (트리 lazy 로드 단위)
   }
-  fn readFile(path) -> FileContent {
-    role: 파일 내용 + 그 시점 디스크 etag
+  fn readFile(path, maxBytes) -> FileContent {
+    role: 파일 내용 + 그 시점 디스크 etag. maxBytes 상한 초과는 읽지 않고 에러 (undo 캡처용)
   }
   fn writeFile(path, content, etag) -> WriteResult {
     role: 저장. etag 제시 시 낙관적 충돌 검사 — stale 이면 미기록으로 conflict 반환, 생략 시 무조건 쓰기
@@ -20,6 +20,18 @@ port ThinBackend {
   }
   fn search(query, opts) -> results {
     role: 내용 전문 검색 (디스크 기준, dirty 버퍼 미반영)
+  }
+  fn createFile(path) {
+    role: 빈 파일 배타적 생성 — 중간 디렉토리 자동 생성, 이미 존재하면 에러 (기존 내용 보호)
+  }
+  fn createDir(path) {
+    role: 디렉토리 배타적 생성 — 중간 디렉토리 자동, 이미 존재하면 에러 (undo 의 "내가 만든 것" 전제 보호)
+  }
+  fn rename(from, to) {
+    role: 이름 변경/이동 — 대상이 이미 존재하면 에러
+  }
+  fn delete(path) {
+    role: 파일·디렉토리 삭제 (디렉토리는 재귀, 휴지통 없음 — 안전장치는 프론트 confirm, undo 는 파일 한정)
   }
   fn gitStatus() -> GitStatus {
     role: 브랜치 + 워킹트리 변경 목록

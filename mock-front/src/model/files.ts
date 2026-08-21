@@ -18,6 +18,11 @@ export const files = reactive({
   allFiles: [] as string[],
 });
 
+export function parentOf(path: string): string {
+  const slash = path.lastIndexOf('/');
+  return slash === -1 ? '' : path.slice(0, slash);
+}
+
 function sortEntries(entries: DirEntry[]): DirEntry[] {
   // WHY: VS Code explorer 정렬 — 디렉토리 우선, 이후 이름순(대소문자 무시).
   //      dotfile 도 같은 규칙으로 알파벳 위치에 온다 (ls 처럼 앞으로 몰지 않는다).

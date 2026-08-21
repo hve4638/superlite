@@ -77,9 +77,18 @@ export interface ThinBackend {
   workspace(): Promise<WorkspaceInfo>;
   /** path 디렉토리의 직계 엔트리. 정렬은 호출자 책임. */
   readDir(path: string): Promise<DirEntry[]>;
-  readFile(path: string): Promise<FileContent>;
+  /** maxBytes 를 주면 초과 파일(바이트 기준)은 읽지 않고 reject — undo 캡처 등 상한이 필요한 호출용 */
+  readFile(path: string, opts?: { maxBytes?: number }): Promise<FileContent>;
   /** etag 를 주면 낙관적 충돌 검사 — 불일치(+내용 상이) 시 쓰지 않고 conflict. 생략 시 무조건 쓴다. */
   writeFile(path: string, content: string, etag?: string): Promise<WriteResult>;
+  /** 빈 파일 배타적 생성 — 중간 디렉토리 자동 생성, 이미 존재하면 reject (기존 내용 보호) */
+  createFile(path: string): Promise<void>;
+  /** 디렉토리 배타적 생성 — 중간 디렉토리 자동, 이미 존재하면 reject (undo 의 "내가 만든 것" 전제 보호) */
+  createDir(path: string): Promise<void>;
+  /** 이름 변경/이동 — 대상이 이미 존재하면 reject */
+  rename(from: string, to: string): Promise<void>;
+  /** 파일·디렉토리 겸용 삭제 (디렉토리는 재귀, 휴지통 없음) */
+  delete(path: string): Promise<void>;
   /** 워크스페이스 전체 파일 경로 목록 (quick open 용) */
   listFiles(): Promise<string[]>;
   /** 단순 부분 문자열 검색. 대소문자 무시 여부는 옵션. */

@@ -194,6 +194,66 @@ export function setApplyExternalEdit(fn: (path: string, content: string) => void
 }
 
 /**
+ * rename/delete 시 열린 monaco 모델을 버리는 훅 — ui/editor/monaco.ts 가 등록한다.
+ * 새 경로의 모델은 doc 스냅샷에서 재생성된다 (VS Code 의 "새 경로 재해석" 과 동일 감각 —
+ * 언어도 새 확장자로 재판정된다. 커서·undo 는 잃는다).
+ */
+let disposeModels: ((path: string) => void) | null = null;
+export function setDisposeModels(fn: (path: string) => void): void {
+  disposeModels = fn;
+}
+
+/**
+ * rename 반영 — from(파일 또는 디렉토리) 아래의 열린 문서·탭 경로를 to 로 이관한다.
+ * 내용·dirty·etag 유지 (rename 은 mtime·size 를 안 바꾸므로 etag 가 계속 유효하다).
+ */
+export function remapPaths(from: string, to: string): void {
+  const mapPath = (p: string) =>
+    p === from ? to : p.startsWith(`${from}/`) ? to + p.slice(from.length) : null;
+  for (const [path, doc] of [...editors.docs]) {
+    const np = mapPath(path);
+    if (np === null) continue;
+    editors.docs.delete(path);
+    editors.docs.set(np, doc);
+  }
+  disposeModels?.(from);
+  for (const g of editors.groups) {
+    for (const t of g.tabs) {
+      const np = mapPath(t.path);
+      if (np === null) continue;
+      const newId = t.kind === 'diff' ? `diff:${np}` : np;
+      if (g.activeTabId === t.id) g.activeTabId = newId;
+      t.id = newId;
+      t.path = np;
+      t.name = t.kind === 'diff' ? `${baseName(np)} (Working Tree)` : baseName(np);
+    }
+  }
+  if (editors.saveConflict !== null) {
+    const np = mapPath(editors.saveConflict);
+    if (np !== null) editors.saveConflict = np;
+  }
+}
+
+/**
+ * 앱 내 삭제 반영 — path(디렉토리면 하위 포함)의 탭을 모든 그룹에서 닫고 문서·모델을
+ * 버린다. 외부 삭제(탭 유지, closeOnFileDelete=false)와 달리 앱 내 삭제는 닫는 것이
+ * VS Code 동일 — dirty 경고는 삭제 confirm 이 겸한다.
+ */
+export function closePathTabs(path: string): void {
+  const match = (p: string) => p === path || p.startsWith(`${path}/`);
+  for (const g of [...editors.groups]) {
+    for (const t of [...g.tabs]) {
+      if (match(t.path)) closeTab(g.id, t.id);
+    }
+  }
+  for (const p of [...editors.docs.keys()]) {
+    if (match(p)) editors.docs.delete(p);
+  }
+  disposeModels?.(path);
+  if (editors.saveConflict !== null && match(editors.saveConflict)) editors.saveConflict = null;
+}
+
+/**
  * 외부(디스크) 변경 반영. 깨끗한 문서만 조용히 재로드한다 — dirty 는 안 건드리고
  * 충돌은 저장 시점 검사로 일원화한다 (VS Code 동일).
  */
@@ -218,14 +278,18 @@ export async function saveActive(): Promise<void> {
   // WHY: await 중 타이핑되면 doc.content 가 앞서간다 — 실제 쓴 내용만 saved 로 표시해야
   //      "저장됨으로 보이는 미저장 편집" 이 안 생긴다
   const content = doc.content;
-  const r = await backend.writeFile(tab.path, content, doc.etag);
+  const path = tab.path;
+  const r = await backend.writeFile(path, content, doc.etag);
+  // WHY: 왕복 중 rename 되면(remapPaths 가 tab.path 를 바꾼다) 이 결과는 옛 경로 것이다 —
+  //      saved 로 표시하면 새 경로의 더티를 잃는다. 버리면 다음 저장이 새 경로로 다시 쓴다.
+  if (tab.path !== path) return;
   if (r.conflict) {
-    editors.saveConflict = tab.path;
+    editors.saveConflict = path;
     return;
   }
   doc.etag = r.etag;
   doc.savedContent = content;
-  updateContent(tab.path, doc.content);
+  updateContent(path, doc.content);
 }
 
 /** 충돌 토스트의 Overwrite — etag 없이 다시 써서 디스크를 내 버퍼로 덮는다 */

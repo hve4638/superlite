@@ -93,12 +93,24 @@ export class WsBackend implements ThinBackend {
   readDir(path: string): Promise<DirEntry[]> {
     return this.call('readDir', { path });
   }
-  readFile(path: string): Promise<FileContent> {
-    return this.call('readFile', { path });
+  readFile(path: string, opts?: { maxBytes?: number }): Promise<FileContent> {
+    return this.call('readFile', { path, maxBytes: opts?.maxBytes });
   }
   writeFile(path: string, content: string, etag?: string): Promise<WriteResult> {
     // etag 가 undefined 면 JSON.stringify 가 키를 떨군다 — 데몬은 부재로 본다
     return this.call('writeFile', { path, content, etag });
+  }
+  createFile(path: string): Promise<void> {
+    return this.call('createFile', { path });
+  }
+  createDir(path: string): Promise<void> {
+    return this.call('createDir', { path });
+  }
+  rename(from: string, to: string): Promise<void> {
+    return this.call('rename', { from, to });
+  }
+  delete(path: string): Promise<void> {
+    return this.call('delete', { path });
   }
   listFiles(): Promise<string[]> {
     return this.call('listFiles');

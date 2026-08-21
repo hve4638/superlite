@@ -26,6 +26,14 @@ export function formatDate(d: Date): string {
 /** path → 쓰기 세대. mock 의 etag 원천 (미기록 = 0). */
 const ETAGS = new Map<string, number>();
 
+/** FILES 키(파일 경로)로는 표현 못 하는 빈 디렉토리 — createDir·rename 산물 */
+const DIRS = new Set<string>();
+
+/** 명시적(DIRS) + 암시적(FILES 키에서 유도) 디렉토리 존재 검사 */
+function isDirPath(p: string): boolean {
+  return DIRS.has(p) || Object.keys(FILES).some((f) => f.startsWith(`${p}/`));
+}
+
 const FILES: Record<string, string> = {
   'package.json': `{
   "name": "acme-server",
@@ -155,12 +163,20 @@ export class MockBackend implements ThinBackend {
         seen.set(dir, { name: dir, path: `${prefix}${dir}`, kind: 'directory' });
       }
     }
+    for (const d of DIRS) {
+      if (d === path || !d.startsWith(prefix)) continue;
+      const seg = d.slice(prefix.length).split('/')[0];
+      if (!seen.has(seg)) seen.set(seg, { name: seg, path: `${prefix}${seg}`, kind: 'directory' });
+    }
     return delay([...seen.values()]);
   }
 
-  readFile(path: string): Promise<FileContent> {
+  readFile(path: string, opts?: { maxBytes?: number }): Promise<FileContent> {
     const content = FILES[path];
     if (content === undefined) return Promise.reject(new Error(`ENOENT: ${path}`));
+    if (opts?.maxBytes !== undefined && content.length > opts.maxBytes) {
+      return Promise.reject(new Error(`maxBytes 초과: ${path}`));
+    }
     return delay({ content, etag: String(ETAGS.get(path) ?? 0) });
   }
 
@@ -170,6 +186,56 @@ export class MockBackend implements ThinBackend {
     const v = (ETAGS.get(path) ?? 0) + 1;
     ETAGS.set(path, v);
     return delay({ etag: String(v) });
+  }
+
+  createFile(path: string): Promise<void> {
+    if (path in FILES || isDirPath(path)) return Promise.reject(new Error(`이미 존재: ${path}`));
+    FILES[path] = '';
+    ETAGS.set(path, (ETAGS.get(path) ?? 0) + 1);
+    return delay(undefined);
+  }
+
+  createDir(path: string): Promise<void> {
+    // 배타적 생성 (데몬 계약과 동일 — undo 의 전제 보호)
+    if (path in FILES || isDirPath(path)) return Promise.reject(new Error(`이미 존재: ${path}`));
+    DIRS.add(path);
+    return delay(undefined);
+  }
+
+  rename(from: string, to: string): Promise<void> {
+    if (to in FILES || isDirPath(to)) return Promise.reject(new Error(`이미 존재: ${to}`));
+    if (!isDirPath(from) && !(from in FILES)) return Promise.reject(new Error(`ENOENT: ${from}`));
+    const move = (p: string) => (p === from ? to : `${to}${p.slice(from.length)}`);
+    for (const f of Object.keys(FILES)) {
+      if (f !== from && !f.startsWith(`${from}/`)) continue;
+      FILES[move(f)] = FILES[f];
+      delete FILES[f];
+      const v = ETAGS.get(f);
+      if (v !== undefined) {
+        ETAGS.set(move(f), v);
+        ETAGS.delete(f);
+      }
+    }
+    for (const d of [...DIRS]) {
+      if (d !== from && !d.startsWith(`${from}/`)) continue;
+      DIRS.delete(d);
+      DIRS.add(move(d));
+    }
+    return delay(undefined);
+  }
+
+  delete(path: string): Promise<void> {
+    // 없는 경로는 에러 (데몬의 symlink_metadata 실패와 동일 계약)
+    if (!(path in FILES) && !isDirPath(path)) return Promise.reject(new Error(`ENOENT: ${path}`));
+    for (const f of Object.keys(FILES)) {
+      if (f !== path && !f.startsWith(`${path}/`)) continue;
+      delete FILES[f];
+      ETAGS.delete(f);
+    }
+    for (const d of [...DIRS]) {
+      if (d === path || d.startsWith(`${path}/`)) DIRS.delete(d);
+    }
+    return delay(undefined);
   }
 
   listFiles(): Promise<string[]> {

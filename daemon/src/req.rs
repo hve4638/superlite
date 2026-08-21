@@ -54,6 +54,13 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
             //      최신 내용을 조용히 덮는다. stat 먼저면 최악이 스퓨리어스 충돌(내용 비교
             //      탈출구가 거른다). 데몬 자신의 쓰기와는 락으로 안 겹친다.
             let meta = std::fs::metadata(&path).map_err(err)?;
+            // 크기 상한이 있는 호출(undo 캡처 등)은 읽기 전에 거른다 — 대용량을 읽어
+            // 나른 뒤 버리는 낭비 방지
+            if let Some(max) = p["maxBytes"].as_u64() {
+                if meta.len() > max {
+                    return Err(format!("maxBytes 초과: {} > {max}", meta.len()));
+                }
+            }
             let content = std::fs::read_to_string(&path).map_err(err)?;
             Ok(json!({"content": content, "etag": file_etag(&meta)}))
         }
@@ -81,6 +88,65 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
             }
             std::fs::write(&path, content).map_err(err)?;
             Ok(json!({"etag": file_etag(&std::fs::metadata(&path).map_err(err)?)}))
+        }
+        "createFile" => {
+            let path = safe_join(root, req_path(p)?)?;
+            let _g = WRITE_LOCK.lock().await;
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).map_err(err)?; // "a/b/c.ts" 중첩 생성 (VS Code 동일)
+            }
+            // WHY: 배타적 생성 — write("") 로 때우면 "새 파일" 이 기존 파일을 조용히 비운다
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .map_err(err)?;
+            Ok(Value::Null)
+        }
+        "createDir" => {
+            let path = safe_join(root, req_path(p)?)?;
+            let _g = WRITE_LOCK.lock().await;
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).map_err(err)?;
+            }
+            // WHY: mkdir -p 로 때우면 "이미 있던 폴더" 에도 성공해 undo(재귀 삭제)가 남의
+            //      내용을 지운다 — 생성이 배타적이어야 "내가 만든 것만 지운다" 가 성립한다
+            std::fs::create_dir(&path).map_err(err)?;
+            Ok(Value::Null)
+        }
+        "rename" => {
+            let from_rel = p["from"].as_str().ok_or("from 필요")?;
+            let to_rel = p["to"].as_str().ok_or("to 필요")?;
+            if from_rel.is_empty() || to_rel.is_empty() {
+                return Err("빈 경로 — 루트는 rename 대상이 아니다".into());
+            }
+            let from = safe_join(root, from_rel)?;
+            let to = safe_join(root, to_rel)?;
+            let _g = WRITE_LOCK.lock().await;
+            // WHY: std::fs::rename 은 기존 파일을 소리 없이 덮는다 — 대상 존재는 명시적 에러.
+            //      symlink_metadata: 깨진 심링크도 "존재" 다 (덮으면 링크가 사라진다)
+            if std::fs::symlink_metadata(&to).is_ok() {
+                return Err(format!("이미 존재: {to_rel}"));
+            }
+            std::fs::rename(&from, &to).map_err(err)?;
+            Ok(Value::Null)
+        }
+        "delete" => {
+            let rel = req_path(p)?;
+            if rel.is_empty() {
+                return Err("빈 경로 — 루트는 지울 수 없다".into());
+            }
+            let path = safe_join(root, rel)?;
+            let _g = WRITE_LOCK.lock().await;
+            // 루트 안을 가리키는 심링크는 링크 자신을 지운다 (is_dir() 은 링크를 따라가므로
+            // symlink_metadata). 루트 밖을 가리키는 링크는 safe_join 이 거른다 — fail-closed.
+            let meta = std::fs::symlink_metadata(&path).map_err(err)?;
+            if meta.is_dir() {
+                std::fs::remove_dir_all(&path).map_err(err)?;
+            } else {
+                std::fs::remove_file(&path).map_err(err)?;
+            }
+            Ok(Value::Null)
         }
         "listFiles" => {
             // 부팅이 이 호출을 await 하므로 실패 시 앱이 안 뜬다 — exit 1(0건)은 성공이다
@@ -244,11 +310,20 @@ fn safe_join(root: &Path, rel: &str) -> Result<PathBuf, String> {
     }
     let joined = root.join(rel);
     // WHY: 트리 안의 심링크가 루트 밖을 가리킬 수 있다 (root 는 main 에서 canonicalize 됨).
-    //      신규 파일(writeFile)은 아직 없으므로 부모 디렉터리를 해소해 검사한다.
-    let real = if joined.exists() {
-        joined.canonicalize()
-    } else {
-        joined.parent().map_or(Ok(root.to_path_buf()), |d| d.canonicalize())
+    //      신규 경로(writeFile·createFile 의 중첩 생성)는 아직 없는 구간을 지나므로,
+    //      가장 가까운 실존 조상을 해소해 검사한다 — 실존 조상이 밖을 가리키면 이탈이다.
+    let real = {
+        let mut probe = joined.as_path();
+        loop {
+            match probe.canonicalize() {
+                Ok(r) => break Ok(r),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => match probe.parent() {
+                    Some(parent) => probe = parent,
+                    None => break Err(e),
+                },
+                Err(e) => break Err(e),
+            }
+        }
     };
     match real {
         Ok(r) if r.starts_with(root) => Ok(joined),

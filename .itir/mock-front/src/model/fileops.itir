@@ -1,0 +1,24 @@
+import { backend } from './host'
+import { refreshDir, refreshAllFiles, loadedDirPaths, parentOf } from './files'
+import { remapPaths, closePathTabs } from './editors'
+import { refreshScm } from './scm'
+
+role: 파일 조작(생성·이름변경·삭제) + 파일 한정 undo 스택. 성공 즉시 로드된 최근접 조상을 refreshDir — 감시 이벤트를 기다리지 않는다 (VS Code 자기 조작 즉시 반영과 동일)
+
+export fn createFile(path) {
+  role: 배타적 생성 후 부모 리프레시. undo = delete
+}
+export fn createDir(path) {
+  role: 디렉토리 생성 후 부모 리프레시. undo = delete
+}
+export fn renameEntry(from, to) {
+  role: 이름 변경 + 열린 문서/탭 경로 재매핑 (etag 유지). undo = 역방향 rename
+  depends: { remapPaths }
+}
+export fn deleteEntry(path, kind) {
+  role: 삭제 + 해당 경로(하위 포함) 탭 닫기. 파일이면 5MB 내에서 내용 캡처를 시도해 undo = 재생성 — 캡처 불가(바이너리·대용량)와 디렉토리는 undo 없음
+  depends: { closePathTabs }
+}
+export fn undoFileOp() {
+  role: 마지막 조작 역연산 (탐색기 포커스 Ctrl+Z)
+}

@@ -54,6 +54,15 @@ export fn revertConflict() {
   role: 충돌 토스트 Revert — 버퍼를 버리고 디스크 내용으로 강제 재로드 (dirty 무관). 실패 시 토스트 유지
   depends: { backend }
 }
+export fn remapPaths(from, to) {
+  role: 파일/디렉토리 rename 반영 — docs 키·탭 id/path/name 을 새 경로로 이관 (내용·dirty·etag 유지). monaco 모델은 훅으로 버리고 doc 스냅샷에서 재생성
+}
+export fn setDisposeModels(fn) {
+  role: rename/delete 시 monaco 모델을 버리는 훅 등록 — setApplyExternalEdit 와 같은 seam
+}
+export fn closePathTabs(path) {
+  role: 앱 내 삭제 반영 — 해당 경로(디렉토리면 하위 포함)의 탭을 모든 그룹에서 닫고 문서를 버린다 (외부 삭제와 달리 탭을 닫는 것이 VS Code 동일)
+}
 export fn languageOf(path) -> languageId {
   role: 확장자 → monaco 언어 id
 }

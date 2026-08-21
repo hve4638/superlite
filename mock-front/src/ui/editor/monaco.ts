@@ -9,7 +9,7 @@ import tsWorker from 'monaco-editor/languages/features/typescript/ts.worker?work
 import jsonWorker from 'monaco-editor/languages/features/json/json.worker?worker';
 import cssWorker from 'monaco-editor/languages/features/css/css.worker?worker';
 import htmlWorker from 'monaco-editor/languages/features/html/html.worker?worker';
-import { editors, languageOf, setApplyExternalEdit, updateContent } from '../../model/editors';
+import { editors, languageOf, setApplyExternalEdit, setDisposeModels, updateContent } from '../../model/editors';
 import { backend } from '../../model/host';
 import { scm } from '../../model/scm';
 import { EDITOR_FONT_SIZE, MONO_FONT_FAMILY } from '../../theme/fonts';
@@ -168,6 +168,25 @@ setApplyExternalEdit((path, content) => {
     }],
     () => null,
   );
+});
+
+// rename/delete 반영 — path(하위 포함)의 모델을 캐시와 monaco 레지스트리에서 제거한다.
+// 남기면 재생성·재열기 때 옛 내용의 좀비 모델이 잡힌다. 새 모델은 doc 스냅샷에서 만들어진다.
+setDisposeModels((path) => {
+  for (const [p, model] of [...models]) {
+    if (p !== path && !p.startsWith(`${path}/`)) continue;
+    models.delete(p);
+    if (model.isDisposed()) continue;
+    // 에디터에 물린 채 dispose 하지 않는다 — monaco 내부의 분리 처리에 기대지 않고 명시적으로 뗀다
+    for (const ed of monaco.editor.getEditors()) {
+      if (ed.getModel() === model) ed.setModel(null);
+    }
+    for (const de of monaco.editor.getDiffEditors()) {
+      const m = de.getModel();
+      if (m && (m.original === model || m.modified === model)) de.setModel(null);
+    }
+    model.dispose();
+  }
 });
 
 /** diff original(HEAD 시점) 모델 — 커밋(headVersion)마다 무효화되는 버전 키 캐시.

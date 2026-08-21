@@ -6,6 +6,9 @@ role: 탐색기 파일 트리 — lazy 디렉토리 로드, 외부 변경 시 �
 export type TreeNode
 export type files
 
+export fn parentOf(path) {
+  role: 부모 디렉토리 경로 (루트는 '')
+}
 export fn initFiles() {
   role: 루트 나열로 트리 초기화
 }

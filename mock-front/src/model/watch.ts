@@ -8,13 +8,8 @@
 import type { FsChange } from '../backend/types';
 import { backend } from './host';
 import { editors, reloadDocFromDisk } from './editors';
-import { loadedDirPaths, refreshAllFiles, refreshDir } from './files';
+import { loadedDirPaths, parentOf, refreshAllFiles, refreshDir } from './files';
 import { refreshScm } from './scm';
-
-function parentOf(path: string): string {
-  const slash = path.lastIndexOf('/');
-  return slash === -1 ? '' : path.slice(0, slash);
-}
 
 /** fire-and-forget — 리프레시 실패(삭제 경합, 연결 끊김)는 다음 이벤트·포커스가 복구한다 */
 const swallow = (p: Promise<unknown>): void => void p.catch(() => {});
