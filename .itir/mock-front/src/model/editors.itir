@@ -6,12 +6,12 @@ export type FileTab
 export type DiffTab
 export type Tab
 export type EditorGroup
-export type editors
+export val editors
 
 export fn activeGroup() -> EditorGroup {
   role: 활성 에디터 그룹
 }
-export fn activeTab() -> Tab {
+export fn activeTab() -> Tab? {
   role: 활성 그룹의 활성 탭
 }
 export fn openFile(path, opts) {

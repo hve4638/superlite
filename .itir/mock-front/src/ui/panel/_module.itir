@@ -1,0 +1,6 @@
+import { terminals, createTerminal, disposeTerminal, setActiveTerminal } from '../../model/terminal'
+import { isWorkbenchChord } from '../../model/commands'
+import { togglePanel } from '../../model/workbench'
+import { MONO_FONT_FAMILY, TERMINAL_FONT_SIZE, TERMINAL_LINE_HEIGHT } from '../../theme/fonts'
+
+role: 하단 패널 — 터미널 탭과 xterm 렌더링. PTY 수명주기는 model/terminal 이 소유

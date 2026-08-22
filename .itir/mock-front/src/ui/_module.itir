@@ -1,2 +1,17 @@
-// .vue 는 itir 추출기에 안 보인다 — 이 계층의 "model 만 호출" 규율은 리뷰·관례로 지킨다
-role: Vue 표피 계층 — 상태·동작은 전부 model 에 있고 여기는 렌더링과 이벤트 연결만. 셸(타이틀바·액티비티바·사이드바·상태바)과 위젯
+import { workbench, openContextMenu, closeContextMenu, openQuickInput, closeQuickInput, showViewlet, toggleSideBar, togglePanel } from '../model/workbench'
+import { editors, activeTab, openFile, indentOf, languageLabel } from '../model/editors'
+import { files } from '../model/files'
+import { scm } from '../model/scm'
+import { commandList } from '../model/commands'
+// .vue 컴포넌트 import 는 파일 좌표(.vue 포함)로 적는다 — 템플릿 전용 사용은 refs 에 안 잡혀,
+// 코드 import 대상과 좌표를 정확히 맞춰야 absence 를 피한다
+import { EditorArea } from './editor/EditorArea.vue'
+import { PanelArea } from './panel/PanelArea.vue'
+import { ExplorerView } from './views/ExplorerView.vue'
+import { SearchView } from './views/SearchView.vue'
+import { ScmView } from './views/ScmView.vue'
+import { FileIcon } from './widgets/FileIcon.vue'
+import { Sash } from './widgets/Sash.vue'
+import { ConflictToast } from './widgets/ConflictToast.vue'
+
+role: Vue 표피 계층 — 상태·동작은 전부 model 에 있고 여기는 렌더링과 이벤트 연결만. 셸(타이틀바·액티비티바·사이드바·상태바)과 오버레이(QuickInput·ContextMenu)

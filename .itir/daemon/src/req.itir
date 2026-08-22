@@ -1,7 +1,10 @@
-// crate::err(main.rs) 참조 — 추출기가 crate:: 를 '../..' 로 정규화한다 (./main 은 불만족)
-import { err } from '../..'
+// crate::err(main.rs) 참조 — crate:: 는 crate 루트(main.rs 디렉토리) 좌표 '.' 로 정규화된다
+import { err } from '.'
 
 role: RPC 요청 처리 — fs 읽기/쓰기(etag 낙관적 충돌 검사)·생성/이름변경/삭제, rg 검색, git 상태·커밋. 모든 경로는 safe_join 관문
+
+// 쓰기 계열 RPC(write/create/rename/delete)의 직렬화 락 — etag 검사-쓰기 원자성의 근거
+val WRITE_LOCK
 
 fn handle_req() {
   role: 메서드 디스패치 — 요청은 태스크로 병렬, 쓰기 경합은 WRITE_LOCK 직렬화

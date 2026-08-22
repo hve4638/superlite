@@ -1,0 +1,4 @@
+import { editors, overwriteConflict, revertConflict } from '../../model/editors'
+import { fileIcon } from '../../theme/fileicons'
+
+role: 재사용 위젯 — 파일 아이콘, 사시(분할 드래그), 저장 충돌 토스트, 인라인 이름 입력, 확인 다이얼로그

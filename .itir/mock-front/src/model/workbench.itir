@@ -4,7 +4,7 @@ role: 셸 상태 — 사이드바/패널/뷰릿 토글, Quick Input, 컨텍스�
 
 export type ViewletId
 export type ContextMenuItem
-export type workbench
+export val workbench
 
 export fn initWorkbench() {
   role: 워크스페이스 이름 로드 (타이틀 표시)

@@ -1,4 +1,6 @@
-import { editors, languageOf, setApplyExternalEdit, updateContent } from '../../model/editors'
+import { editors, languageOf, setApplyExternalEdit, setDisposeModels, updateContent } from '../../model/editors'
+import { openQuickInput } from '../../model/workbench'
+import { FileIcon } from '../widgets/FileIcon.vue'
 import { backend } from '../../model/host'
 import { scm } from '../../model/scm'
 import { EDITOR_FONT_SIZE, MONO_FONT_FAMILY } from '../../theme/fonts'

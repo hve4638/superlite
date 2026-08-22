@@ -5,6 +5,9 @@ import { refreshScm } from './scm'
 
 role: 파일 조작(생성·이름변경·삭제) + 파일 한정 undo 스택. 성공 즉시 로드된 최근접 조상을 refreshDir — 감시 이벤트를 기다리지 않는다 (VS Code 자기 조작 즉시 반영과 동일)
 
+// 삭제 undo 의 내용 캡처 상한(5MB) — 초과·바이너리는 캡처 없이 삭제만
+val UNDO_CAPTURE_MAX
+
 export fn createFile(path) {
   role: 배타적 생성 후 부모 리프레시. undo = delete
 }

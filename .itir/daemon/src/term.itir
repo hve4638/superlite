@@ -1,5 +1,5 @@
-// crate::err(main.rs) 참조 — 추출기가 crate:: 를 '../..' 로 정규화한다 (./main 은 불만족)
-import { err } from '../..'
+// crate::err(main.rs) 참조 — crate:: 는 crate 루트(main.rs 디렉토리) 좌표 '.' 로 정규화된다
+import { err } from '.'
 
 role: PTY 터미널 — 생성·입출력·리사이즈·정리. 입력 순서 보장을 위해 read 루프에서 논블로킹 즉시 처리
 

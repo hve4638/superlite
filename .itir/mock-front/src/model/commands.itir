@@ -6,7 +6,7 @@ import { refreshScm } from './scm'
 role: 커맨드 레지스트리 + 키바인딩 — VS Code 기본 chord 표기(ctrl+k ctrl+s 류) 지원
 
 export type Command
-export type commandList
+export val commandList
 
 export fn isWorkbenchChord(e) -> bool {
   role: 워크벤치가 가로채는 chord 인지 — monaco 에 키를 넘길지 판단

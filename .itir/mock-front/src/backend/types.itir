@@ -6,19 +6,19 @@ port ThinBackend {
   fn workspace() -> WorkspaceInfo {
     role: 워크스페이스 이름·루트 경로
   }
-  fn readDir(path) -> entries {
+  fn readDir(path) -> DirEntry[] {
     role: 디렉토리 1층 나열 (트리 lazy 로드 단위)
   }
-  fn readFile(path, maxBytes) -> FileContent {
+  fn readFile(path, maxBytes?) -> FileContent {
     role: 파일 내용 + 그 시점 디스크 etag. maxBytes 상한 초과는 읽지 않고 에러 (undo 캡처용)
   }
-  fn writeFile(path, content, etag) -> WriteResult {
+  fn writeFile(path, content, etag?) -> WriteResult {
     role: 저장. etag 제시 시 낙관적 충돌 검사 — stale 이면 미기록으로 conflict 반환, 생략 시 무조건 쓰기
   }
-  fn listFiles() -> paths {
+  fn listFiles() -> Path[] {
     role: Quick Open 용 전체 파일 나열
   }
-  fn search(query, opts) -> results {
+  fn search(query, opts) -> FileSearchResult[] {
     role: 내용 전문 검색 (디스크 기준, dirty 버퍼 미반영)
   }
   fn createFile(path) {

@@ -5,9 +5,9 @@ import { openDiff, openFile } from './editors'
 role: SCM 뷰 상태 — git 변경 목록, 커밋, 트리·탭 장식(색/문자)
 
 export type ScmChange
-export type scm
-export type CHANGE_LETTER
-export type CHANGE_COLOR
+export val scm
+export val CHANGE_LETTER
+export val CHANGE_COLOR
 
 export fn refreshScm() {
   role: gitStatus 재조회로 변경 목록 갱신
@@ -18,6 +18,6 @@ export fn openChange(change) {
 export fn commit() {
   role: 입력된 메시지로 전체 커밋 후 상태 재조회
 }
-export fn decorationFor(path, isDir) -> decoration {
+export fn decorationFor(path, isDir) -> Decoration? {
   role: 탐색기·탭에 붙는 git 장식 (디렉토리는 자손 변경 전파)
 }

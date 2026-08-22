@@ -4,4 +4,4 @@ import { WsBackend } from '../backend/ws'
 
 role: ThinBackend 조립 지점 — 구현체를 직접 참조해도 되는 유일한 파일 (itir boundary assembly)
 
-export type backend
+export val backend
