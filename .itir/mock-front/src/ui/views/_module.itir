@@ -6,8 +6,8 @@ import { search, setQuery, toggleCase, toggleFileCollapsed, matchCount } from '.
 import { workbench, openContextMenu } from '../../model/workbench'
 // 타입 전용 (FileSearchResult) — 런타임 호출은 model 을 거친다
 import { FileSearchResult } from '../../backend/types'
-import { FileIcon } from '../widgets/FileIcon.vue'
-import { InlineNameInput } from '../widgets/InlineNameInput.vue'
-import { ConfirmDialog } from '../widgets/ConfirmDialog.vue'
+import { FileIcon } from '../widgets/FileIcon'
+import { InlineNameInput } from '../widgets/InlineNameInput'
+import { ConfirmDialog } from '../widgets/ConfirmDialog'
 
 role: 사이드바 뷰 — 탐색기(트리·파일 조작 UI)·검색·SCM. 뷰 상태와 동작은 각 model 모듈에 있다
