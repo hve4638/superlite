@@ -25,6 +25,31 @@ fn file_etag(meta: &std::fs::Metadata) -> String {
 // ponytail: 전역 쓰기 락 + 락 안 블로킹 fs 호출 — 병목이 실측되면 경로별 락 + spawn_blocking.
 static WRITE_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
+/// 트리(readDir)에서 숨기는 basename — VS Code files.exclude 기본값.
+/// node_modules 는 VS Code 기본과 동일하게 트리에 보인다.
+/// ponytail: 설정 시스템이 없어 하드코딩 — 사용자 설정이 생기면 여기로 합류.
+const FILES_EXCLUDED: [&str; 5] = [".git", ".svn", ".hg", ".DS_Store", "Thumbs.db"];
+
+/// 검색·listFiles 공통 rg 인자 — VS Code 와 동일하게 dotfile 을 포함(--hidden)하되
+/// files.exclude + search.exclude 기본값(node_modules 등)을 글롭으로 제외한다.
+/// ignore 파일은 워크스페이스 안의 것만 존중한다 — VS Code 기본과 동일
+/// (useIgnoreFiles=true, useParentIgnoreFiles/useGlobalIgnoreFiles=false).
+/// --no-require-git 만 주면 부모·글로벌 gitignore 까지 새어 들어와 파일이 조용히 사라진다.
+const RG_EXCLUDE_ARGS: [&str; 20] = [
+    "--hidden",
+    "--no-require-git",
+    "--no-ignore-parent",
+    "--no-ignore-global",
+    "-g", "!**/.git",
+    "-g", "!**/.svn",
+    "-g", "!**/.hg",
+    "-g", "!**/.DS_Store",
+    "-g", "!**/Thumbs.db",
+    "-g", "!**/node_modules",
+    "-g", "!**/bower_components",
+    "-g", "!**/*.code-search",
+];
+
 pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<Value, String> {
     match method {
         "workspace" => Ok(json!({
@@ -38,6 +63,9 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
             for ent in std::fs::read_dir(&dir).map_err(err)? {
                 let ent = ent.map_err(err)?;
                 let name = ent.file_name().to_string_lossy().into_owned();
+                if FILES_EXCLUDED.contains(&name.as_str()) {
+                    continue;
+                }
                 let path = if rel.is_empty() { name.clone() } else { format!("{rel}/{name}") };
                 // WHY: file_type() 은 심링크를 안 따라간다 — node_modules 의 심링크 디렉터리가
                 //      file 로 보인다. metadata() 는 따라간다 (깨진 링크는 file 취급).
@@ -150,7 +178,9 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
         }
         "listFiles" => {
             // 부팅이 이 호출을 await 하므로 실패 시 앱이 안 뜬다 — exit 1(0건)은 성공이다
-            let out = run_rg(root, &["--files"]).await?;
+            let mut args = vec!["--files"];
+            args.extend(RG_EXCLUDE_ARGS);
+            let out = run_rg(root, &args).await?;
             Ok(json!(out.lines().collect::<Vec<_>>()))
         }
         "search" => search(root, p).await,
@@ -182,6 +212,7 @@ async fn search(root: &Path, p: &Value) -> Result<Value, String> {
         return Ok(json!([]));
     }
     let mut args = vec!["--json", "--fixed-strings"];
+    args.extend(RG_EXCLUDE_ARGS);
     if !p["opts"]["caseSensitive"].as_bool().unwrap_or(false) {
         args.push("--ignore-case");
     }

@@ -7,7 +7,7 @@ port ThinBackend {
     role: 워크스페이스 이름·루트 경로
   }
   fn readDir(path) -> DirEntry[] {
-    role: 디렉토리 1층 나열 (트리 lazy 로드 단위)
+    role: 디렉토리 1층 나열 (트리 lazy 로드 단위). files.exclude 기본값(.git 등 VCS 메타)은 숨긴다 — node_modules 는 보인다
   }
   fn readFile(path, maxBytes?) -> FileContent {
     role: 파일 내용 + 그 시점 디스크 etag. maxBytes 상한 초과는 읽지 않고 에러 (undo 캡처용)
@@ -16,10 +16,10 @@ port ThinBackend {
     role: 저장. etag 제시 시 낙관적 충돌 검사 — stale 이면 미기록으로 conflict 반환, 생략 시 무조건 쓰기
   }
   fn listFiles() -> Path[] {
-    role: Quick Open 용 전체 파일 나열
+    role: Quick Open 용 전체 파일 나열 — dotfile 포함, .gitignore·files/search.exclude 제외
   }
   fn search(query, opts) -> FileSearchResult[] {
-    role: 내용 전문 검색 (디스크 기준, dirty 버퍼 미반영)
+    role: 내용 전문 검색 (디스크 기준, dirty 버퍼 미반영) — 제외 규칙은 listFiles 와 동일
   }
   fn createFile(path) {
     role: 빈 파일 배타적 생성 — 중간 디렉토리 자동 생성, 이미 존재하면 에러 (기존 내용 보호)

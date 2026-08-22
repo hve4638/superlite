@@ -1,10 +1,14 @@
 // crate::err(main.rs) 참조 — crate:: 는 crate 루트(main.rs 디렉토리) 좌표 '.' 로 정규화된다
 import { err } from '.'
 
-role: RPC 요청 처리 — fs 읽기/쓰기(etag 낙관적 충돌 검사)·생성/이름변경/삭제, rg 검색, git 상태·커밋. 모든 경로는 safe_join 관문
+role: RPC 요청 처리 — fs 읽기/쓰기(etag 낙관적 충돌 검사)·생성/이름변경/삭제, rg 검색, git 상태·커밋. 모든 경로는 safe_join 관문. excludes 는 VS Code 기본값 하드코딩 (설정 시스템 없음)
 
 // 쓰기 계열 RPC(write/create/rename/delete)의 직렬화 락 — etag 검사-쓰기 원자성의 근거
 val WRITE_LOCK
+// 트리(readDir)에서 숨기는 basename — VS Code files.exclude 기본값 (.git·.svn·.hg·.DS_Store·Thumbs.db). node_modules 는 트리에 보인다
+val FILES_EXCLUDED
+// 검색·listFiles 의 rg 공통 인자 — --hidden + files.exclude·search.exclude(node_modules 등) 글롭. ignore 파일은 워크스페이스 안의 것만 (VS Code 기본: useIgnoreFiles=true, parent/global=false)
+val RG_EXCLUDE_ARGS
 
 fn handle_req() {
   role: 메서드 디스패치 — 요청은 태스크로 병렬, 쓰기 경합은 WRITE_LOCK 직렬화
