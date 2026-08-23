@@ -187,7 +187,7 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
         // git repo 가 아니어도 앱은 떠야 한다 — 빈 상태로 강등
         "gitStatus" => Ok(git_status(root)
             .await
-            .unwrap_or_else(|_| json!({"branch": "", "dirty": false, "changes": []}))),
+            .unwrap_or_else(|_| json!({"branch": "", "head": "", "dirty": false, "changes": []}))),
         "gitOriginalContent" => {
             let path = req_path(p)?;
             safe_join(root, path)?; // 검증만 — git 에는 상대 경로를 그대로 넘긴다
@@ -257,10 +257,16 @@ async fn git_status(root: &Path) -> Result<Value, String> {
     // ponytail: 따옴표·제어문자 포함 경로는 여전히 quote 됨 — 완전 해결은 -z(NUL 구분) 파싱
     let out = run(root, "git", &["-c", "core.quotePath=false", "status", "--porcelain=v2", "--branch"]).await?;
     let mut branch = String::new();
+    let mut head = String::new();
     let mut changes = Vec::new();
     for line in out.lines() {
         if let Some(b) = line.strip_prefix("# branch.head ") {
             branch = b.to_string();
+            continue;
+        }
+        // HEAD 커밋 해시 — 프론트 diff original 캐시의 무효화 키. unborn 은 "(initial)" → 빈 문자열
+        if let Some(o) = line.strip_prefix("# branch.oid ") {
+            head = if o == "(initial)" { String::new() } else { o.to_string() };
             continue;
         }
         let (kind, path) = if let Some(rest) = line.strip_prefix("? ") {
@@ -291,7 +297,7 @@ async fn git_status(root: &Path) -> Result<Value, String> {
         };
         changes.push(json!({"path": path, "kind": kind}));
     }
-    Ok(json!({"branch": branch, "dirty": !changes.is_empty(), "changes": changes}))
+    Ok(json!({"branch": branch, "head": head, "dirty": !changes.is_empty(), "changes": changes}))
 }
 
 /// rg 전용 — exit code 계약이 0=매치, 1=무매치(정상), 2+=에러다

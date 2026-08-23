@@ -60,9 +60,8 @@ const tree = consumer<{ dirs: Set<string>; list: boolean; all: boolean }>(
   () => ({ dirs: new Set(), list: false, all: false }),
 );
 
-// ponytail: 외부 커밋 뒤 diff original(HEAD) 캐시(headVersion)는 무효화 안 됨 — .git/index
-//           이벤트로 올리면 git status 자체가 index 를 다시 써 churn 마다 모델이 새는 게
-//           더 나쁘다. 와이어 계약에서 HEAD 해시를 노출하면 그때 정확히 무효화한다.
+// 외부 커밋의 diff original 캐시 무효화는 refreshScm 이 가져오는 HEAD 해시(scm.head)가
+// 담당한다 — .git 이벤트 → refreshScm → head 변화 → monaco 캐시 키 불일치
 const git = consumer<null>(
   1000,
   () => swallow(refreshScm()),

@@ -70,6 +70,7 @@ assert.deepStrictEqual(none, [], 'search empty');
 
 const st = await call('gitStatus');
 assert.ok(typeof st.branch === 'string' && Array.isArray(st.changes), 'gitStatus');
+assert.match(st.head, /^[0-9a-f]{40}$/, 'gitStatus head 해시');
 
 const orig = await call('gitOriginalContent', { path: 'mock-front/package.json' });
 assert.ok(orig.includes('"code-superlight"'), 'gitOriginalContent');

@@ -43,6 +43,8 @@ export interface GitChange {
 
 export interface GitStatus {
   branch: string;
+  /** HEAD 커밋 해시 — diff original 캐시 무효화 키 (앱 밖 커밋도 잡는다). unborn/비 git 은 '' */
+  head: string;
   /** 워킹트리에 변경이 있으면 true (브랜치명 옆 '*' 표시용) */
   dirty: boolean;
   changes: GitChange[];

@@ -189,16 +189,16 @@ setDisposeModels((path) => {
   }
 });
 
-/** diff original(HEAD 시점) 모델 — 커밋(headVersion)마다 무효화되는 버전 키 캐시.
+/** diff original(HEAD 시점) 모델 — HEAD 해시(scm.head)가 바뀌면 무효화되는 버전 키 캐시.
  *  이전 버전 모델은 살아 있는 diff 에디터에 물려 있을 수 있어 dispose 하지 않는다
  *  (커밋 횟수만큼의 소규모 누수 — mock 규모에서 무시 가능). */
-const originals = new Map<string, { version: number; model: monaco.editor.ITextModel }>();
+const originals = new Map<string, { version: string; model: monaco.editor.ITextModel }>();
 
 export async function originalModelFor(path: string): Promise<monaco.editor.ITextModel> {
   const cached = originals.get(path);
-  if (cached && cached.version === scm.headVersion) return cached.model;
+  if (cached && cached.version === scm.head) return cached.model;
 
-  const version = scm.headVersion;
+  const version = scm.head;
   const uri = monaco.Uri.parse(`git-original://v${version}/${path}`);
   let model = monaco.editor.getModel(uri) ?? undefined;
   if (!model) {

@@ -16,13 +16,14 @@ export const scm = reactive({
   dirty: false,
   changes: [] as ScmChange[],
   commitMessage: '',
-  /** 커밋마다 증가 — diff original(HEAD) 캐시 무효화 키 */
-  headVersion: 0,
+  /** HEAD 커밋 해시 — diff original 캐시 무효화 키. 백엔드가 주므로 앱 밖 커밋도 잡는다 */
+  head: '',
 });
 
 export async function refreshScm(): Promise<void> {
   const status = await backend.gitStatus();
   scm.branch = status.branch;
+  scm.head = status.head;
   scm.dirty = status.dirty;
   scm.changes = status.changes.map((c) => {
     const slash = c.path.lastIndexOf('/');
@@ -53,8 +54,8 @@ export async function commit(): Promise<void> {
     return;
   }
   scm.commitMessage = '';
-  scm.headVersion += 1;
-  await refreshScm();
+  await refreshScm(); // 새 head 가 여기서 들어온다 — 수동 무효화 불필요
+
 }
 
 export const CHANGE_LETTER: Record<GitChangeKind, string> = {

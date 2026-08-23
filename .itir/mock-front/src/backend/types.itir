@@ -34,7 +34,7 @@ port ThinBackend {
     role: 파일·디렉토리 삭제 (디렉토리는 재귀, 휴지통 없음 — 안전장치는 프론트 confirm, undo 는 파일 한정)
   }
   fn gitStatus() -> GitStatus {
-    role: 브랜치 + 워킹트리 변경 목록
+    role: 브랜치 + HEAD 커밋 해시 + 워킹트리 변경 목록. head 는 diff original 캐시 무효화 키 — 앱 밖 커밋(터미널 git)도 잡는다
   }
   fn gitOriginalContent(path) -> content {
     role: diff 의 original 쪽 — HEAD 시점 내용

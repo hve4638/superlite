@@ -131,6 +131,8 @@ export function formatPercent(v: number): string {
 
 // HEAD 스냅샷 — 초기 커밋 시점의 추적 파일들. NOTES.md 는 untracked 라 제외,
 // format.ts 는 워킹트리에 formatPercent 가 추가되기 전 내용이다.
+/** 가짜 HEAD 해시 — 커밋마다 증가 (실 백엔드의 커밋 해시 역할) */
+let headSerial = 0;
 let HEAD: Record<string, string> = (() => {
   const head = { ...FILES };
   delete head['NOTES.md'];
@@ -275,7 +277,7 @@ export class MockBackend implements ThinBackend {
       if (!(path in FILES)) changes.push({ path, kind: 'deleted' });
     }
     changes.sort((a, b) => a.path.localeCompare(b.path));
-    return delay({ branch: 'main', dirty: changes.length > 0, changes });
+    return delay({ branch: 'main', head: `mock-${headSerial}`, dirty: changes.length > 0, changes });
   }
 
   gitOriginalContent(path: string): Promise<string> {
@@ -284,6 +286,7 @@ export class MockBackend implements ThinBackend {
 
   gitCommit(_message: string): Promise<void> {
     HEAD = { ...FILES };
+    headSerial += 1;
     return delay(undefined);
   }
 

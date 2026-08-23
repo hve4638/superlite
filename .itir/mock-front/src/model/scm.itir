@@ -11,7 +11,7 @@ export val CHANGE_LETTER
 export val CHANGE_COLOR
 
 export fn refreshScm() {
-  role: gitStatus 재조회로 변경 목록 갱신
+  role: gitStatus 재조회로 변경 목록·head 해시 갱신 — head 변화가 diff original 캐시를 무효화한다
 }
 export fn openChange(change) {
   role: 변경 클릭 — untracked 는 파일로, 나머지는 diff 로 연다
