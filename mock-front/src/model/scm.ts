@@ -2,6 +2,7 @@ import { reactive } from '@vue/reactivity';
 import { backend } from './host';
 import type { GitChangeKind } from '../backend/types';
 import { openDiff, openFile } from './editors';
+import { errText, notify } from './notifications';
 
 export interface ScmChange {
   path: string;
@@ -45,7 +46,12 @@ export async function openChange(change: ScmChange): Promise<void> {
 
 export async function commit(): Promise<void> {
   if (!scm.commitMessage.trim() || scm.changes.length === 0) return;
-  await backend.gitCommit(scm.commitMessage);
+  try {
+    await backend.gitCommit(scm.commitMessage);
+  } catch (e) {
+    notify('error', `Failed to commit: ${errText(e)}`);
+    return;
+  }
   scm.commitMessage = '';
   scm.headVersion += 1;
   await refreshScm();

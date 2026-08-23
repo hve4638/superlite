@@ -4,8 +4,9 @@
  * (VS Code 의 onDidRunOperation 즉시 반영과 동일. 뒤따라오는 fsChanges 는 중복 리프레시일 뿐).
  */
 import { backend } from './host';
-import { closePathTabs, remapPaths } from './editors';
+import { baseName, closePathTabs, remapPaths } from './editors';
 import { loadedDirPaths, parentOf, refreshAllFiles, refreshDir } from './files';
+import { errText, notify } from './notifications';
 import { refreshScm } from './scm';
 
 /** undo-of-delete 의 내용 캡처 상한 (VS Code 동일 5MB) — 넘으면 undo 없는 삭제 */
@@ -76,14 +77,26 @@ export async function deleteEntry(path: string, kind: 'file' | 'directory'): Pro
       /* 캡처 실패(바이너리·대용량) — undo 만 포기 */
     }
   }
-  await rawDelete(path);
+  // try 는 delete RPC 만 감싼다 — 성공한 삭제의 후처리(리프레시) 실패가
+  // "Failed to delete" 로 위장하고 undo 등록까지 건너뛰면 안 된다
+  try {
+    await backend.delete(path);
+  } catch (e) {
+    notify('error', `Failed to delete '${baseName(path)}': ${errText(e)}`);
+    return;
+  }
+  closePathTabs(path);
+  await refreshAfter([path]);
   if (captured !== null) {
     const content = captured;
     undoStack.push(async () => {
       // WHY: 스택에 쌓인 사이 외부가 같은 경로를 만들었을 수 있다 — 일치할 리 없는 etag 를
       //      제시하면 데몬 검사가 "없으면 생성(부활), 있으면 conflict 로 미기록" 이 된다
       const r = await backend.writeFile(path, content, '0-0');
-      if (r.conflict) return;
+      if (r.conflict) {
+        notify('warning', `Undo skipped: a file already exists at '${baseName(path)}'`);
+        return;
+      }
       await refreshAfter([path]);
     });
   }
@@ -92,5 +105,10 @@ export async function deleteEntry(path: string, kind: 'file' | 'directory'): Pro
 /** 마지막 파일 조작 역연산 (탐색기 포커스 Ctrl+Z). 실패하면 해당 항목은 버려진다. */
 export async function undoFileOp(): Promise<void> {
   const undo = undoStack.pop();
-  if (undo) await undo();
+  if (!undo) return;
+  try {
+    await undo();
+  } catch (e) {
+    notify('error', `Failed to undo: ${errText(e)}`);
+  }
 }

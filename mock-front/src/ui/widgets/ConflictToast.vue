@@ -1,6 +1,6 @@
 <script setup lang="ts">
-// 저장 충돌 알림 토스트 (VS Code notification toast 근사) — editors.saveConflict 가 있을 때만
-// 마운트된다. ponytail: 범용 알림 센터 없음 — 알림이 이것뿐이라 단일 목적 컴포넌트로 충분.
+// 저장 충돌 알림 토스트 — editors.saveConflict 가 있을 때만 마운트된다. 액션(Revert/
+// Overwrite)과 수명이 충돌 상태에 묶여 있어 범용 NotificationToasts 와 별개로 둔다.
 import { computed, onBeforeUnmount, onMounted } from 'vue';
 import { editors, overwriteConflict, revertConflict } from '../../model/editors';
 
@@ -37,12 +37,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
 </template>
 
 <style scoped>
+/* 배치는 Workbench 의 .toast-stack 이 맡는다 — 알림 토스트와 한 스택에 쌓인다 */
 .toast {
-  position: fixed;
-  right: 12px;
-  bottom: 30px;
   width: 450px;
-  z-index: 50;
   background: var(--vscode-notifications-background);
   color: var(--vscode-notifications-foreground);
   border: 1px solid var(--vscode-notificationToast-border);

@@ -12,6 +12,7 @@ import QuickInput from './QuickInput.vue';
 import ContextMenu from './ContextMenu.vue';
 import Sash from './widgets/Sash.vue';
 import ConflictToast from './widgets/ConflictToast.vue';
+import NotificationToasts from './widgets/NotificationToasts.vue';
 
 const SIDEBAR_MIN = 170;
 const PANEL_MIN = 77;
@@ -62,11 +63,25 @@ onBeforeUnmount(() => window.removeEventListener('resize', onWindowResize));
     <StatusBar />
     <QuickInput v-if="workbench.quickInput.open" />
     <ContextMenu v-if="workbench.contextMenu.open" />
-    <ConflictToast v-if="editors.saveConflict !== null" />
+    <!-- VS Code 처럼 토스트는 우하단 한 스택 — 새 알림이 아래, 충돌 토스트가 있으면 맨 아래 -->
+    <div class="toast-stack">
+      <NotificationToasts />
+      <ConflictToast v-if="editors.saveConflict !== null" />
+    </div>
   </div>
 </template>
 
 <style scoped>
+.toast-stack {
+  position: fixed;
+  right: 12px;
+  bottom: 30px;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
 .workbench {
   display: flex;
   flex-direction: column;

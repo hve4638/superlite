@@ -1,0 +1,21 @@
+role: 알림 토스트 상태 — VS Code notifications 근사. 우하단 스택, 심각도별 자동 숨김(Error 15s·Warning 12s·Info 10s), hover 로 타이머 정지. 알림 센터(벨) 없음
+
+export val notifications
+export type Severity
+export type Notification
+
+export fn notify(severity, message) {
+  role: 알림 추가 — 에러 표면화의 단일 진입점. model 계층의 backend 실패 catch 가 호출한다
+}
+export fn errText(e) -> Text {
+  role: unknown 에러를 표시 문자열로 (Error.message 우선)
+}
+export fn dismissNotification(id) {
+  role: 수동 닫기(X·Escape) — 타이머 해제 포함
+}
+export fn pauseNotification(id) {
+  role: hover 시 자동 숨김 타이머 정지
+}
+export fn resumeNotification(id) {
+  role: hover 해제 시 타이머 재시작 (전체 시간으로 다시 — VS Code 동일)
+}

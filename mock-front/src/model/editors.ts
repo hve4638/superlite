@@ -1,5 +1,7 @@
 import { reactive } from '@vue/reactivity';
 import { backend } from './host';
+import { errText, notify } from './notifications';
+import type { WriteResult } from '../backend/types';
 
 export interface FileTab {
   kind: 'file';
@@ -63,7 +65,7 @@ export function activeTab(): Tab | null {
   return g.tabs.find((t) => t.id === g.activeTabId) ?? null;
 }
 
-function baseName(path: string): string {
+export function baseName(path: string): string {
   return path.slice(path.lastIndexOf('/') + 1);
 }
 
@@ -81,8 +83,15 @@ async function ensureDoc(path: string): Promise<Doc> {
  * 파일 열기. preview=true(트리 단일 클릭)면 기존 preview 탭을 교체하고,
  * preview=false(더블 클릭/명시적 오픈)면 고정 탭으로 연다.
  */
-export async function openFile(path: string, opts?: { preview?: boolean; groupId?: number }): Promise<void> {
-  const doc = await ensureDoc(path);
+/** @returns 열기 성공 여부 — 읽기 실패는 notify 후 false (호출측 후속 동작 가드용) */
+export async function openFile(path: string, opts?: { preview?: boolean; groupId?: number }): Promise<boolean> {
+  let doc: Doc;
+  try {
+    doc = await ensureDoc(path);
+  } catch (e) {
+    notify('error', `Unable to open '${baseName(path)}': ${errText(e)}`);
+    return false;
+  }
   const group = opts?.groupId !== undefined
     ? editors.groups.find((g) => g.id === opts.groupId) ?? activeGroup()
     : activeGroup();
@@ -92,7 +101,7 @@ export async function openFile(path: string, opts?: { preview?: boolean; groupId
     if (!opts?.preview) existing.preview = false;
     group.activeTabId = existing.id;
     editors.activeGroupId = group.id;
-    return;
+    return true;
   }
 
   const tab: FileTab = {
@@ -110,17 +119,25 @@ export async function openFile(path: string, opts?: { preview?: boolean; groupId
   }
   group.activeTabId = tab.id;
   editors.activeGroupId = group.id;
+  return true;
 }
 
 /** 파일을 열고 지정 라인으로 이동 (검색 결과 클릭). line 은 1-based. */
 export async function openFileAt(path: string, line: number): Promise<void> {
-  await openFile(path, { preview: true });
+  // 열기 실패 시 reveal 을 남기면 다음 성공적 열기 때 엉뚱한 스크롤이 튄다
+  if (!(await openFile(path, { preview: true }))) return;
   editors.pendingReveal = { path, line };
 }
 
 /** SCM 에서 diff 탭 열기 (original: HEAD, modified: 워킹트리) */
 export async function openDiff(path: string): Promise<void> {
-  const doc = await ensureDoc(path);
+  let doc: Doc;
+  try {
+    doc = await ensureDoc(path);
+  } catch (e) {
+    notify('error', `Unable to open '${baseName(path)}': ${errText(e)}`);
+    return;
+  }
   const group = activeGroup();
   const id = `diff:${path}`;
   if (!group.tabs.some((t) => t.id === id)) {
@@ -279,7 +296,13 @@ export async function saveActive(): Promise<void> {
   //      "저장됨으로 보이는 미저장 편집" 이 안 생긴다
   const content = doc.content;
   const path = tab.path;
-  const r = await backend.writeFile(path, content, doc.etag);
+  let r: WriteResult;
+  try {
+    r = await backend.writeFile(path, content, doc.etag);
+  } catch (e) {
+    notify('error', `Failed to save '${baseName(path)}': ${errText(e)}`);
+    return;
+  }
   // WHY: 왕복 중 rename 되면(remapPaths 가 tab.path 를 바꾼다) 이 결과는 옛 경로 것이다 —
   //      saved 로 표시하면 새 경로의 더티를 잃는다. 버리면 다음 저장이 새 경로로 다시 쓴다.
   if (tab.path !== path) return;
@@ -309,8 +332,9 @@ export async function overwriteConflict(): Promise<void> {
     // WHY: await 중 타이핑되면 doc.content 가 앞서 있다 — 스냅샷을 넘기면 버퍼가 되감긴다
     updateContent(path, doc.content);
     editors.saveConflict = null;
-  } catch {
-    // 쓰기 실패(권한, 연결 끊김) — 토스트를 남겨 재시도할 수 있게 둔다
+  } catch (e) {
+    // 충돌 토스트는 남겨 재시도할 수 있게 둔다
+    notify('error', `Failed to save '${baseName(path)}': ${errText(e)}`);
   }
 }
 
@@ -329,8 +353,9 @@ export async function revertConflict(): Promise<void> {
     applyExternalEdit?.(path, content);
     updateContent(path, content);
     editors.saveConflict = null;
-  } catch {
-    // 읽기 실패(외부 삭제 등) — 토스트를 남긴다 (Overwrite 로 되살리는 길이 남는다)
+  } catch (e) {
+    // 충돌 토스트는 남긴다 — Overwrite 로 되살리는 길이 남는다
+    notify('error', `Failed to revert '${baseName(path)}': ${errText(e)}`);
   }
 }
 

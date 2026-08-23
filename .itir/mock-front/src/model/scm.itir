@@ -1,4 +1,5 @@
 import { backend } from './host'
+import { notify } from './notifications'
 import { GitChangeKind } from '../backend/types'
 import { openDiff, openFile } from './editors'
 
@@ -16,7 +17,7 @@ export fn openChange(change) {
   role: 변경 클릭 — untracked 는 파일로, 나머지는 diff 로 연다
 }
 export fn commit() {
-  role: 입력된 메시지로 전체 커밋 후 상태 재조회
+  role: 입력된 메시지로 전체 커밋 후 상태 재조회 — 실패는 notify
 }
 export fn decorationFor(path, isDir) -> Decoration? {
   role: 탐색기·탭에 붙는 git 장식 (디렉토리는 자손 변경 전파)

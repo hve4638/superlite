@@ -135,8 +135,7 @@ const confirmMessage = computed(() => {
 function onConfirmDelete(): void {
   const node = confirming.value;
   confirming.value = null;
-  // 실패(외부 선삭제 등)는 삼킨다 — 다음 리프레시가 진실을 보여준다. 표면화는 에러 UX 단계에서
-  if (node) deleteEntry(node.path, node.kind).catch(() => {});
+  if (node) void deleteEntry(node.path, node.kind); // 실패는 model 이 notify 한다
 }
 
 function menuFor(node: TreeNode): ContextMenuItem[] {
@@ -200,7 +199,7 @@ function onTreeKeydown(e: KeyboardEvent): void {
   } else if (e.key === 'z' && e.ctrlKey && !e.shiftKey && !e.altKey) {
     e.preventDefault();
     // 스택 항목의 경로가 이후 조작으로 낡았을 수 있다 — 실패한 항목은 버려진다 (redo 없음)
-    undoFileOp().catch(() => {});
+    void undoFileOp(); // 실패는 model 이 notify 한다
   }
 }
 
