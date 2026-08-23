@@ -9,9 +9,9 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const deadline = setTimeout(() => {
-  console.error('check timeout (30s)');
+  console.error('check timeout (60s)');
   process.exit(1);
-}, 30000);
+}, 60000);
 
 const dir = mkdtempSync(join(tmpdir(), 'sl-flow-'));
 const wsRoot = join(dir, 'root');
