@@ -1,10 +1,16 @@
 // crate::err(main.rs) 참조 — crate:: 는 crate 루트(main.rs 디렉토리) 좌표 '.' 로 정규화된다
 import { err } from '.'
 
-role: PTY 터미널 — 생성·입출력·리사이즈·정리. 입력 순서 보장을 위해 read 루프에서 논블로킹 즉시 처리
+role: PTY 터미널 — 생성·입출력·리사이즈·정리. 입력 순서 보장을 위해 read 루프에서 논블로킹 즉시 처리. 출력은 연결이 아니라 세션의 sink 로 — 끊김 중엔 버퍼, 재접속 시 flush
 
 class Term {
   role: PTY 한 벌 — writer, master, child 핸들
+}
+class Sink {
+  role: 터미널 이벤트의 세션 스코프 출구 — Attached(연결 tx) | Detached(버퍼). 리더 스레드는 연결을 모른다
+}
+fn sink_send() {
+  role: sink 상태에 따라 전송 또는 버퍼 적재 — 버퍼는 바이트 상한, 넘치면 오래된 것부터 버림
 }
 fn handle_term() {
   role: 터미널 계열 메서드 디스패치 — 같은 id 재생성 무시 (PTY 누수 방지)

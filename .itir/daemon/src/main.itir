@@ -1,13 +1,19 @@
-role: 수명과 연결 — flock 단독 보장, accept 루프, 유휴 grace 자진 종료, 연결당 read 루프
+role: 수명과 연결 — flock 단독 보장, accept 루프, 유휴 grace 자진 종료, 연결당 read 루프, 세션 지속(재접속 시 터미널 이어 붙임)
 
 fn main() {
-  role: 소켓 확보(flock 승자만 bind·unlink) + 유휴 감시 태스크 + accept 루프
+  role: 소켓 확보(flock 승자만 bind·unlink) + 유휴 감시 태스크 + 세션 reaper + accept 루프
 }
 fn acquire_lock() {
   role: 단독 데몬 보장 — connect 검사 대신 flock (검사→unlink→bind 는 원자적이지 않다)
 }
+class Session {
+  role: 연결보다 오래 사는 상태 한 벌 — 터미널 맵 + 출력 sink(끊김 중 버퍼링) + root + detach 시각. attach 의 session id 가 키
+}
+fn reap_sessions() {
+  role: detach 후 grace 를 넘긴 세션 회수 — 터미널 kill 후 맵에서 제거
+}
 fn handle_conn() {
-  role: 연결 수명 — 라인 프레이밍 요청 디스패치(단일 writer 태스크로 응답 직렬화) + attach 1회 규칙, 종료 시 워처·PTY 정리
+  role: 연결 수명 — 라인 프레이밍 요청 디스패치(단일 writer 태스크로 응답 직렬화) + attach 1회 규칙. attach 에 session id 가 있으면 세션 재사용(터미널 생존·버퍼 flush), 없으면 연결과 함께 죽는 익명 세션
 }
 fn err() {
   role: Display → String 에러 축약 (크레이트 공용)

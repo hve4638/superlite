@@ -2,6 +2,7 @@
 import { computed } from 'vue';
 import { activeTab, editors, indentOf, languageLabel } from '../model/editors';
 import { scm } from '../model/scm';
+import { connection } from '../model/watch';
 
 // diff 탭도 path 를 가지므로 kind 무관하게 파일 정보를 표시한다 (VS Code 동일)
 const fileTab = computed(() => activeTab());
@@ -11,8 +12,14 @@ const branchLabel = computed(() => (scm.dirty ? `${scm.branch}*` : scm.branch));
 <template>
   <div class="statusbar">
     <div class="statusbar-left">
-      <div class="statusbar-item remote" title="Open a Remote Window">
+      <!-- 끊김 중엔 VS Code 원격 표시등처럼 offline 색 + 라벨 (재연결은 WsBackend 가 자동으로) -->
+      <div
+        class="statusbar-item remote"
+        :class="{ offline: !connection.ok }"
+        :title="connection.ok ? 'Open a Remote Window' : 'Reconnecting…'"
+      >
         <span class="codicon codicon-remote" />
+        <span v-if="!connection.ok">Reconnecting…</span>
       </div>
       <div v-if="scm.branch" class="statusbar-item" :title="`${scm.branch} (Git)`">
         <span class="codicon codicon-source-control" />
@@ -82,5 +89,9 @@ const branchLabel = computed(() => (scm.dirty ? `${scm.branch}*` : scm.branch));
 }
 .statusbar-item .codicon {
   font-size: 14px;
+}
+.statusbar-item.offline {
+  background: var(--vscode-statusBarItem-offlineBackground, #6c1717);
+  color: var(--vscode-statusBarItem-offlineForeground, #ffffff);
 }
 </style>

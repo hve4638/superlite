@@ -166,19 +166,25 @@ async fn ws_handler(
             return StatusCode::FORBIDDEN.into_response();
         }
     }
-    ws.on_upgrade(move |sock| relay(sock, app.root))
+    // 프론트가 만든 세션 id — 데몬이 재접속 시 같은 세션(터미널)을 이어 붙이는 키.
+    // 없으면(체크 스크립트) 익명 세션 — 연결과 함께 죽는 종전 동작.
+    let session = query.get("session").cloned();
+    ws.on_upgrade(move |sock| relay(sock, app.root, session))
 }
 
 /// 프론트 WS ↔ 데몬 소켓 1:1 중계. 어느 쪽이 끊겨도 둘 다 정리 —
 /// 데몬 쪽 연결 drop 이 그 연결의 터미널을 정리한다.
-async fn relay(mut ws: WebSocket, root: PathBuf) {
+async fn relay(mut ws: WebSocket, root: PathBuf, session: Option<String>) {
     let Ok(stream) = daemon_conn(false).await else {
         return; // ws 는 drop 으로 닫힌다 — 프론트 onclose 가 진행 중 요청을 실패 처리
     };
     let (read_half, mut write_half) = stream.into_split();
     let mut lines = BufReader::new(read_half).lines();
     // 첫 줄은 attach. 응답(id 0)이 프론트로 중계돼도 무시된다 — 프론트 id 는 1부터.
-    let attach = json!({"id": 0, "method": "attach", "params": {"root": root.to_string_lossy()}});
+    let mut attach = json!({"id": 0, "method": "attach", "params": {"root": root.to_string_lossy()}});
+    if let Some(s) = session {
+        attach["params"]["session"] = json!(s);
+    }
     if write_line(&mut write_half, &attach.to_string()).await.is_err() {
         return;
     }

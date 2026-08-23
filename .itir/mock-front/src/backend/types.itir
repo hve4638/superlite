@@ -48,6 +48,9 @@ port ThinBackend {
   fn onFsChanges(cb) {
     role: 외부 파일 변경 배치 구독 (옵셔널 — mock 은 외부 변경이 없다)
   }
+  fn onConnection(cb) {
+    role: 연결 상태 변화 구독 (옵셔널 — mock 은 끊길 일이 없다). 재연결 시 true — 구독자가 전체 리프레시로 재동기화한다
+  }
 }
 
 export type WorkspaceInfo

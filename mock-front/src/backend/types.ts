@@ -106,4 +106,9 @@ export interface ThinBackend {
    * 있고 전체 리프레시가 필요하다. mock 은 미구현 — 구독 자체가 없으면 감시도 없다.
    */
   onFsChanges?(cb: (changes: FsChange[], overflow: boolean) => void): void;
+  /**
+   * 연결 상태 변화 구독 (mock 은 끊길 일이 없어 미구현). 재연결 시 true — 끊김 중 놓친
+   * 변경은 복구할 수 없으므로 구독자가 전체 리프레시로 재동기화해야 한다.
+   */
+  onConnection?(cb: (connected: boolean) => void): void;
 }

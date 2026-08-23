@@ -5,6 +5,7 @@
  * 에디터 재로드 100ms / 탐색기 500ms / git 1000ms. 안전망으로 창 포커스 시 전체 리프레시
  * (워처는 이벤트를 놓칠 수 있다는 전제).
  */
+import { reactive } from '@vue/reactivity';
 import type { FsChange } from '../backend/types';
 import { backend } from './host';
 import { editors, reloadDocFromDisk } from './editors';
@@ -97,7 +98,15 @@ function fullRefresh(): void {
   });
 }
 
+/** 백엔드 연결 상태 — 상태바 표시용 (mock 은 항상 true) */
+export const connection = reactive({ ok: true });
+
 export function initWatch(): void {
+  backend.onConnection?.((ok) => {
+    connection.ok = ok;
+    // 끊김 중의 fsChanges 는 이미 놓쳤다 — overflow 와 같은 전체 리프레시로 재동기화
+    if (ok) fullRefresh();
+  });
   if (!backend.onFsChanges) return; // mock — 외부 변경이 없다
   backend.onFsChanges(onBatch);
   window.addEventListener('focus', fullRefresh);

@@ -2,6 +2,7 @@ import { workbench, openContextMenu, closeContextMenu, openQuickInput, closeQuic
 import { editors, activeTab, openFile, indentOf, languageLabel } from '../model/editors'
 import { files } from '../model/files'
 import { scm } from '../model/scm'
+import { connection } from '../model/watch'
 import { commandList } from '../model/commands'
 import { EditorArea } from './editor/EditorArea'
 import { PanelArea } from './panel/PanelArea'
