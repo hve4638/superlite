@@ -93,7 +93,10 @@ async fn main() {
     // 연결 0 이 grace 만큼 지속되면 자진 종료 (백엔드 전멸 = 쓰는 사람 없음).
     // 단 detach 세션이 남아 있으면 버틴다 — 세션 grace(재접속 약속)가 유휴 종료 60초에
     // 조용히 잘리지 않게. reaper 가 세션을 회수하고 나서야 유휴 카운트가 시작된다.
-    // ponytail: 종료 직전 새 접속이 오는 race 는 백엔드의 접속 실패 → spawn 재시도가 흡수
+    // ponytail: 종료 직전 새 접속이 오는 race 는 백엔드의 접속 실패 → spawn 재시도가 흡수.
+    //           handle_conn 이 panic 으로 detach 전환을 건너뛴 세션은 detached_at=None 으로
+    //           영원히 남아 이 조건이 데몬을 무기한 붙든다 — 예전 60초 backstop 이 사라진
+    //           대가. mutex poison 은 어차피 데몬 전면 장애라 수용, 문제되면 drop guard.
     {
         let (conns, sock, sessions) = (conns.clone(), sock.clone(), sessions.clone());
         tokio::spawn(async move {

@@ -3,15 +3,15 @@
 //   cargo build --workspace 후: node backend/check-reconnect.mjs
 import assert from 'node:assert';
 import { spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const deadline = setTimeout(() => {
-  console.error('check timeout (30s)');
+  console.error('check timeout (45s)');
   process.exit(1);
-}, 30000);
+}, 45000);
 
 const dir = mkdtempSync(join(tmpdir(), 'sl-reconn-'));
 const wsRoot = join(dir, 'root');
@@ -96,6 +96,20 @@ try {
   await sleep(700);
   assert.ok(c3.data.join('').includes('fresh-8'), `회수 후 새 터미널: ${JSON.stringify(c3.data)}`);
   c3.ws.close();
+
+  // 5) 유휴 종료: 백엔드가 죽고 세션까지 회수되면 데몬은 자진 종료한다 (소켓 파일 제거가
+  //    graceful 종료의 증거). detach 세션이 있는 동안은 안 죽는 조건의 반대편 검증이다.
+  backend.kill();
+  const sock = env.SUPERLIGHT_SOCK;
+  let gone = false;
+  for (let i = 0; i < 40; i++) {
+    await sleep(500);
+    if (!existsSync(sock)) {
+      gone = true;
+      break;
+    }
+  }
+  assert.ok(gone, '데몬이 유휴 종료하지 않았다 (세션 회수 후에도 잔류)');
 
   console.log('reconnect check: OK');
 } finally {
