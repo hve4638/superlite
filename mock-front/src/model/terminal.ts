@@ -1,6 +1,7 @@
 import { reactive } from '@vue/reactivity';
 import { backend } from './host';
 import type { TerminalSession } from '../backend/types';
+import { notify } from './notifications';
 
 export interface TerminalInstance {
   id: number;
@@ -39,3 +40,11 @@ export function disposeTerminal(id: number): void {
 export function setActiveTerminal(id: number): void {
   terminals.activeId = id;
 }
+
+// 재연결은 됐지만 데몬 세션이 회수된 경우(장기 끊김) — 이쪽 터미널은 전부 죽었다.
+// 응답 없는 유령으로 남기는 대신 정리하고 알린다 (다음 패널 열기가 새 터미널을 만든다)
+backend.onSessionLost?.(() => {
+  if (terminals.list.length === 0) return;
+  for (const t of [...terminals.list]) disposeTerminal(t.id);
+  notify('warning', 'Terminal sessions were lost while disconnected');
+});

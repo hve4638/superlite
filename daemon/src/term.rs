@@ -219,8 +219,10 @@ fn spawn_term(
                 flow.add_and_wait(chars);
             }
         }
-        // read 종료 = 셸 자연 종료 또는 세션 회수(kill) — 맵에서 제거해 fd/좀비 누수를 막는다
-        if let Some(mut t) = terms.lock().unwrap().remove(&id) {
+        // read 종료 = 셸 자연 종료 또는 세션 회수(kill) — 맵에서 제거해 fd/좀비 누수를 막는다.
+        // WHY: if let 스크루티니의 임시 가드는 블록 끝까지 산다 — kill/wait 를 락 밖에서
+        let removed = terms.lock().unwrap().remove(&id);
+        if let Some(mut t) = removed {
             let _ = t.child.kill();
             let _ = t.child.wait();
         }

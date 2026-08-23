@@ -177,7 +177,8 @@ async fn ws_handler(
     }
     // 프론트가 만든 세션 id — 데몬이 재접속 시 같은 세션(터미널)을 이어 붙이는 키.
     // 없으면(체크 스크립트) 익명 세션 — 연결과 함께 죽는 종전 동작.
-    let session = query.get("session").cloned();
+    // 빈 문자열은 익명 취급 — ?session= 만 넘긴 클라이언트들이 "" 키 하나를 공유하지 않게
+    let session = query.get("session").cloned().filter(|s| !s.is_empty());
     ws.on_upgrade(move |sock| relay(sock, app.root, session))
 }
 

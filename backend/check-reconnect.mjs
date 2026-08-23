@@ -39,12 +39,16 @@ async function connect(session) {
     });
     if (ok) {
       const data = [];
+      let attachRes;
+      // id 0 = 백엔드가 대신 보낸 attach 응답 — resumed 로 세션 회수 여부를 알 수 있다
+      const attach = new Promise((r) => (attachRes = r));
       ws.onmessage = (ev) => {
         const m = JSON.parse(ev.data);
+        if (m.id === 0) attachRes(m.result);
         if (m.event === 'termData') data.push(m.data);
       };
       const send = (method, params) => ws.send(JSON.stringify({ method, params }));
-      return { ws, data, send };
+      return { ws, data, send, attach };
     }
     assert.ok(i < 50, '백엔드 기동 실패 — cargo build --workspace 먼저');
     await sleep(100);
@@ -54,6 +58,7 @@ async function connect(session) {
 try {
   // 1) 세션 s1: 터미널 만들고 동작 확인
   const c1 = await connect('s1');
+  assert.strictEqual((await c1.attach).resumed, false, '첫 attach 는 resumed=false');
   c1.send('createTerminal', { term: 1, cols: 80, rows: 24 });
   await sleep(700);
   c1.send('termWrite', { term: 1, data: 'echo first-$((1+1))\r' });
@@ -68,6 +73,7 @@ try {
 
   // 3) 같은 세션으로 재접속 — 버퍼 flush + 같은 셸이 계속 응답해야 한다
   const c2 = await connect('s1');
+  assert.strictEqual((await c2.attach).resumed, true, '재접속 attach 는 resumed=true');
   await sleep(500);
   assert.ok(c2.data.join('').includes('det-4'), `detach 버퍼 flush: ${JSON.stringify(c2.data)}`);
   c2.send('termWrite', { term: 1, data: 'echo again-$((1+2))\r' });
@@ -75,9 +81,11 @@ try {
   assert.ok(c2.data.join('').includes('again-3'), `재접속 후 echo: ${JSON.stringify(c2.data)}`);
   c2.ws.close();
 
-  // 4) 세션 grace(2s) + reaper 주기(5s) 를 넘기면 터미널은 회수 — 새 attach 는 빈 세션
+  // 4) 세션 grace(2s) + reaper 주기(5s) 를 넘기면 터미널은 회수 — 새 attach 는 빈 세션.
+  //    resumed=false 가 프론트의 "세션 잃음" 신호다 (죽은 터미널 정리 근거)
   await sleep(8000);
   const c3 = await connect('s1');
+  assert.strictEqual((await c3.attach).resumed, false, '회수 후 attach 는 resumed=false');
   c3.send('termWrite', { term: 1, data: 'echo zombie-$((3+3))\r' });
   await sleep(700);
   assert.ok(!c3.data.join('').includes('zombie-6'), `회수 후 유령 응답: ${JSON.stringify(c3.data)}`);

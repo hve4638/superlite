@@ -44,6 +44,9 @@ export class WsBackend implements ThinBackend {
   private termRecv = new Map<number, number>();
   private fsHandler: ((changes: FsChange[], overflow: boolean) => void) | null = null;
   private connHandler: ((connected: boolean) => void) | null = null;
+  private sessionLostHandler: (() => void) | null = null;
+  /** 이번 연결이 재연결인가 — attach 응답(id 0)의 resumed 해석에 쓴다 */
+  private isReconnect = false;
 
   constructor(url: string) {
     // 세션 id — 재접속 시 데몬이 같은 세션(터미널)을 이어 붙이는 키. 페이지 수명 단위 —
@@ -56,6 +59,7 @@ export class WsBackend implements ThinBackend {
     this.ws = new WebSocket(this.url);
     this.ws.onopen = () => {
       this.opened = true;
+      this.isReconnect = this.everOpened;
       // 데몬이 attach 에서 배압 카운터를 리셋한다 — 수신 카운터도 0 에서 다시.
       // (끊김 중 큐에 남은 stale ack 는 데몬 쪽에서 0 으로 포화될 뿐 — 무해)
       this.termRecv.clear();
@@ -95,6 +99,12 @@ export class WsBackend implements ThinBackend {
         return;
       }
       if (msg.event) return;
+      // id 0 = 백엔드가 대신 보낸 attach 의 응답. 재연결인데 resumed 가 아니면
+      // 데몬이 세션을 회수한 것 — 이쪽이 들고 있는 터미널은 전부 죽었다
+      if (msg.id === 0) {
+        if (this.isReconnect && msg.result?.resumed !== true) this.sessionLostHandler?.();
+        return;
+      }
       const p = this.pending.get(msg.id);
       if (!p) return;
       this.pending.delete(msg.id);
@@ -102,10 +112,17 @@ export class WsBackend implements ThinBackend {
       else p.resolve(msg.result);
     };
     this.ws.onclose = () => {
+      // WHY: 재시도 실패도 close 를 쏜다(브라우저 1006) — 열렸던 연결의 close 일 때만
+      //      reject 해야 한다. 안 그러면 끊김 중 만들어져 큐(미전송)에 있는 요청이
+      //      "실패" 통보 후 재연결 때 조용히 전송돼 유령 쓰기가 된다 (응답은 버려져
+      //      etag 미갱신 → 다음 저장이 스퓨리어스 충돌).
+      const wasOpen = this.opened;
       this.opened = false;
-      // 진행 중이던 요청만 실패 처리 — 큐(미전송)는 남아 재연결 후 나간다
-      for (const p of this.pending.values()) p.reject(new Error('백엔드 연결이 끊겼다'));
-      this.pending.clear();
+      if (wasOpen) {
+        // 전송돼 진행 중이던 요청만 실패 처리 — 큐는 남아 재연결 후 나간다
+        for (const p of this.pending.values()) p.reject(new Error('백엔드 연결이 끊겼다'));
+        this.pending.clear();
+      }
       this.connHandler?.(false);
       // ponytail: 고정 1초 재시도, 무한 — 백오프·포기는 필요해지면
       setTimeout(() => this.connect(), 1000);
@@ -173,6 +190,10 @@ export class WsBackend implements ThinBackend {
 
   onConnection(cb: (connected: boolean) => void): void {
     this.connHandler = cb;
+  }
+
+  onSessionLost(cb: () => void): void {
+    this.sessionLostHandler = cb;
   }
 
   createTerminal(cols: number, rows: number): TerminalSession {

@@ -51,6 +51,9 @@ port ThinBackend {
   fn onConnection(cb) {
     role: 연결 상태 변화 구독 (옵셔널 — mock 은 끊길 일이 없다). 재연결 시 true — 구독자가 전체 리프레시로 재동기화한다
   }
+  fn onSessionLost(cb) {
+    role: 재연결됐지만 데몬 세션이 회수된 경우(장기 끊김) 구독 (옵셔널) — 기존 터미널은 전부 죽어 있어 구독자가 정리한다
+  }
 }
 
 export type WorkspaceInfo

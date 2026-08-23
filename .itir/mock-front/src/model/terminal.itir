@@ -1,7 +1,8 @@
 import { backend } from './host'
 import { TerminalSession } from '../backend/types'
+import { notify } from './notifications'
 
-role: 터미널 인스턴스 목록 — 세션 핸들 보유, 렌더링(xterm)은 UI 몫
+role: 터미널 인스턴스 목록 — 세션 핸들 보유, 렌더링(xterm)은 UI 몫. 데몬 세션 회수(onSessionLost) 시 죽은 터미널을 정리하고 warning 알림
 
 export type TerminalInstance
 export val terminals

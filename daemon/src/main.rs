@@ -84,20 +84,25 @@ async fn main() {
     let listener = UnixListener::bind(&sock).expect("socket bind 실패");
     eprintln!("superlight-daemon: {}", sock.display());
 
+    let sessions: Sessions = Sessions::default();
     let conns = Arc::new(AtomicUsize::new(0));
     let grace: u64 = std::env::var("SUPERLIGHT_GRACE_SECS")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(60);
     // 연결 0 이 grace 만큼 지속되면 자진 종료 (백엔드 전멸 = 쓰는 사람 없음).
+    // 단 detach 세션이 남아 있으면 버틴다 — 세션 grace(재접속 약속)가 유휴 종료 60초에
+    // 조용히 잘리지 않게. reaper 가 세션을 회수하고 나서야 유휴 카운트가 시작된다.
     // ponytail: 종료 직전 새 접속이 오는 race 는 백엔드의 접속 실패 → spawn 재시도가 흡수
     {
-        let (conns, sock) = (conns.clone(), sock.clone());
+        let (conns, sock, sessions) = (conns.clone(), sock.clone(), sessions.clone());
         tokio::spawn(async move {
             let mut idle = 0u64;
             loop {
                 tokio::time::sleep(Duration::from_secs(1)).await;
-                idle = if conns.load(Ordering::SeqCst) == 0 { idle + 1 } else { 0 };
+                let quiet =
+                    conns.load(Ordering::SeqCst) == 0 && sessions.lock().unwrap().is_empty();
+                idle = if quiet { idle + 1 } else { 0 };
                 if idle >= grace {
                     let _ = std::fs::remove_file(&sock);
                     eprintln!("superlight-daemon: 유휴 {grace}s — 종료");
@@ -107,7 +112,6 @@ async fn main() {
         });
     }
 
-    let sessions: Sessions = Sessions::default();
     // 세션 reaper — detach 된 세션의 터미널을 세션 grace 뒤 회수.
     // 데몬 자체가 유휴 종료하면 그때 함께 죽는다 (백엔드 제어 연결이 있는 한 안 죽는다)
     {
@@ -153,7 +157,7 @@ fn attach_session(
     id: &str,
     root: &Path,
     tx: &UnboundedSender<String>,
-) -> Result<Arc<Session>, String> {
+) -> Result<(Arc<Session>, bool), String> {
     let mut map = sessions.lock().unwrap();
     if let Some(s) = map.get(id) {
         // UUID 충돌이라기보다 다른 root 의 백엔드가 같은 id 를 재사용한 경우 — 거부가 안전
@@ -172,11 +176,11 @@ fn attach_session(
         // 배압 카운터 리셋 — 프론트도 재연결 시 0 에서 다시 센다 (유실 프레임 몫 정리)
         term::reset_flow(&s.terms);
         *s.detached_at.lock().unwrap() = None;
-        return Ok(s.clone());
+        return Ok((s.clone(), true));
     }
     let s = Arc::new(new_session(root.to_path_buf(), tx));
     map.insert(id.to_string(), s.clone());
-    Ok(s)
+    Ok((s, false))
 }
 
 fn new_session(root: PathBuf, tx: &UnboundedSender<String>) -> Session {
@@ -224,25 +228,30 @@ async fn handle_conn(stream: UnixStream, sessions: Sessions) {
                 }
                 match PathBuf::from(req["params"]["root"].as_str().unwrap_or("")).canonicalize() {
                     Ok(r) => {
-                        let s = match req["params"]["session"].as_str() {
+                        // resumed — 재접속인데 false 면 세션이 이미 회수됐다는 뜻.
+                        // 프론트가 죽은 터미널을 정리할 유일한 단서다
+                        let (s, resumed) = match req["params"]["session"].as_str() {
                             Some(sid) => match attach_session(&sessions, sid, &r, &tx) {
-                                Ok(s) => {
+                                Ok(pair) => {
                                     named = true;
-                                    s
+                                    pair
                                 }
                                 Err(e) => {
                                     let _ = tx.send(json!({"id": req["id"], "error": e}).to_string());
                                     break;
                                 }
                             },
-                            None => Arc::new(new_session(r.clone(), &tx)),
+                            None => (Arc::new(new_session(r.clone(), &tx)), false),
                         };
                         let path = r.to_string_lossy().into_owned();
                         // 감시 실패(inotify 한도 등)는 치명적이지 않다 — 감시 없이 동작.
                         // 워처는 연결 스코프 — 끊김 중 놓친 이벤트는 프론트가 재접속 시 전체 리프레시
                         watch::start_watcher(r, tx.clone(), watcher_slot.clone());
                         session = Some(s);
-                        let _ = tx.send(json!({"id": req["id"], "result": {"rootPath": path}}).to_string());
+                        let _ = tx.send(
+                            json!({"id": req["id"], "result": {"rootPath": path, "resumed": resumed}})
+                                .to_string(),
+                        );
                     }
                     Err(e) => {
                         let _ = tx.send(json!({"id": req["id"], "error": format!("attach 실패: {e}")}).to_string());

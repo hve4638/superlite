@@ -111,4 +111,9 @@ export interface ThinBackend {
    * 변경은 복구할 수 없으므로 구독자가 전체 리프레시로 재동기화해야 한다.
    */
   onConnection?(cb: (connected: boolean) => void): void;
+  /**
+   * 재연결은 됐지만 데몬 세션이 회수된 경우(장기 끊김) 구독. 이때 기존 터미널은 전부
+   * 죽어 있다 — 구독자가 정리해야 응답 없는 유령 터미널이 남지 않는다.
+   */
+  onSessionLost?(cb: () => void): void;
 }
