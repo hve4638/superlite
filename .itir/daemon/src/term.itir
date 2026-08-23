@@ -12,8 +12,14 @@ class Sink {
 fn sink_send() {
   role: sink 상태에 따라 전송 또는 버퍼 적재 — 버퍼는 바이트 상한, 넘치면 오래된 것부터 버림
 }
+class Flow {
+  role: 터미널별 ack 기반 배압 (VS Code 상수: high 100k / low 5k) — 미ack 이 high 를 넘으면 리더 스레드가 condvar 대기, ack 로 low 이하가 되면 재개. 재접속 시 리셋, kill 시 해제
+}
 fn handle_term() {
-  role: 터미널 계열 메서드 디스패치 — 같은 id 재생성 무시 (PTY 누수 방지)
+  role: 터미널 계열 메서드 디스패치 — 같은 id 재생성 무시 (PTY 누수 방지), termAck 는 Flow 카운터 차감
+}
+fn reset_flow() {
+  role: 세션 전 터미널의 미ack 카운터 리셋 — 재접속 시 프론트 카운터와 함께 0 에서 재시작 (유실 프레임 몫의 영구 누적 방지)
 }
 fn spawn_term() {
   role: PTY 생성 + 전용 리더 스레드 — 출력은 UTF-8 경계 분할로 termData 푸시, 셸 자연 종료 시 자기 정리

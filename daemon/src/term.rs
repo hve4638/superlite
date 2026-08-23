@@ -6,7 +6,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read as _, Write as _};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde_json::{json, Value};
@@ -18,9 +18,72 @@ pub(crate) struct Term {
     writer: Box<dyn std::io::Write + Send>,
     master: Box<dyn portable_pty::MasterPty + Send>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
+    flow: Arc<Flow>,
 }
 
 pub(crate) type Terms = Arc<Mutex<HashMap<u64, Term>>>;
+
+// VS Code 터미널 flow control 상수 (terminalProcess) — 단위는 UTF-16 코드유닛
+// (프론트 data.length 와 일치시키려고 encode_utf16 으로 센다)
+const HIGH_WATERMARK_CHARS: u64 = 100_000;
+const LOW_WATERMARK_CHARS: u64 = 5_000;
+
+/// 터미널별 ack 기반 배압 — 미ack 이 high 를 넘으면 리더 스레드가 멈추고,
+/// ack 로 low 이하가 되면 재개한다. 느린 회선에서 출력 폭주가 메모리·지연으로
+/// 쌓이는 대신 PTY 버퍼(커널)가 셸을 자연히 막게 한다.
+pub(crate) struct Flow {
+    state: Mutex<FlowState>,
+    cv: Condvar,
+}
+
+struct FlowState {
+    unacked: u64,
+    /// kill 시 true — 대기 중인 리더를 깨워 스레드가 read 종료 경로로 빠지게 한다
+    dead: bool,
+}
+
+impl Flow {
+    fn new() -> Arc<Self> {
+        Arc::new(Flow { state: Mutex::new(FlowState { unacked: 0, dead: false }), cv: Condvar::new() })
+    }
+
+    /// 보낸 만큼 더하고, high 를 넘겼으면 low 이하로 내려올 때까지 대기
+    fn add_and_wait(&self, n: u64) {
+        let mut s = self.state.lock().unwrap();
+        s.unacked += n;
+        while s.unacked > HIGH_WATERMARK_CHARS && !s.dead {
+            s = self.cv.wait(s).unwrap();
+        }
+    }
+
+    fn ack(&self, n: u64) {
+        let mut s = self.state.lock().unwrap();
+        s.unacked = s.unacked.saturating_sub(n);
+        if s.unacked <= LOW_WATERMARK_CHARS {
+            self.cv.notify_all();
+        }
+    }
+
+    fn reset(&self) {
+        let mut s = self.state.lock().unwrap();
+        s.unacked = 0;
+        self.cv.notify_all();
+    }
+
+    fn kill(&self) {
+        let mut s = self.state.lock().unwrap();
+        s.dead = true;
+        self.cv.notify_all();
+    }
+}
+
+/// 세션 전 터미널의 배압 카운터 리셋 — 재접속 시 프론트 수신 카운터와 함께 0 에서
+/// 재시작한다 (끊기는 순간 유실된 프레임 몫이 미ack 로 영구 누적되는 것을 방지)
+pub(crate) fn reset_flow(terms: &Terms) {
+    for t in terms.lock().unwrap().values() {
+        t.flow.reset();
+    }
+}
 
 /// 끊김 중 버퍼 상한 — 초과분은 오래된 것부터 버린다 (스크롤백 유실과 동일한 성격).
 /// ponytail: 다른 터미널의 폭주가 termExit 를 밀어낼 수 있다 — flow control 이 출력 자체를
@@ -57,6 +120,7 @@ pub(crate) fn sink_send(sink: &Sink, msg: String) {
 // WHY: portable-pty 의 kill 은 SIGHUP 후 최대 200ms 를 재우며 대기한다 — read 루프/워커를
 //      막지 않게 스레드로 보내고, wait 까지 해서 좀비를 남기지 않는다.
 pub(crate) fn kill_term(mut t: Term) {
+    t.flow.kill(); // 배압 대기 중인 리더를 깨워야 스레드가 회수된다
     std::thread::spawn(move || {
         let _ = t.child.kill();
         let _ = t.child.wait();
@@ -96,6 +160,11 @@ pub(crate) fn handle_term(method: &str, p: &Value, terms: &Terms, sink: &Sink, r
                 });
             }
         }
+        "termAck" => {
+            if let Some(t) = terms.lock().unwrap().get(&id) {
+                t.flow.ack(p["chars"].as_u64().unwrap_or(0));
+            }
+        }
         "disposeTerminal" => {
             if let Some(t) = terms.lock().unwrap().remove(&id) {
                 kill_term(t);
@@ -123,9 +192,13 @@ fn spawn_term(
     let child = pty.slave.spawn_command(cmd).map_err(err)?;
     let writer = pty.master.take_writer().map_err(err)?;
     let mut reader = pty.master.try_clone_reader().map_err(err)?;
+    let flow = Flow::new();
     // WHY: 리더 스레드가 종료 시 맵에서 자기 항목을 지우므로, 스레드 시작 전에 등록해야
     //      즉사한 셸이 맵에 유령으로 남는 race 가 없다
-    terms.lock().unwrap().insert(id, Term { writer, master: pty.master, child });
+    terms
+        .lock()
+        .unwrap()
+        .insert(id, Term { writer, master: pty.master, child, flow: flow.clone() });
     // WHY: portable-pty 의 reader 는 블로킹 — 전용 스레드에서 읽어 writer 채널로 넘긴다
     std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
@@ -139,7 +212,11 @@ fn spawn_term(
             let (text, rest) = split_valid_utf8(&carry);
             carry = rest;
             if !text.is_empty() {
+                // WHY: 배압 단위는 프론트의 data.length(UTF-16)와 같아야 ack 가 상쇄된다
+                let chars = text.encode_utf16().count() as u64;
                 sink_send(&sink, json!({"event": "termData", "term": id, "data": text}).to_string());
+                // 미ack 이 고수위를 넘으면 여기서 멈춘다 — PTY 커널 버퍼가 차면 셸도 멈춘다
+                flow.add_and_wait(chars);
             }
         }
         // read 종료 = 셸 자연 종료 또는 세션 회수(kill) — 맵에서 제거해 fd/좀비 누수를 막는다

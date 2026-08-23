@@ -3,5 +3,5 @@ import { ThinBackend } from './types'
 role: 실 백엔드 — 같은 오리진 /ws WebSocket 위 JSON-RPC (id 매칭) + 이벤트(fsChanges, 터미널) 디스패치. 끊기면 1초 간격 자동 재연결 — 세션 id(WS URL 쿼리)로 데몬 세션(터미널)에 다시 붙는다
 
 export class WsBackend {
-  role: 요청마다 id 발급·응답 매칭, event 프레임은 구독자에게 라우팅. 끊김 중 요청은 큐에 남아 재연결 후 전송, 진행 중이던 요청만 실패 처리. 재연결은 onConnection 구독자에게 알린다
+  role: 요청마다 id 발급·응답 매칭, event 프레임은 구독자에게 라우팅. 끊김 중 요청은 큐에 남아 재연결 후 전송, 진행 중이던 요청만 실패 처리. 재연결은 onConnection 구독자에게 알린다. 터미널 수신은 5k 자마다 termAck (데몬 배압의 반쪽) — 재연결 시 카운터 리셋
 }

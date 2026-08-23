@@ -25,6 +25,9 @@ interface Pending {
   reject: (e: Error) => void;
 }
 
+/** VS Code 터미널 flow control — 수신 5k 자마다 ack, 데몬은 미ack 100k 에서 읽기를 멈춘다 */
+const CHAR_COUNT_ACK_SIZE = 5000;
+
 export class WsBackend implements ThinBackend {
   private ws!: WebSocket;
   private readonly url: string;
@@ -37,6 +40,8 @@ export class WsBackend implements ThinBackend {
   private nextTerm = 1;
   private pending = new Map<number, Pending>();
   private termHandlers = new Map<number, (data: string) => void>();
+  /** 터미널별 미ack 수신량 — CHAR_COUNT_ACK_SIZE 를 넘으면 termAck 로 비운다 */
+  private termRecv = new Map<number, number>();
   private fsHandler: ((changes: FsChange[], overflow: boolean) => void) | null = null;
   private connHandler: ((connected: boolean) => void) | null = null;
 
@@ -51,6 +56,9 @@ export class WsBackend implements ThinBackend {
     this.ws = new WebSocket(this.url);
     this.ws.onopen = () => {
       this.opened = true;
+      // 데몬이 attach 에서 배압 카운터를 리셋한다 — 수신 카운터도 0 에서 다시.
+      // (끊김 중 큐에 남은 stale ack 는 데몬 쪽에서 0 으로 포화될 뿐 — 무해)
+      this.termRecv.clear();
       for (const m of this.queue) this.ws.send(m);
       this.queue.length = 0;
       // WHY: 재연결 알림은 큐 flush 뒤 — 구독자의 재동기화 요청이 밀린 요청을 앞지르지 않게
@@ -66,6 +74,14 @@ export class WsBackend implements ThinBackend {
       }
       if (msg.event === 'termData') {
         this.termHandlers.get(msg.term)?.(msg.data);
+        // 핸들러 유무와 무관하게 ack — 받은 건 받은 것이다 (안 하면 데몬이 고수위에서 멈춘다)
+        const n = (this.termRecv.get(msg.term) ?? 0) + msg.data.length;
+        if (n >= CHAR_COUNT_ACK_SIZE) {
+          this.send({ method: 'termAck', params: { term: msg.term, chars: n } });
+          this.termRecv.set(msg.term, 0);
+        } else {
+          this.termRecv.set(msg.term, n);
+        }
         return;
       }
       if (msg.event === 'fsChanges') {
@@ -75,6 +91,7 @@ export class WsBackend implements ThinBackend {
       if (msg.event === 'termExit') {
         // 셸이 스스로 종료한 경우 핸들러 클로저 누수 방지 (탭 표시는 ponytail: 미구현)
         this.termHandlers.delete(msg.term);
+        this.termRecv.delete(msg.term);
         return;
       }
       if (msg.event) return;
@@ -169,6 +186,7 @@ export class WsBackend implements ThinBackend {
       dispose: () => {
         this.send({ method: 'disposeTerminal', params: { term } });
         this.termHandlers.delete(term);
+        this.termRecv.delete(term);
       },
     };
   }

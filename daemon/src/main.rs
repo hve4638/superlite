@@ -160,13 +160,17 @@ fn attach_session(
         if s.root != root {
             return Err("세션 root 불일치".into());
         }
-        let mut sink = s.sink.lock().unwrap();
-        if let SinkState::Detached(buf, _) = &mut *sink {
-            for m in buf.drain(..) {
-                let _ = tx.send(m);
+        {
+            let mut sink = s.sink.lock().unwrap();
+            if let SinkState::Detached(buf, _) = &mut *sink {
+                for m in buf.drain(..) {
+                    let _ = tx.send(m);
+                }
             }
+            *sink = SinkState::Attached(tx.clone());
         }
-        *sink = SinkState::Attached(tx.clone());
+        // 배압 카운터 리셋 — 프론트도 재연결 시 0 에서 다시 센다 (유실 프레임 몫 정리)
+        term::reset_flow(&s.terms);
         *s.detached_at.lock().unwrap() = None;
         return Ok(s.clone());
     }
@@ -247,7 +251,7 @@ async fn handle_conn(stream: UnixStream, sessions: Sessions) {
                 }
             }
             // 터미널 계열은 입력 순서 보장이 필요해 read 루프에서 즉시 처리 (전부 논블로킹)
-            "createTerminal" | "termWrite" | "termResize" | "disposeTerminal" => {
+            "createTerminal" | "termWrite" | "termResize" | "termAck" | "disposeTerminal" => {
                 let Some(s) = &session else { continue };
                 term::handle_term(&method, &req["params"], &s.terms, &s.sink, &s.root);
             }
