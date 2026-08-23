@@ -173,8 +173,9 @@ fn attach_session(
             }
             *sink = SinkState::Attached(tx.clone());
         }
-        // 배압 카운터 리셋 — 프론트도 재연결 시 0 에서 다시 센다 (유실 프레임 몫 정리)
-        term::reset_flow(&s.terms);
+        // WHY: 배압 리셋(terms 락)은 여기서 하지 않는다 — sessions 맵 락 아래에서 terms
+        //      락을 잡으면, 오래 잡히는 terms 경로(kill 대기 등)가 전역 attach 를 막는다.
+        //      호출자가 맵 락을 놓은 뒤 리셋한다.
         *s.detached_at.lock().unwrap() = None;
         return Ok((s.clone(), true));
     }
@@ -243,6 +244,11 @@ async fn handle_conn(stream: UnixStream, sessions: Sessions) {
                             },
                             None => (Arc::new(new_session(r.clone(), &tx)), false),
                         };
+                        if resumed {
+                            // 배압 카운터 리셋 — 프론트도 재연결 시 0 에서 다시 센다
+                            // (유실 프레임 몫 정리). sessions 맵 락 밖이라 안전하다
+                            term::reset_flow(&s.terms);
+                        }
                         let path = r.to_string_lossy().into_owned();
                         // 감시 실패(inotify 한도 등)는 치명적이지 않다 — 감시 없이 동작.
                         // 워처는 연결 스코프 — 끊김 중 놓친 이벤트는 프론트가 재접속 시 전체 리프레시

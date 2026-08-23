@@ -22,6 +22,7 @@ const env = {
   SUPERLIGHT_SOCK: join(dir, 'daemon.sock'),
   SUPERLIGHT_HTTP: '127.0.0.1:18792',
   SUPERLIGHT_GRACE_SECS: '5',
+  SHELL: '/bin/bash', // 개발자 셸(배너가 긴 zsh 등)에 좌우되지 않게 고정
 };
 const bin = fileURLToPath(new URL('../target/debug/superlight-backend', import.meta.url));
 const backend = spawn(bin, [wsRoot], { env, stdio: 'ignore' });
@@ -29,30 +30,31 @@ backend.on('error', () => {});
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 let ws;
-for (let i = 0; ; i++) {
-  ws = new WebSocket('ws://127.0.0.1:18792/ws');
-  const ok = await new Promise((res) => {
-    ws.onopen = () => res(true);
-    ws.onerror = () => res(false);
-  });
-  if (ok) break;
-  assert.ok(i < 50, '백엔드 기동 실패 — cargo build --workspace 먼저');
-  await sleep(100);
-}
-
 let received = 0;
 let acking = false;
 const chunks = [];
-ws.onmessage = (ev) => {
-  const m = JSON.parse(ev.data);
-  if (m.event !== 'termData') return;
-  received += m.data.length;
-  chunks.push(m.data);
-  if (acking) send('termAck', { term: 1, chars: m.data.length });
-};
 const send = (method, params) => ws.send(JSON.stringify({ method, params }));
 
 try {
+  // 기동 대기도 try 안 — 실패 시 finally 가 백엔드·임시 디렉터리를 정리해야 한다
+  for (let i = 0; ; i++) {
+    ws = new WebSocket('ws://127.0.0.1:18792/ws');
+    const ok = await new Promise((res) => {
+      ws.onopen = () => res(true);
+      ws.onerror = () => res(false);
+    });
+    if (ok) break;
+    assert.ok(i < 50, '백엔드 기동 실패 — cargo build --workspace 먼저');
+    await sleep(100);
+  }
+  ws.onmessage = (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.event !== 'termData') return;
+    received += m.data.length;
+    chunks.push(m.data);
+    if (acking) send('termAck', { term: m.term, chars: m.data.length });
+  };
+
   send('createTerminal', { term: 1, cols: 80, rows: 24 });
   await sleep(700);
   received = 0;
@@ -68,17 +70,33 @@ try {
   await sleep(1000);
   assert.ok(received - stalled < 5000, `정지 후에도 계속 흘러나온다 (${received - stalled}자)`);
 
-  // ack 를 시작하면 재개돼 끝까지 나와야 한다 (밀린 만큼 일괄 ack 후 청크별 ack)
+  // ack 를 시작하면 재개돼 끝까지 나와야 한다. 일괄 ack 는 넉넉한 상수로 — received 는
+  // 리셋 전(배너·프롬프트) 몫이 빠져 있어 정확값이 아니다 (데몬 쪽은 saturating 이라 안전)
   acking = true;
-  send('termAck', { term: 1, chars: received });
+  send('termAck', { term: 1, chars: 1000000 });
   for (let i = 0; i < 100 && !chunks.join('').includes('DONE-14'); i++) await sleep(100);
   assert.ok(chunks.join('').includes('DONE-14'), `ack 후에도 미완료 (${received}자)`);
   assert.ok(received >= 400000, `수신량 부족: ${received}`);
 
+  // 데드락 회귀: termWrite 는 read 루프를 막으면 안 된다 — cat 이 출력 배압으로 막힌
+  // 상태에서도 대량 붙여넣기(300k, pty 입력 큐 초과)와 termAck 이 계속 처리돼야 한다.
+  // (termWrite 가 read 루프에서 직접 pty 에 쓰면 여기서 데몬 연결이 영구 정지한다)
+  send('createTerminal', { term: 2, cols: 80, rows: 24 });
+  await sleep(700);
+  send('termWrite', { term: 2, data: 'cat\r' });
+  await sleep(300);
+  // 줄 단위 페이로드 — canonical 모드는 4096자 넘는 한 줄을 버린다 (마커 유실 방지)
+  send('termWrite', { term: 2, data: ('x'.repeat(70) + '\r').repeat(4000) + 'PASTE-END-MARK\r' });
+  // 에코+cat 출력 어느 쪽이든 마커가 나와야 한다 (80컬럼 줄바꿈이 끼어들 수 있어 제거 후 검색)
+  const flat = () => chunks.join('').replace(/[\r\n]/g, '');
+  for (let i = 0; i < 150 && !flat().includes('PASTE-END-MARK'); i++) await sleep(100);
+  assert.ok(flat().includes('PASTE-END-MARK'), `대량 붙여넣기 미도달 (${received}자) — termWrite 데드락?`);
+  send('disposeTerminal', { term: 2 });
+
   console.log('flow check: OK');
 } finally {
   clearTimeout(deadline);
-  ws.close();
+  ws?.close();
   backend.kill();
   rmSync(dir, { recursive: true, force: true });
 }

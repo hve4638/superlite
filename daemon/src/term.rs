@@ -15,7 +15,9 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::err;
 
 pub(crate) struct Term {
-    writer: Box<dyn std::io::Write + Send>,
+    /// 전용 쓰기 스레드로 가는 입력 채널 — pty write 는 블로킹될 수 있어(배압으로 셸이
+    /// 출력에서 막히면 입력 큐도 찬다) read 루프에서 직접 쓰면 termAck 까지 막는 데드락
+    input: std::sync::mpsc::Sender<String>,
     master: Box<dyn portable_pty::MasterPty + Send>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
     flow: Arc<Flow>,
@@ -86,8 +88,9 @@ pub(crate) fn reset_flow(terms: &Terms) {
 }
 
 /// 끊김 중 버퍼 상한 — 초과분은 오래된 것부터 버린다 (스크롤백 유실과 동일한 성격).
-/// ponytail: 다른 터미널의 폭주가 termExit 를 밀어낼 수 있다 — flow control 이 출력 자체를
-///           고수위에서 멈추면 실질적으로 도달하지 않는 상한이다.
+/// ponytail: flow control 은 터미널별(~고수위 100k 자 + 청크)이라 다중 터미널이 동시에
+///           밀어 넣으면 도달할 수 있고, 그때 다른 터미널의 termExit 가 밀려날 수 있다 —
+///           문제되면 이벤트 종류별 보존이나 터미널별 버퍼로.
 const DETACH_BUFFER_MAX: usize = 1 << 20;
 
 /// 터미널 이벤트의 세션 스코프 출구 — 리더 스레드는 연결을 모른다.
@@ -144,10 +147,10 @@ pub(crate) fn handle_term(method: &str, p: &Value, terms: &Terms, sink: &Sink, r
             }
         }
         "termWrite" => {
-            if let Some(t) = terms.lock().unwrap().get_mut(&id) {
-                // ponytail: 자식이 stdin 을 안 읽으면 pty write 가 블로킹될 수 있다(대량 붙여넣기)
-                //           — read 루프 정지를 감수. 문제되면 터미널별 쓰기 스레드로 분리.
-                let _ = t.writer.write_all(p["data"].as_str().unwrap_or("").as_bytes());
+            if let Some(t) = terms.lock().unwrap().get(&id) {
+                // 채널 send 는 논블로킹 — 실제 pty write 는 전용 스레드가 한다.
+                // ponytail: 입력 큐 무한 — 사람 입력·붙여넣기 규모라 상한 없이 둔다
+                let _ = t.input.send(p["data"].as_str().unwrap_or("").to_string());
             }
         }
         "termResize" => {
@@ -190,15 +193,25 @@ fn spawn_term(
     cmd.cwd(root);
     cmd.env("TERM", "xterm-256color");
     let child = pty.slave.spawn_command(cmd).map_err(err)?;
-    let writer = pty.master.take_writer().map_err(err)?;
+    let mut writer = pty.master.take_writer().map_err(err)?;
     let mut reader = pty.master.try_clone_reader().map_err(err)?;
     let flow = Flow::new();
+    // 터미널별 쓰기 스레드 — Term drop(dispose·회수) 으로 채널이 닫히면 끝난다.
+    // 막힌 write 중이라면 child kill 후 pty 쪽 에러로 풀린다
+    let (input, input_rx) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        while let Ok(data) = input_rx.recv() {
+            if writer.write_all(data.as_bytes()).is_err() {
+                break;
+            }
+        }
+    });
     // WHY: 리더 스레드가 종료 시 맵에서 자기 항목을 지우므로, 스레드 시작 전에 등록해야
     //      즉사한 셸이 맵에 유령으로 남는 race 가 없다
     terms
         .lock()
         .unwrap()
-        .insert(id, Term { writer, master: pty.master, child, flow: flow.clone() });
+        .insert(id, Term { input, master: pty.master, child, flow: flow.clone() });
     // WHY: portable-pty 의 reader 는 블로킹 — 전용 스레드에서 읽어 writer 채널로 넘긴다
     std::thread::spawn(move || {
         let mut buf = [0u8; 8192];

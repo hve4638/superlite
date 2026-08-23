@@ -77,8 +77,8 @@ export class WsBackend implements ThinBackend {
         return; // 깨진 프레임 하나가 onmessage 를 터뜨리지 않게
       }
       if (msg.event === 'termData') {
-        this.termHandlers.get(msg.term)?.(msg.data);
-        // 핸들러 유무와 무관하게 ack — 받은 건 받은 것이다 (안 하면 데몬이 고수위에서 멈춘다)
+        // ack 는 핸들러보다 먼저 — 받은 건 받은 것이다. 핸들러(xterm.write)가 던져도
+        // 이 청크 몫이 미ack 로 새서 데몬이 고수위에 영구히 걸리는 일이 없게
         const n = (this.termRecv.get(msg.term) ?? 0) + msg.data.length;
         if (n >= CHAR_COUNT_ACK_SIZE) {
           this.send({ method: 'termAck', params: { term: msg.term, chars: n } });
@@ -86,6 +86,7 @@ export class WsBackend implements ThinBackend {
         } else {
           this.termRecv.set(msg.term, n);
         }
+        this.termHandlers.get(msg.term)?.(msg.data);
         return;
       }
       if (msg.event === 'fsChanges') {

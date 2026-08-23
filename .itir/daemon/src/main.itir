@@ -7,7 +7,7 @@ fn acquire_lock() {
   role: 단독 데몬 보장 — connect 검사 대신 flock (검사→unlink→bind 는 원자적이지 않다)
 }
 class Session {
-  role: 연결보다 오래 사는 상태 한 벌 — 터미널 맵 + 출력 sink(끊김 중 버퍼링) + root + detach 시각. attach 의 session id 가 키
+  role: 연결보다 오래 사는 상태 한 벌 — 터미널 맵 + 출력 sink(끊김 중 버퍼링) + root + detach 시각. attach 의 session id 가 키. sessions 맵 락 아래에서 terms 락을 잡지 않는다 (터미널 하나의 정체가 전역을 얼리지 않게)
 }
 fn reap_sessions() {
   role: detach 후 grace 를 넘긴 세션 회수 — 터미널 kill 후 맵에서 제거
