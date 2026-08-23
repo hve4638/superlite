@@ -20,8 +20,14 @@ export const scm = reactive({
   head: '',
 });
 
+let refreshSeq = 0;
+
 export async function refreshScm(): Promise<void> {
+  // WHY: 데몬이 요청을 병렬 처리해 겹친 gitStatus 가 역순으로 완료될 수 있다 — 낡은 응답이
+  //      head 를 과거로 되돌리면 stale diff 캐시가 되살아나므로 마지막 발행분만 반영한다
+  const seq = ++refreshSeq;
   const status = await backend.gitStatus();
+  if (seq !== refreshSeq) return;
   scm.branch = status.branch;
   scm.head = status.head;
   scm.dirty = status.dirty;
@@ -55,7 +61,6 @@ export async function commit(): Promise<void> {
   }
   scm.commitMessage = '';
   await refreshScm(); // 새 head 가 여기서 들어온다 — 수동 무효화 불필요
-
 }
 
 export const CHANGE_LETTER: Record<GitChangeKind, string> = {

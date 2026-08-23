@@ -195,16 +195,22 @@ setDisposeModels((path) => {
 const originals = new Map<string, { version: string; model: monaco.editor.ITextModel }>();
 
 export async function originalModelFor(path: string): Promise<monaco.editor.ITextModel> {
-  const cached = originals.get(path);
-  if (cached && cached.version === scm.head) return cached.model;
-
   const version = scm.head;
+  const cached = originals.get(path);
+  // '' (비 git·일시 조회 실패)는 내용을 식별하지 못한다 — 캐시·URI 재사용 불가, 매번 다시 읽는다
+  if (cached && version !== '' && cached.version === version) return cached.model;
+
   const uri = monaco.Uri.parse(`git-original://v${version}/${path}`);
-  let model = monaco.editor.getModel(uri) ?? undefined;
+  let model = version === '' ? undefined : (monaco.editor.getModel(uri) ?? undefined);
   if (!model) {
     const content = await backend.gitOriginalContent(path);
+    // WHY: 왕복 중 HEAD 가 움직였으면 이 내용이 어느 해시의 것인지 불명 — (hash,path)=내용
+    //      불변식을 지키기 위해 새 head 로 다시 시도한다
+    if (scm.head !== version) return originalModelFor(path);
     model = monaco.editor.getModel(uri) ?? undefined; // WHY: await 중 동시 호출이 먼저 만들었을 수 있다
-    if (!model) {
+    if (model) {
+      if (version === '') model.setValue(content); // '' URI 는 과거 '' 시점의 내용일 수 있다
+    } else {
       model = monaco.editor.createModel(content, languageOf(path), uri);
     }
   }

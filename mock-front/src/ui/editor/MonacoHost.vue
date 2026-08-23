@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { EditorGroup } from '../../model/editors';
 import { editors, indentOf } from '../../model/editors';
+import { scm } from '../../model/scm';
 import { openQuickInput } from '../../model/workbench';
 import { EDITOR_OPTIONS, modelFor, monaco, originalModelFor } from './monaco';
 
@@ -84,6 +85,9 @@ async function sync() {
 onMounted(() => {
   void sync();
   watch(() => props.group.activeTabId, () => void sync(), { flush: 'post' });
+  // HEAD 가 움직이면(앱 밖 커밋 포함) 열려 있는 diff 탭의 original 도 갈아끼운다 —
+  // 탭 재활성화를 기다리지 않는다. 파일 탭이면 sync 는 모델 동일성 검사로 no-op
+  watch(() => scm.head, () => void sync(), { flush: 'post' });
   watch(
     () => editors.pendingReveal,
     (req) => {

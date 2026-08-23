@@ -7,6 +7,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+const deadline = setTimeout(() => {
+  console.error('check timeout (20s)');
+  process.exit(1);
+}, 20000);
+
 const dir = mkdtempSync(join(tmpdir(), 'sl-auth-'));
 const wsRoot = join(dir, 'root');
 mkdirSync(wsRoot);
@@ -44,10 +49,11 @@ try {
     await sleep(100);
   }
 
-  // 토큰 없음 / 오답은 거부돼야 한다 (403 은 WS 에서 onerror 로 온다)
+  // 토큰 없음 / 오답은 거부돼야 한다 (403 은 WS 에서 onerror 로 온다).
+  // 오답은 정답과 같은 길이 — 길이 가드가 아니라 XOR 비교 루프 자체를 태운다
   assert.strictEqual((await tryConnect('ws://127.0.0.1:18794/ws')).outcome, 'rejected', '무토큰 거부');
   assert.strictEqual(
-    (await tryConnect(`ws://127.0.0.1:18794/ws?tkn=wrong`)).outcome,
+    (await tryConnect(`ws://127.0.0.1:18794/ws?tkn=check-secret-2`)).outcome,
     'rejected',
     '오답 토큰 거부',
   );
@@ -63,8 +69,27 @@ try {
   assert.strictEqual(result.content, 'hello\n', 'readFile via token');
   good.ws.close();
 
+  // 계약의 나머지 절반: 토큰 미설정이면 무토큰 연결이 여전히 붙는다 (로컬 기본 회귀 방지)
+  const envNoToken = { ...env, SUPERLIGHT_HTTP: '127.0.0.1:18791' };
+  delete envNoToken.SUPERLIGHT_TOKEN;
+  const backend2 = spawn(bin, [wsRoot], { env: envNoToken, stdio: 'ignore' });
+  backend2.on('error', () => {});
+  try {
+    let open;
+    for (let i = 0; ; i++) {
+      open = await tryConnect('ws://127.0.0.1:18791/ws');
+      if (open.outcome === 'open') break;
+      assert.ok(i < 50, '무토큰 백엔드 기동 실패');
+      await sleep(100);
+    }
+    open.ws.close();
+  } finally {
+    backend2.kill();
+  }
+
   console.log('auth check: OK');
 } finally {
+  clearTimeout(deadline);
   backend.kill();
   rmSync(dir, { recursive: true, force: true });
 }

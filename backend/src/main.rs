@@ -46,14 +46,23 @@ async fn main() {
     // 상주 제어 연결 — 데몬 기동 보장 + 백엔드 생존 신호. 이게 있는 한 데몬은 안 죽는다.
     tokio::spawn(control_loop());
 
-    let token = std::env::var("SUPERLIGHT_TOKEN").ok().filter(|t| !t.is_empty());
+    let token = match std::env::var("SUPERLIGHT_TOKEN") {
+        // WHY: 토큰 계산이 빈 문자열을 낳은 배포 스크립트가 조용히 무인증 노출로 빠지지 않게
+        Ok(t) if t.is_empty() => {
+            eprintln!("superlight-backend: SUPERLIGHT_TOKEN 이 비어 있다 — 무인증으로 열지 않는다");
+            std::process::exit(1);
+        }
+        Ok(t) => Some(t),
+        Err(_) => None,
+    };
+    let auth = if token.is_some() { "token" } else { "off" };
     let app = Router::new()
         .route("/ws", get(ws_handler))
         .fallback_service(ServeDir::new(&dist))
         .with_state(App { root: root.clone(), token });
     let listener = TcpListener::bind(&addr).await.expect("bind 실패 (SUPERLIGHT_HTTP 로 변경)");
     // dist 는 cwd 상대 기본값 — 다른 디렉터리에서 띄우면 404 만 나므로 경로를 같이 찍는다
-    eprintln!("superlight-backend: http://{addr} root={} dist={dist}", root.display());
+    eprintln!("superlight-backend: http://{addr} root={} dist={dist} auth={auth}", root.display());
     axum::serve(listener, app).await.unwrap();
 }
 

@@ -20,7 +20,7 @@
 //!
 //! 모듈: req(RPC 요청 처리) · term(PTY) · watch(파일 감시). 이 파일은 수명과 연결만 안다.
 //!
-//! ponytail: flow control 없음 (다음 단계) — 같은 session id 동시 attach 는 tmux 식 탈취.
+//! ponytail: 같은 session id 동시 attach 는 tmux 식 탈취 (마지막 연결이 이벤트를 가져간다).
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
