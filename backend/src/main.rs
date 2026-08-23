@@ -6,6 +6,7 @@
 //!
 //! 실행: superlight-backend [워크스페이스루트]  (기본 cwd)
 //!   SUPERLIGHT_HTTP=127.0.0.1:8795  SUPERLIGHT_DIST=mock-front/dist
+//!   SUPERLIGHT_TOKEN=<토큰>  — 설정 시 /ws 는 ?tkn= 일치 필수 (loopback 밖 노출 전제조건)
 //!
 //! ponytail: unix 전용 (spawn 분리·socket) — Windows 지원 때 named pipe/DETACHED_PROCESS 분기.
 
@@ -13,7 +14,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -22,6 +23,13 @@ use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, UnixStream};
 use tower_http::services::ServeDir;
+
+#[derive(Clone)]
+struct App {
+    root: PathBuf,
+    /// 설정 시 /ws 연결 토큰 — 로컬(loopback+Origin 검증)은 무인증이 기본이라 옵션이다
+    token: Option<String>,
+}
 
 #[tokio::main]
 async fn main() {
@@ -38,10 +46,11 @@ async fn main() {
     // 상주 제어 연결 — 데몬 기동 보장 + 백엔드 생존 신호. 이게 있는 한 데몬은 안 죽는다.
     tokio::spawn(control_loop());
 
+    let token = std::env::var("SUPERLIGHT_TOKEN").ok().filter(|t| !t.is_empty());
     let app = Router::new()
         .route("/ws", get(ws_handler))
         .fallback_service(ServeDir::new(&dist))
-        .with_state(root.clone());
+        .with_state(App { root: root.clone(), token });
     let listener = TcpListener::bind(&addr).await.expect("bind 실패 (SUPERLIGHT_HTTP 로 변경)");
     // dist 는 cwd 상대 기본값 — 다른 디렉터리에서 띄우면 404 만 나므로 경로를 같이 찍는다
     eprintln!("superlight-backend: http://{addr} root={} dist={dist}", root.display());
@@ -127,11 +136,24 @@ async fn write_line(w: &mut tokio::net::unix::OwnedWriteHalf, s: &str) -> std::i
 
 // ---------------------------------------------------------------- relay
 
+/// 이른 반환 없는 상수시간 비교 — 토큰 대조가 타이밍으로 새지 않게 (길이는 샌다)
+fn token_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
 async fn ws_handler(
-    State(root): State<PathBuf>,
+    State(app): State<App>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Response {
+    // 토큰이 설정돼 있으면 Origin 검증과 별개로 ?tkn= 일치 필수 — loopback 밖 노출의 전제
+    if let Some(token) = &app.token {
+        if !query.get("tkn").is_some_and(|t| token_eq(t, token)) {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+    }
     // WHY: WS 는 CORS 밖 — Origin 검증이 없으면 사용자가 방문한 임의의 웹페이지가
     //      localhost 백엔드에 붙어 셸을 얻는다. 브라우저 요청은 Origin 호스트가 Host 와
     //      같아야 하고(같은 오리진·vite 프록시 모두 충족), 비브라우저(체크 스크립트)는
@@ -144,7 +166,7 @@ async fn ws_handler(
             return StatusCode::FORBIDDEN.into_response();
         }
     }
-    ws.on_upgrade(move |sock| relay(sock, root))
+    ws.on_upgrade(move |sock| relay(sock, app.root))
 }
 
 /// 프론트 WS ↔ 데몬 소켓 1:1 중계. 어느 쪽이 끊겨도 둘 다 정리 —
