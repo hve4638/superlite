@@ -2,11 +2,15 @@ import { reactive } from '@vue/reactivity';
 import { backend } from './host';
 import type { TerminalSession } from '../backend/types';
 import { notify } from './notifications';
+import { workbench, togglePanel } from './workbench';
 
 export interface TerminalInstance {
   id: number;
   title: string;
   session: TerminalSession;
+  /** xterm→셸 방향 데이터가 나간 적 있는가 (키 입력 외에 DA/DSR 등 자동 응답도 포함) —
+   *  spawn 실패·즉사 판별의 근사다. UI(xterm onData 배선)가 세운다 */
+  interacted?: boolean;
 }
 
 let nextId = 1;
@@ -22,6 +26,13 @@ export const terminals = reactive({
 export function createTerminal(): TerminalInstance {
   const session = backend.createTerminal(80, 24);
   const inst: TerminalInstance = { id: nextId++, title: 'bash', session };
+  // 셸이 스스로 종료(exit·crash)하면 탭도 닫는다 (VS Code 기본 동작).
+  // WHY: 입력이 한 번도 없던 터미널의 종료 = spawn 실패·즉사 — 닫아버리면 데몬의 에러
+  //      출력("pty 생성 실패" 등)을 읽을 수 없고, 패널 열기→자동 생성→즉시 닫힘 루프로
+  //      패널 전체가 고착된다. 죽은 탭을 유지해 에러를 보이고, 정리는 kill 버튼 몫
+  session.onExit(() => {
+    if (inst.interacted) disposeTerminal(inst.id);
+  });
   terminals.list.push(inst);
   terminals.activeId = inst.id;
   return inst;
@@ -35,6 +46,9 @@ export function disposeTerminal(id: number): void {
   if (terminals.activeId === id) {
     terminals.activeId = terminals.list[terminals.list.length - 1]?.id ?? 0;
   }
+  // WHY: 마지막 터미널이 빠지면 패널을 닫는다 (VS Code) — kill 버튼·셸 종료·세션 회수가
+  //      전부 이 함수를 지나므로 여기가 합류점이다
+  if (terminals.list.length === 0 && workbench.panelVisible) togglePanel();
 }
 
 export function setActiveTerminal(id: number): void {

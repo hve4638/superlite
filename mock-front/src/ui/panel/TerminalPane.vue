@@ -156,7 +156,10 @@ function ensureOpened(inst: TerminalInstance) {
   term.open(b.el);
   for (const chunk of b.pending) term.write(chunk);
   b.pending.length = 0;
-  term.onData((d) => inst.session.write(d));
+  term.onData((d) => {
+    inst.interacted = true;
+    inst.session.write(d);
+  });
   term.onResize(({ cols, rows }) => inst.session.resize(cols, rows));
   b.term = term;
   b.fit = fit;

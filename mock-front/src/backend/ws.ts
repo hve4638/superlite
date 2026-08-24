@@ -40,6 +40,7 @@ export class WsBackend implements ThinBackend {
   private nextTerm = 1;
   private pending = new Map<number, Pending>();
   private termHandlers = new Map<number, (data: string) => void>();
+  private termExitHandlers = new Map<number, () => void>();
   /** 터미널별 미ack 수신량 — CHAR_COUNT_ACK_SIZE 를 넘으면 termAck 로 비운다 */
   private termRecv = new Map<number, number>();
   private fsHandler: ((changes: FsChange[], overflow: boolean) => void) | null = null;
@@ -94,9 +95,13 @@ export class WsBackend implements ThinBackend {
         return;
       }
       if (msg.event === 'termExit') {
-        // 셸이 스스로 종료한 경우 핸들러 클로저 누수 방지 (탭 표시는 ponytail: 미구현)
+        // WHY: 콜백을 정리보다 먼저 — dispose(사용자 kill)가 지운 뒤 도착한 termExit 는
+        //      맵에 없어 조용히 끝난다 (자연 종료에만 발화하는 계약)
+        const onExit = this.termExitHandlers.get(msg.term);
         this.termHandlers.delete(msg.term);
+        this.termExitHandlers.delete(msg.term);
         this.termRecv.delete(msg.term);
+        onExit?.();
         return;
       }
       if (msg.event) return;
@@ -204,10 +209,12 @@ export class WsBackend implements ThinBackend {
     return {
       write: (data) => this.send({ method: 'termWrite', params: { term, data } }),
       onData: (cb) => this.termHandlers.set(term, cb),
+      onExit: (cb) => this.termExitHandlers.set(term, cb),
       resize: (c, r) => this.send({ method: 'termResize', params: { term, cols: c, rows: r } }),
       dispose: () => {
         this.send({ method: 'disposeTerminal', params: { term } });
         this.termHandlers.delete(term);
+        this.termExitHandlers.delete(term);
         this.termRecv.delete(term);
       },
     };

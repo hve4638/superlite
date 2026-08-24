@@ -298,6 +298,9 @@ export class MockBackend implements ThinBackend {
 /** 아주 작은 가짜 셸 — 프롬프트/echo/몇 개 명령만. 터미널 UI 개발용. */
 class MockPty implements TerminalSession {
   private cb: ((data: string) => void) | null = null;
+  private exitCb: (() => void) | null = null;
+  /** exit 이후 — 프롬프트·입력 처리를 멈춘다 (죽은 셸) */
+  private exited = false;
   private buf = '';
   /** buf 내 커서 위치 (0..buf.length) */
   private pos = 0;
@@ -341,6 +344,12 @@ class MockPty implements TerminalSession {
         break;
       case 'clear':
         this.out('\x1b[2J\x1b[H');
+        break;
+      case 'exit':
+        this.exited = true;
+        // WHY: 마이크로태스크로 미뤄서 xterm onData 디스패치 중에 구독자가 xterm 을
+        //      dispose 하는 재진입을 피한다 (생성자 prompt 와 같은 패턴)
+        queueMicrotask(() => this.exitCb?.());
         break;
       default:
         this.out(`bash: ${name}: command not found\r\n`);
@@ -459,7 +468,7 @@ class MockPty implements TerminalSession {
     this.pos = 0;
     this.histIdx = -1;
     this.run(cmd);
-    this.prompt();
+    if (!this.exited) this.prompt();
   }
 
   private interrupt() {
@@ -520,6 +529,7 @@ class MockPty implements TerminalSession {
     let i = 0;
     let lastWasCR = false;
     while (i < data.length) {
+      if (this.exited) return; // 같은 청크 뒤쪽 입력("exit\rls\r")이 죽은 셸에서 돌지 않게
       const ch = data[i];
       if (ch === '\x1b') {
         const { len, kind } = this.parseEsc(data, i);
@@ -597,11 +607,16 @@ class MockPty implements TerminalSession {
     this.cb = cb;
   }
 
+  onExit(cb: () => void): void {
+    this.exitCb = cb;
+  }
+
   resize(cols: number): void {
     this.cols = Math.max(2, cols);
   }
 
   dispose(): void {
     this.cb = null;
+    this.exitCb = null;
   }
 }

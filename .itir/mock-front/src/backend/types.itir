@@ -43,7 +43,7 @@ port ThinBackend {
     role: 스테이징 전체 커밋
   }
   fn createTerminal(cols, rows) -> TerminalSession {
-    role: PTY 세션 생성 (동기 핸들, 데이터는 콜백)
+    role: PTY 세션 생성 (동기 핸들, 데이터·셸 종료는 콜백 — onExit 는 셸 자연 종료에만 발화, dispose 로 인한 정리에는 발화하지 않는다)
   }
   fn onFsChanges(cb) {
     role: 외부 파일 변경 배치 구독 (옵셔널 — mock 은 외부 변경이 없다)

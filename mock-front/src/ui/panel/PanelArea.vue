@@ -16,9 +16,8 @@ const TABS: { id: PanelTab; label: string }[] = [
 const activeTab = ref<PanelTab>('terminal');
 
 function killActiveTerminal() {
+  // 마지막 터미널이면 disposeTerminal 이 패널까지 닫는다 (model 합류점)
   disposeTerminal(terminals.activeId);
-  // WHY: VS Code 는 마지막 터미널을 kill 하면 패널을 닫는다
-  if (terminals.list.length === 0) togglePanel();
 }
 </script>
 

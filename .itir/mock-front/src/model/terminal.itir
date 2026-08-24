@@ -1,17 +1,18 @@
 import { backend } from './host'
 import { TerminalSession } from '../backend/types'
 import { notify } from './notifications'
+import { workbench, togglePanel } from './workbench'
 
-role: 터미널 인스턴스 목록 — 세션 핸들 보유, 렌더링(xterm)은 UI 몫. 데몬 세션 회수(onSessionLost) 시 죽은 터미널을 정리하고 warning 알림
+role: 터미널 인스턴스 목록 — 세션 핸들 보유, 렌더링(xterm)은 UI 몫. 셸 자연 종료(onExit)와 데몬 세션 회수(onSessionLost) 시 죽은 터미널을 정리한다 (회수는 warning 알림 포함)
 
 export type TerminalInstance
 export val terminals
 
 export fn createTerminal() -> TerminalInstance {
-  role: 백엔드 PTY 세션 생성 + 목록 등록 + 활성화
+  role: 백엔드 PTY 세션 생성 + 목록 등록 + 활성화. 셸 종료 시 스스로 목록에서 빠지도록 onExit 배선 — 단, 사용자 입력이 한 번도 없던 터미널(spawn 실패·즉사)은 탭을 유지해 에러 출력을 읽게 한다
 }
 export fn disposeTerminal(id) {
-  role: 세션 정리 + 목록 제거, 활성 이양
+  role: 세션 정리 + 목록 제거, 활성 이양. 마지막 터미널이 빠지면 패널을 닫는다 (VS Code — kill·셸 종료·세션 회수 공통 경로)
 }
 export fn setActiveTerminal(id) {
   role: 활성 터미널 전환

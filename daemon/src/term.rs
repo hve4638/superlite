@@ -90,6 +90,7 @@ pub(crate) fn reset_flow(terms: &Terms) {
 /// 끊김 중 버퍼 상한 — 초과분은 오래된 것부터 버린다 (스크롤백 유실과 동일한 성격).
 /// ponytail: flow control 은 터미널별(~고수위 100k 자 + 청크)이라 다중 터미널이 동시에
 ///           밀어 넣으면 도달할 수 있고, 그때 다른 터미널의 termExit 가 밀려날 수 있다 —
+///           프론트 탭 수명이 termExit 에 의존하므로 유실되면 유령 탭이 남는다.
 ///           문제되면 이벤트 종류별 보존이나 터미널별 버퍼로.
 const DETACH_BUFFER_MAX: usize = 1 << 20;
 
