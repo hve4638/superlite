@@ -51,8 +51,13 @@ export class WsBackend implements ThinBackend {
 
   constructor(url: string) {
     // 세션 id — 재접속 시 데몬이 같은 세션(터미널)을 이어 붙이는 키. 페이지 수명 단위 —
-    // 새로고침은 새 세션이다 (이전 세션의 터미널은 데몬이 grace 뒤 회수)
-    this.url = `${url}${url.includes('?') ? '&' : '?'}session=${crypto.randomUUID()}`;
+    // 새로고침은 새 세션이다 (이전 세션의 터미널은 데몬이 grace 뒤 회수).
+    // WHY: randomUUID 는 보안 컨텍스트 전용 — IP 오리진(http://host:8793) 접속에서
+    //      부팅이 죽는다. getRandomValues 는 어디서나 되므로 폴백 (유일성만 필요)
+    const session =
+      crypto.randomUUID?.() ??
+      Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
+    this.url = `${url}${url.includes('?') ? '&' : '?'}session=${session}`;
     this.connect();
   }
 
