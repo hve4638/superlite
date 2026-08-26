@@ -8,7 +8,7 @@
 import { reactive } from '@vue/reactivity';
 import type { FsChange } from '../backend/types';
 import { backend } from './host';
-import { editors, reloadDocFromDisk } from './editors';
+import { editors, reloadDocFromDisk, setOrphaned } from './editors';
 import { loadedDirPaths, parentOf, refreshAllFiles, refreshDir } from './files';
 import { refreshScm } from './scm';
 
@@ -32,23 +32,34 @@ function consumer<T>(ms: number, flush: (acc: T) => void, empty: () => T) {
   };
 }
 
-const reload = consumer<Set<string>>(
+// 값 = 실존 검증 필요 여부 (창 안에 삭제 이벤트가 있었다). 검증 읽기는 dirty 여도 나간다 —
+// 재로드가 아니라 orphan 판정이 목적이고, 반영은 reloadDocFromDisk 가 dirty 를 재확인한다
+const reload = consumer<Map<string, boolean>>(
   100,
   (paths) => {
-    for (const path of paths) {
+    for (const [path, verify] of paths) {
       const doc = editors.docs.get(path);
-      // dirty 는 안 건드린다 — readFile 전에 거르고, 적용 시점에 reloadDocFromDisk 가 재확인
-      if (!doc || doc.content !== doc.savedContent) continue;
+      // dirty 는 안 건드린다 — readFile 전에 거르고, 적용 시점에 reloadDocFromDisk 가 재확인.
+      // 단 orphan 경로는 dirty 여도 읽는다 — 재생성 이벤트(create·coalesce 된 change)가
+      // 해제로 이어져야 한다 (레퍼런스는 ADDED 를 재검증 없이 즉시 해제)
+      if (!doc || (doc.content !== doc.savedContent && !verify && !editors.orphaned.has(path))) continue;
       const issuedSaved = doc.savedContent;
       swallow(backend.readFile(path).then(({ content, etag }) => {
+        // 읽혔다 = 디스크에 있다 (삭제 이벤트가 가짜였거나 재생성됨 — VS Code 의 재검증과 동일)
+        setOrphaned(path, false);
         // WHY: 왕복 중 저장이 끝났으면 이 스냅샷이 더 낡다 — 적용하면 방금 저장을 되돌리고
         //      etag 도 되감겨 다음 저장이 스퓨리어스 충돌을 낸다
         if (editors.docs.get(path)?.savedContent !== issuedSaved) return;
         reloadDocFromDisk(path, content, etag);
+      }).catch(() => {
+        // 끊김 중 reject(진행 중 요청 일괄 실패)는 삭제가 아니다 — onclose 가 connHandler(false)
+        // 를 동기 선행하므로 이 catch 시점에는 connection.ok 가 이미 false 다. 재검증은
+        // 재연결 fullRefresh 몫 (레퍼런스도 NotFound 외 실패에는 orphan 을 세우지 않는다)
+        if (verify && connection.ok) setOrphaned(path, true);
       }));
     }
   },
-  () => new Set(),
+  () => new Map(),
 );
 
 const tree = consumer<{ dirs: Set<string>; list: boolean; all: boolean }>(
@@ -78,9 +89,9 @@ function onBatch(changes: FsChange[], overflow: boolean): void {
     git.add(() => {}); // 워킹트리든 .git 내부든 git status 신호다
     // .git 컴포넌트가 낀 경로(서브모듈 sub/.git 포함)는 SCM 신호일 뿐 — 트리·에디터와 무관
     if (c.path.split('/').includes('.git')) continue;
-    // ponytail: 외부 삭제된 열린 파일의 탭 표시(orphan) 없음 — 탭과 내용은 그대로 남는다
-    //           (VS Code 기본 closeOnFileDelete=false 와 동일). 표시가 필요해지면 그때.
-    if (c.kind !== 'delete') reload.add((a) => a.add(c.path));
+    // 삭제도 reload 소비자로 — 실존 재검증을 거쳐 열린 탭에 orphan 표시 (탭·내용은 유지,
+    // VS Code closeOnFileDelete=false). 같은 창에서 delete→create 가 겹쳐도 읽기가 판정한다
+    reload.add((a) => a.set(c.path, (a.get(c.path) ?? false) || c.kind === 'delete'));
     tree.add((a) => {
       a.dirs.add(parentOf(c.path));
       if (c.kind !== 'change') a.list = true;
@@ -94,7 +105,8 @@ function fullRefresh(): void {
   });
   git.add(() => {});
   reload.add((a) => {
-    for (const path of editors.docs.keys()) a.add(path);
+    // verify=true — 안전망은 이벤트를 놓쳤다는 전제이므로 끊김·비포커스 중 삭제도 잡는다
+    for (const path of editors.docs.keys()) a.set(path, true);
   });
 }
 

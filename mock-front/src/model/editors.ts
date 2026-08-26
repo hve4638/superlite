@@ -54,6 +54,9 @@ export const editors = reactive({
   /** 저장 충돌(디스크가 더 새것) 중인 파일 path — 토스트가 Overwrite/Revert 를 띄운다.
    *  ponytail: 슬롯 하나 — 동시 다발 충돌은 마지막 것만 표시 (저장은 어차피 파일별 재시도) */
   saveConflict: null as string | null,
+  /** 외부 삭제로 디스크에서 사라진 열린 파일 path — 탭에 strikethrough, 저장하면 부활.
+   *  (탭은 유지 — VS Code closeOnFileDelete=false. 앱 내 삭제는 closePathTabs 가 닫는다) */
+  orphaned: new Set<string>(),
 });
 
 export function activeGroup(): EditorGroup {
@@ -220,6 +223,12 @@ export function setDisposeModels(fn: (path: string) => void): void {
   disposeModels = fn;
 }
 
+/** 외부 삭제 표시 토글 — watch 의 실존 재검증이 세우고, 재생성·저장 성공이 내린다 */
+export function setOrphaned(path: string, on: boolean): void {
+  if (on) editors.orphaned.add(path);
+  else editors.orphaned.delete(path);
+}
+
 /**
  * rename 반영 — from(파일 또는 디렉토리) 아래의 열린 문서·탭 경로를 to 로 이관한다.
  * 내용·dirty·etag 유지 (rename 은 mtime·size 를 안 바꾸므로 etag 가 계속 유효하다).
@@ -249,6 +258,13 @@ export function remapPaths(from: string, to: string): void {
     const np = mapPath(editors.saveConflict);
     if (np !== null) editors.saveConflict = np;
   }
+  for (const p of [...editors.orphaned]) {
+    const np = mapPath(p);
+    if (np !== null) {
+      editors.orphaned.delete(p);
+      editors.orphaned.add(np);
+    }
+  }
 }
 
 /**
@@ -268,6 +284,7 @@ export function closePathTabs(path: string): void {
   }
   disposeModels?.(path);
   if (editors.saveConflict !== null && match(editors.saveConflict)) editors.saveConflict = null;
+  for (const p of [...editors.orphaned]) if (match(p)) editors.orphaned.delete(p);
 }
 
 /**
@@ -313,6 +330,8 @@ export async function saveActive(): Promise<void> {
   doc.etag = r.etag;
   doc.savedContent = content;
   updateContent(path, doc.content);
+  // orphan 저장 = 부활 (데몬 writeFile 은 대상 부재 시 그냥 쓴다) — 표시 즉시 해제
+  editors.orphaned.delete(path);
 }
 
 /** 충돌 토스트의 Overwrite — etag 없이 다시 써서 디스크를 내 버퍼로 덮는다 */
@@ -332,6 +351,7 @@ export async function overwriteConflict(): Promise<void> {
     // WHY: await 중 타이핑되면 doc.content 가 앞서 있다 — 스냅샷을 넘기면 버퍼가 되감긴다
     updateContent(path, doc.content);
     editors.saveConflict = null;
+    editors.orphaned.delete(path);
   } catch (e) {
     // 충돌 토스트는 남겨 재시도할 수 있게 둔다
     notify('error', `Failed to save '${baseName(path)}': ${errText(e)}`);
@@ -353,6 +373,7 @@ export async function revertConflict(): Promise<void> {
     applyExternalEdit?.(path, content);
     updateContent(path, content);
     editors.saveConflict = null;
+    editors.orphaned.delete(path); // 읽혔다 = 디스크에 있다
   } catch (e) {
     // 충돌 토스트는 남긴다 — Overwrite 로 되살리는 길이 남는다
     notify('error', `Failed to revert '${baseName(path)}': ${errText(e)}`);

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { EditorGroup, Tab } from '../../model/editors';
-import { closeTab, setActiveTab, splitActiveEditor } from '../../model/editors';
+import { closeTab, editors, setActiveTab, splitActiveEditor } from '../../model/editors';
 import FileIcon from '../widgets/FileIcon.vue';
 
 const props = defineProps<{ group: EditorGroup }>();
@@ -22,7 +22,12 @@ function onClose(tabId: string) {
         v-for="tab in group.tabs"
         :key="tab.id"
         class="tab"
-        :class="{ active: tab.id === group.activeTabId, dirty: tab.dirty, preview: tab.preview }"
+        :class="{
+          active: tab.id === group.activeTabId,
+          dirty: tab.dirty,
+          preview: tab.preview,
+          orphaned: editors.orphaned.has(tab.path),
+        }"
         :title="tab.path"
         @click="setActiveTab(group.id, tab.id)"
         @mousedown.middle.prevent="onClose(tab.id)"
@@ -123,6 +128,10 @@ function onClose(tabId: string) {
 }
 .tab.preview .tab-label {
   font-style: italic;
+}
+/* 외부 삭제된 파일 — 라벨 취소선 (VS Code monaco-icon-label.strikethrough 동일) */
+.tab.orphaned .tab-label {
+  text-decoration: line-through;
 }
 .tab-actions {
   width: 28px;
