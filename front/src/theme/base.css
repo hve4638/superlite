@@ -18,7 +18,7 @@ html, body, #app {
 
 body {
   /* WHY: 레퍼런스(Code OSS web/Linux)의 워크벤치 폰트 스택과 동일해야 픽셀 비교가 성립한다 */
-  font-family: system-ui, 'Ubuntu', 'Droid Sans', sans-serif;
+  font-family: 'Malgun Gothic', '맑은 고딕', system-ui, 'Ubuntu', 'Droid Sans', sans-serif;
   font-size: 13px;
   color: var(--vscode-foreground);
   background-color: var(--vscode-editor-background);
