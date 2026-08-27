@@ -2,12 +2,15 @@ import { backend } from './host'
 import { notify } from './notifications'
 import { WriteResult } from '../backend/types'
 
-role: 탭·그룹·문서 상태와 열기/저장/충돌 처리. 문서(docs)는 탭과 분리 — 같은 파일을 여러 탭이 공유한다. 외부 삭제된 열린 파일은 orphaned 집합으로 표시(탭 유지 — VS Code closeOnFileDelete=false)하고 저장이 부활시킨다
+role: 탭·그룹·문서 상태와 열기/저장/충돌 처리. 문서(docs)는 탭과 분리 — 같은 파일을 여러 탭이 공유한다. 그룹 목록(groups)은 flat 이고 화면 배치는 별도의 행/열 중첩 트리(layout)가 담당 — 순회 로직은 flat 목록만 알면 된다. 외부 삭제된 열린 파일은 orphaned 집합으로 표시(탭 유지 — VS Code closeOnFileDelete=false)하고 저장이 부활시킨다
 
 export type FileTab
 export type DiffTab
 export type Tab
 export type EditorGroup
+export type LayoutNode
+export type LayoutBranch
+export type SplitSide
 export val editors
 
 export fn activeGroup() -> EditorGroup {
@@ -29,11 +32,26 @@ export fn openDiff(path) {
 export fn setActiveTab(groupId, tabId) {
   role: 탭·그룹 활성화
 }
+export fn pinTab(groupId, tabId) {
+  role: preview 탭 고정 — 탭 더블클릭 (VS Code 동일)
+}
 export fn closeTab(groupId, tabId) {
   role: 탭 닫기 — 빈 분할 그룹은 접고 이웃으로 포커스
 }
 export fn splitActiveEditor() {
   role: 활성 탭을 오른쪽 새 그룹으로 분할
+}
+export fn moveTabToGroup(fromGroupId, tabId, toGroupId, index) {
+  role: 탭 드래그 드롭 — 다른 그룹의 index 위치로 이동(생략 시 끝) 또는 같은 그룹 내 순서 변경. preview 해제, 대상에 같은 탭이 있으면 합류(활성화만), 빈 원 그룹은 접는다
+}
+export fn moveTabSplit(fromGroupId, tabId, refGroupId, side) {
+  role: 탭을 새 그룹으로 분리 — refGroupId 의 상하좌우(side) 에 생성. 단일 탭 그룹의 자기 분리는 no-op (결과가 제자리)
+}
+export fn openFileSplit(path, refGroupId, side) {
+  role: 탐색기 드래그 드롭 — 파일을 refGroupId 상하좌우의 새 그룹에 연다. 읽기 실패 시 빈 그룹 잔재를 접는다
+}
+export fn resizeSplit(branch, boundary, startSizes, deltaPx, totalPx, minPx) {
+  role: 분할 경계 드래그 — 경계 앞뒤 자식의 비율만 재분배 (합 보존, 최소 크기 클램프). 드래그 시작 스냅샷(startSizes) 기준 누적 델타
 }
 export fn updateContent(path, content) {
   role: 버퍼 갱신 + 파생 dirty 를 모든 탭에 전파

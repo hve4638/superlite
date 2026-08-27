@@ -33,6 +33,18 @@ export interface EditorGroup {
   activeTabId: string | null;
 }
 
+/** 화면 배치 트리 — 리프는 그룹 id, 분기는 행(row: 좌우)/열(column: 상하) 컨테이너.
+ *  그룹 순회는 flat 한 editors.groups 로 하고, 이 트리는 배치·분할 위치만 담당한다. */
+export interface LayoutBranch {
+  dir: 'row' | 'column';
+  children: LayoutNode[];
+  /** 자식별 flex 비율 — 생략 시 균등. 인덱스가 children 과 정렬된다 */
+  sizes?: number[];
+}
+export type LayoutNode = number | LayoutBranch;
+
+export type SplitSide = 'left' | 'right' | 'up' | 'down';
+
 interface Doc {
   content: string;
   savedContent: string;
@@ -44,6 +56,7 @@ let nextGroupId = 1;
 
 export const editors = reactive({
   groups: [{ id: 0, tabs: [], activeTabId: null }] as EditorGroup[],
+  layout: 0 as LayoutNode,
   activeGroupId: 0,
   /** path → 문서 내용. 그룹/탭과 분리 — 같은 파일을 여러 탭이 공유한다. */
   docs: new Map<string, Doc>(),
@@ -159,33 +172,173 @@ export function setActiveTab(groupId: number, tabId: string): void {
   editors.activeGroupId = groupId;
 }
 
-export function closeTab(groupId: number, tabId: string): void {
+/** preview 탭 고정 — 탭 더블클릭 (VS Code 동일) */
+export function pinTab(groupId: number, tabId: string): void {
+  const tab = editors.groups.find((g) => g.id === groupId)?.tabs.find((t) => t.id === tabId);
+  if (tab) tab.preview = false;
+}
+
+/** 새 그룹을 ref 그룹의 상하좌우에 배치 — 같은 방향 분기면 형제로 끼우고, 아니면 리프를 분기로 바꾼다 */
+function insertIntoLayout(refGroupId: number, newGroupId: number, side: SplitSide): void {
+  const dir = side === 'left' || side === 'right' ? 'row' : 'column';
+  const before = side === 'left' || side === 'up';
+  const visit = (node: LayoutNode, parent: LayoutBranch | null): boolean => {
+    if (node === refGroupId) {
+      if (parent && parent.dir === dir) {
+        const i = parent.children.indexOf(node);
+        // 새 그룹은 ref 공간의 절반을 가져간다 (VS Code 동일)
+        const sizes = parent.sizes ?? parent.children.map(() => 1);
+        const half = sizes[i] / 2;
+        sizes[i] = half;
+        sizes.splice(before ? i : i + 1, 0, half);
+        parent.children.splice(before ? i : i + 1, 0, newGroupId);
+        parent.sizes = sizes;
+      } else {
+        const branch: LayoutNode = { dir, children: before ? [newGroupId, refGroupId] : [refGroupId, newGroupId] };
+        if (parent) parent.children.splice(parent.children.indexOf(node), 1, branch);
+        else editors.layout = branch;
+      }
+      return true;
+    }
+    return typeof node !== 'number' && node.children.some((c) => visit(c, node));
+  };
+  visit(editors.layout, null);
+}
+
+/** 그룹을 배치 트리에서 제거 — 자식이 하나 남은 분기는 그 자식으로 평탄화한다.
+ *  제거된 몫은 남은 형제들에 비례 배분된다 (flex 재정규화) */
+function removeFromLayout(groupId: number): void {
+  const walk = (node: LayoutNode): LayoutNode | null => {
+    if (typeof node === 'number') return node === groupId ? null : node;
+    const children: LayoutNode[] = [];
+    const sizes: number[] = [];
+    node.children.forEach((c, i) => {
+      const kept = walk(c);
+      if (kept !== null) {
+        children.push(kept);
+        sizes.push(node.sizes?.[i] ?? 1);
+      }
+    });
+    if (children.length === 0) return null;
+    if (children.length === 1) return children[0];
+    return { dir: node.dir, children, sizes };
+  };
+  editors.layout = walk(editors.layout) ?? editors.groups[0]?.id ?? 0;
+}
+
+/** 탐색기 드래그 드롭 — 파일을 refGroupId 의 상하좌우(side) 새 그룹에 연다 */
+export async function openFileSplit(path: string, refGroupId: number, side: SplitSide): Promise<void> {
+  const ref = editors.groups.find((g) => g.id === refGroupId);
+  if (!ref) return;
+  const group: EditorGroup = { id: nextGroupId++, tabs: [], activeTabId: null };
+  editors.groups.splice(editors.groups.indexOf(ref) + 1, 0, group);
+  insertIntoLayout(refGroupId, group.id, side);
+  // 읽기 실패 시 빈 그룹 잔재를 남기지 않는다
+  if (!(await openFile(path, { groupId: group.id }))) collapseIfEmpty(group.id);
+}
+
+/** 분할 경계 드래그 — 경계(boundary) 앞뒤 자식의 비율만 재분배한다 (둘의 합 보존).
+ *  startSizes 는 드래그 시작 스냅샷, deltaPx 는 시작점 기준 누적 (Sash 계약과 동일) */
+export function resizeSplit(
+  branch: LayoutBranch, boundary: number, startSizes: number[],
+  deltaPx: number, totalPx: number, minPx: number,
+): void {
+  const a = boundary - 1;
+  const b = boundary;
+  const sum = startSizes.reduce((x, y) => x + y, 0);
+  const frac = (deltaPx / totalPx) * sum;
+  const minFrac = (minPx / totalPx) * sum;
+  const pair = startSizes[a] + startSizes[b];
+  const next = Math.min(pair - minFrac, Math.max(minFrac, startSizes[a] + frac));
+  branch.sizes = startSizes.map((s, i) => (i === a ? next : i === b ? pair - next : s));
+}
+
+/** 그룹에서 탭을 떼어낸다 — 활성 탭이었으면 이웃(같은 인덱스, 없으면 왼쪽)으로 활성 이동 */
+function takeTab(groupId: number, tabId: string): Tab | null {
   const group = editors.groups.find((g) => g.id === groupId);
-  if (!group) return;
+  if (!group) return null;
   const idx = group.tabs.findIndex((t) => t.id === tabId);
-  if (idx === -1) return;
-  group.tabs.splice(idx, 1);
+  if (idx === -1) return null;
+  const [tab] = group.tabs.splice(idx, 1);
   if (group.activeTabId === tabId) {
     const next = group.tabs[Math.min(idx, group.tabs.length - 1)];
     group.activeTabId = next?.id ?? null;
   }
-  // WHY: VS Code 는 마지막 탭이 닫힌 분할 그룹을 자동으로 접는다. 그룹이 하나뿐이면 빈 상태로 남긴다.
-  if (group.tabs.length === 0 && editors.groups.length > 1) {
-    const gIdx = editors.groups.indexOf(group);
-    editors.groups.splice(gIdx, 1);
-    // 닫힌 그룹의 이웃(왼쪽 우선)으로 포커스 이동 — 항상 마지막 그룹으로 가지 않는다
-    if (editors.activeGroupId === group.id) {
-      editors.activeGroupId = editors.groups[Math.max(0, gIdx - 1)].id;
-    }
+  return tab;
+}
+
+// WHY: VS Code 는 마지막 탭이 빠진 분할 그룹을 자동으로 접는다. 그룹이 하나뿐이면 빈 상태로 남긴다.
+function collapseIfEmpty(groupId: number): void {
+  const group = editors.groups.find((g) => g.id === groupId);
+  if (!group || group.tabs.length !== 0 || editors.groups.length <= 1) return;
+  const gIdx = editors.groups.indexOf(group);
+  editors.groups.splice(gIdx, 1);
+  removeFromLayout(group.id);
+  // 접힌 그룹의 이웃(왼쪽 우선)으로 포커스 이동 — 항상 마지막 그룹으로 가지 않는다
+  if (editors.activeGroupId === group.id) {
+    editors.activeGroupId = editors.groups[Math.max(0, gIdx - 1)].id;
   }
+}
+
+export function closeTab(groupId: number, tabId: string): void {
+  if (!takeTab(groupId, tabId)) return;
+  collapseIfEmpty(groupId);
+}
+
+/** 탭 드래그 드롭 — 다른 그룹의 index 위치로 이동(생략 시 끝), 같은 그룹이면 순서 변경.
+ *  이동·재배열하면 preview 해제 (VS Code 동일) */
+export function moveTabToGroup(fromGroupId: number, tabId: string, toGroupId: number, index?: number): void {
+  const to = editors.groups.find((g) => g.id === toGroupId);
+  if (!to) return;
+  if (fromGroupId === toGroupId) {
+    const from = to.tabs.findIndex((t) => t.id === tabId);
+    if (from === -1) return;
+    let insert = Math.min(index ?? to.tabs.length, to.tabs.length);
+    const [tab] = to.tabs.splice(from, 1);
+    // 자기 자신을 뺀 만큼 삽입 지점이 당겨진다
+    if (from < insert) insert -= 1;
+    tab.preview = false;
+    to.tabs.splice(insert, 0, tab);
+    to.activeTabId = tab.id;
+    editors.activeGroupId = toGroupId;
+    return;
+  }
+  const tab = takeTab(fromGroupId, tabId);
+  if (!tab) return;
+  tab.preview = false;
+  // 대상 그룹에 같은 탭이 이미 있으면 합류 — 원 그룹 것은 이미 뗐으니 활성화만 한다
+  if (!to.tabs.some((t) => t.id === tab.id)) {
+    to.tabs.splice(Math.min(index ?? to.tabs.length, to.tabs.length), 0, tab);
+  }
+  to.activeTabId = tab.id;
+  editors.activeGroupId = toGroupId;
+  collapseIfEmpty(fromGroupId);
+}
+
+/** 탭 드래그 드롭 — refGroupId 의 상하좌우(side) 새 그룹으로 분리 */
+export function moveTabSplit(fromGroupId: number, tabId: string, refGroupId: number, side: SplitSide): void {
+  const ref = editors.groups.find((g) => g.id === refGroupId);
+  if (!ref) return;
+  // 단일 탭 그룹의 자기 분리는 결과가 제자리 — no-op
+  if (fromGroupId === refGroupId && ref.tabs.length === 1) return;
+  const tab = takeTab(fromGroupId, tabId);
+  if (!tab) return;
+  tab.preview = false;
+  const group: EditorGroup = { id: nextGroupId++, tabs: [tab], activeTabId: tab.id };
+  editors.groups.splice(editors.groups.indexOf(ref) + 1, 0, group);
+  insertIntoLayout(refGroupId, group.id, side);
+  editors.activeGroupId = group.id;
+  collapseIfEmpty(fromGroupId);
 }
 
 /** 활성 탭을 오른쪽 새 그룹으로 분할 (Ctrl+\). diff 탭이면 대상 파일을 연다. */
 export async function splitActiveEditor(): Promise<void> {
   const tab = activeTab();
   if (!tab) return;
+  const ref = activeGroup();
   const group: EditorGroup = { id: nextGroupId++, tabs: [], activeTabId: null };
-  editors.groups.splice(editors.groups.indexOf(activeGroup()) + 1, 0, group);
+  editors.groups.splice(editors.groups.indexOf(ref) + 1, 0, group);
+  insertIntoLayout(ref.id, group.id, 'right');
   await openFile(tab.path, { groupId: group.id });
 }
 

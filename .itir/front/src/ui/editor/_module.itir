@@ -1,8 +1,8 @@
-import { editors, languageOf, setApplyExternalEdit, setDisposeModels, updateContent } from '../../model/editors'
+import { editors, languageOf, setApplyExternalEdit, setDisposeModels, updateContent, moveTabToGroup, moveTabSplit, openFileSplit, pinTab } from '../../model/editors'
 import { openQuickInput } from '../../model/workbench'
 import { FileIcon } from '../widgets/FileIcon'
 import { backend } from '../../model/host'
 import { scm } from '../../model/scm'
 import { EDITOR_FONT_SIZE, MONO_FONT_FAMILY } from '../../theme/fonts'
 
-role: 에디터 영역 — monaco 수명주기(monaco.ts)와 그룹/탭바/diff 렌더링(.vue). monaco 모델은 path 당 하나, 그룹 간 공유
+role: 에디터 영역 — monaco 수명주기(monaco.ts)와 그룹/탭바/diff 렌더링(.vue), 탭 드래그 이동/분리(진행 상태는 tabDnd.ts 모듈 상태로 공유). monaco 모델은 path 당 하나, 그룹 간 공유

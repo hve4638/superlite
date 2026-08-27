@@ -5,6 +5,7 @@ import { editors, openFile } from '../../model/editors';
 import { createDir, createFile, deleteEntry, renameEntry, undoFileOp } from '../../model/fileops';
 import { decorationFor } from '../../model/scm';
 import { workbench, openContextMenu, type ContextMenuItem } from '../../model/workbench';
+import { endEditorDrag, startFileDrag } from '../editor/tabDnd';
 import FileIcon from '../widgets/FileIcon.vue';
 import InlineNameInput from '../widgets/InlineNameInput.vue';
 import ConfirmDialog from '../widgets/ConfirmDialog.vue';
@@ -170,6 +171,13 @@ function onRowDblClick(node: TreeNode): void {
   if (node.kind === 'file') void openFile(node.path);
 }
 
+// 파일 행을 에디터 영역으로 끌기 — 드롭 처리(이동/분할)는 에디터 쪽 드롭 존이 한다
+function onRowDragStart(e: DragEvent, node: TreeNode): void {
+  e.dataTransfer?.setData('text/plain', node.path);
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+  startFileDrag(node.path);
+}
+
 function onRowContextMenu(node: TreeNode, e: MouseEvent): void {
   files.selectedPath = node.path;
   openContextMenu(e.clientX, e.clientY, menuFor(node));
@@ -258,6 +266,9 @@ function decoColor(node: TreeNode): string | undefined {
             class="row"
             :class="{ selected: files.selectedPath === row.node.path }"
             :style="{ paddingLeft: `${row.node.depth * 8}px` }"
+            :draggable="row.node.kind === 'file'"
+            @dragstart="onRowDragStart($event, row.node)"
+            @dragend="endEditorDrag()"
             @click="onRowClick(row.node)"
             @dblclick="onRowDblClick(row.node)"
             @contextmenu.prevent="onRowContextMenu(row.node, $event)"

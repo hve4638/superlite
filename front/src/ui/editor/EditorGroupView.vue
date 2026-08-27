@@ -1,12 +1,54 @@
 <script setup lang="ts">
-import { computed } from 'vue';
-import type { EditorGroup } from '../../model/editors';
-import { editors } from '../../model/editors';
+import { computed, ref } from 'vue';
+import type { EditorGroup, SplitSide } from '../../model/editors';
+import { editors, moveTabSplit, moveTabToGroup, openFile, openFileSplit } from '../../model/editors';
+import { editorDrag, endEditorDrag } from './tabDnd';
 import TabBar from './TabBar.vue';
 import MonacoHost from './MonacoHost.vue';
 import FileIcon from '../widgets/FileIcon.vue';
 
 const props = defineProps<{ group: EditorGroup }>();
+
+// 탭 드래그 중 에디터 본문 드롭 존 — 중앙: 이 그룹으로 이동, 가장자리: 그 방향 새 그룹으로 분리
+const dropZone = ref<'none' | 'center' | SplitSide>('none');
+
+function zoneAt(e: DragEvent): 'center' | SplitSide {
+  // 빈 그룹은 분할할 이유가 없다 — 전체가 이동/열기 존
+  if (!props.group.tabs.length) return 'center';
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  const dx = (e.clientX - rect.left) / rect.width;
+  const dy = (e.clientY - rect.top) / rect.height;
+  // 중앙 절반 박스는 이동, 밖은 가장 가까운 변으로 분할 (VS Code 존 배치 근사)
+  if (dx > 0.25 && dx < 0.75 && dy > 0.25 && dy < 0.75) return 'center';
+  const near = Math.min(dx, 1 - dx, dy, 1 - dy);
+  return near === dx ? 'left' : near === 1 - dx ? 'right' : near === dy ? 'up' : 'down';
+}
+
+function onBodyDragOver(e: DragEvent) {
+  const zone = zoneAt(e);
+  // 자기 그룹 탭을 자기 가운데 드롭은 no-op — 드롭 대상으로 받지도, 하이라이트하지도 않는다
+  if (zone === 'center' && editorDrag.kind === 'tab' && editorDrag.groupId === props.group.id) {
+    dropZone.value = 'none';
+    return;
+  }
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+  dropZone.value = zone;
+}
+
+function onBodyDrop(e: DragEvent) {
+  e.preventDefault();
+  const zone = zoneAt(e);
+  if (editorDrag.kind === 'tab') {
+    if (zone === 'center') moveTabToGroup(editorDrag.groupId, editorDrag.tabId, props.group.id);
+    else moveTabSplit(editorDrag.groupId, editorDrag.tabId, props.group.id, zone);
+  } else if (editorDrag.kind === 'file') {
+    if (zone === 'center') void openFile(editorDrag.path, { groupId: props.group.id });
+    else void openFileSplit(editorDrag.path, props.group.id, zone);
+  }
+  dropZone.value = 'none';
+  endEditorDrag();
+}
 
 const active = computed(() => props.group.tabs.find((t) => t.id === props.group.activeTabId) ?? null);
 // WHY: VS Code 는 diff 에디터에 breadcrumbs 를 표시하지 않는다
@@ -38,20 +80,31 @@ const SHORTCUTS = [
           </span>
         </template>
       </div>
-      <MonacoHost :group="group" />
     </template>
-    <div v-else class="watermark">
-      <div class="watermark-grid">
-        <template v-for="s in SHORTCUTS" :key="s.label">
-          <span class="watermark-label">{{ s.label }}</span>
-          <span class="watermark-keys">
-            <template v-for="(k, i) in s.keys" :key="i">
-              <span v-if="i > 0" class="key-sep">+</span>
-              <span class="key">{{ k }}</span>
-            </template>
-          </span>
-        </template>
+    <div class="editor-body">
+      <MonacoHost v-if="group.tabs.length" :group="group" />
+      <div v-else class="watermark">
+        <div class="watermark-grid">
+          <template v-for="s in SHORTCUTS" :key="s.label">
+            <span class="watermark-label">{{ s.label }}</span>
+            <span class="watermark-keys">
+              <template v-for="(k, i) in s.keys" :key="i">
+                <span v-if="i > 0" class="key-sep">+</span>
+                <span class="key">{{ k }}</span>
+              </template>
+            </span>
+          </template>
+        </div>
       </div>
+      <!-- 드래그 중에만 존재 — monaco 가 드래그 이벤트를 삼키지 않게 본문을 덮는다 -->
+      <div
+        v-if="editorDrag.kind !== 'none'"
+        class="drop-layer"
+        :class="dropZone"
+        @dragover="onBodyDragOver"
+        @dragleave="dropZone = 'none'"
+        @drop="onBodyDrop"
+      />
     </div>
   </div>
 </template>
@@ -93,6 +146,45 @@ const SHORTCUTS = [
   font-size: 16px;
   flex-shrink: 0;
   margin: 0 4px;
+}
+.editor-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.drop-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+}
+.drop-layer::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  display: none;
+  background: var(--vscode-editorGroup-dropBackground);
+  pointer-events: none;
+}
+.drop-layer.center::before {
+  display: block;
+}
+.drop-layer.right::before {
+  display: block;
+  left: 50%;
+}
+.drop-layer.left::before {
+  display: block;
+  right: 50%;
+}
+.drop-layer.up::before {
+  display: block;
+  bottom: 50%;
+}
+.drop-layer.down::before {
+  display: block;
+  top: 50%;
 }
 .watermark {
   flex: 1;

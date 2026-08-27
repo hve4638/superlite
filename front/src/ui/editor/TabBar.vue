@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { ref } from 'vue';
 import type { EditorGroup, Tab } from '../../model/editors';
-import { closeTab, editors, setActiveTab, splitActiveEditor } from '../../model/editors';
+import { closeTab, editors, moveTabToGroup, openFile, pinTab, setActiveTab, splitActiveEditor } from '../../model/editors';
+import { editorDrag, endEditorDrag, startTabDrag } from './tabDnd';
 import FileIcon from '../widgets/FileIcon.vue';
 
 const props = defineProps<{ group: EditorGroup }>();
@@ -13,13 +15,55 @@ function iconName(tab: Tab): string {
 function onClose(tabId: string) {
   closeTab(props.group.id, tabId);
 }
+
+function onDragStart(e: DragEvent, tab: Tab) {
+  // setData 는 Firefox 의 드래그 시작 요건 — 실제 식별은 tabDrag 모듈 상태로 한다
+  e.dataTransfer?.setData('text/plain', tab.id);
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+  startTabDrag(props.group.id, tab.id);
+}
+
+// 탭 드래그의 삽입 지점 (탭 인덱스 기준) — 삽입선 표시와 드롭 위치에 쓴다
+const dropIndex = ref<number | null>(null);
+
+// 탭 위 드래그 — 좌/우 절반 기준으로 삽입 지점 결정 (VS Code 동일)
+function onTabDragOver(e: DragEvent, i: number) {
+  if (editorDrag.kind === 'none') return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+  // 파일 드롭은 끝에 붙인다 — 삽입선 없이 드롭만 받는다
+  if (editorDrag.kind !== 'tab') return;
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  dropIndex.value = e.clientX < rect.left + rect.width / 2 ? i : i + 1;
+}
+
+// 탭 밖 빈 영역 — 끝에 삽입. 다른 그룹의 탭, 같은 그룹의 순서 변경, 탐색기 파일 모두 받는다
+function onTabsDragOver(e: DragEvent) {
+  if (editorDrag.kind === 'none') return;
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+  if (editorDrag.kind === 'tab') dropIndex.value = props.group.tabs.length;
+}
+
+function onTabsDrop(e: DragEvent) {
+  if (editorDrag.kind === 'none') return;
+  e.preventDefault();
+  if (editorDrag.kind === 'tab') {
+    moveTabToGroup(editorDrag.groupId, editorDrag.tabId, props.group.id, dropIndex.value ?? undefined);
+  } else {
+    void openFile(editorDrag.path, { groupId: props.group.id });
+  }
+  dropIndex.value = null;
+  endEditorDrag();
+}
 </script>
 
 <template>
   <div class="tabbar">
-    <div class="tabs">
+    <div class="tabs" @dragover="onTabsDragOver" @dragleave="dropIndex = null" @drop="onTabsDrop">
       <div
-        v-for="tab in group.tabs"
+        v-for="(tab, i) in group.tabs"
         :key="tab.id"
         class="tab"
         :class="{
@@ -27,9 +71,16 @@ function onClose(tabId: string) {
           dirty: tab.dirty,
           preview: tab.preview,
           orphaned: editors.orphaned.has(tab.path),
+          'drop-before': editorDrag.kind === 'tab' && dropIndex === i,
+          'drop-after': editorDrag.kind === 'tab' && dropIndex === i + 1 && i === group.tabs.length - 1,
         }"
         :title="tab.path"
+        draggable="true"
+        @dragstart="onDragStart($event, tab)"
+        @dragend="dropIndex = null; endEditorDrag()"
+        @dragover="onTabDragOver($event, i)"
         @click="setActiveTab(group.id, tab.id)"
+        @dblclick="pinTab(group.id, tab.id)"
         @mousedown.middle.prevent="onClose(tab.id)"
       >
         <FileIcon :name="iconName(tab)" />
@@ -153,6 +204,13 @@ function onClose(tabId: string) {
 }
 .tab-action .codicon {
   font-size: 16px;
+}
+/* 탭 드래그 삽입선 — box-shadow 라 레이아웃이 밀리지 않는다 */
+.tab.drop-before {
+  box-shadow: inset 2px 0 0 var(--vscode-focusBorder);
+}
+.tab.drop-after {
+  box-shadow: inset -2px 0 0 var(--vscode-focusBorder);
 }
 /* 닫기 버튼: active 탭은 항상, inactive 탭은 hover 시에만 */
 .tab:not(.dirty):not(.active):not(:hover) .codicon-close {
