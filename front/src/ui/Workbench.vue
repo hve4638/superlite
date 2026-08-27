@@ -17,21 +17,33 @@ import NotificationToasts from './widgets/NotificationToasts.vue';
 const SIDEBAR_MIN = 170;
 const PANEL_MIN = 77;
 
-function resizeSideBar(dx: number) {
+function clampSideBar(width: number): number {
   const max = Math.round(window.innerWidth * 0.8);
-  workbench.sideBarWidth = Math.min(max, Math.max(SIDEBAR_MIN, workbench.sideBarWidth + dx));
+  return Math.min(max, Math.max(SIDEBAR_MIN, width));
+}
+
+function clampPanel(height: number): number {
+  const max = window.innerHeight - 35 - 22 - 100;
+  return Math.min(max, Math.max(PANEL_MIN, height));
+}
+
+// 드래그 시작 시점 크기 — Sash 의 누적 델타를 여기에 더해 클램프한다
+let sideBarStart = 0;
+let panelStart = 0;
+
+function resizeSideBar(dx: number) {
+  workbench.sideBarWidth = clampSideBar(sideBarStart + dx);
 }
 
 function resizePanel(dy: number) {
-  const max = window.innerHeight - 35 - 22 - 100;
-  workbench.panelHeight = Math.min(max, Math.max(PANEL_MIN, workbench.panelHeight - dy));
+  workbench.panelHeight = clampPanel(panelStart - dy);
 }
 
 // WHY: 창을 줄이면 저장된 사이드바/패널 크기가 가용 공간을 넘어 에디터가 0px 로
-//      붕괴할 수 있다 — 리사이즈 때 델타 0 으로 클램프만 다시 적용한다.
+//      붕괴할 수 있다 — 리사이즈 때 클램프만 다시 적용한다.
 function onWindowResize() {
-  resizeSideBar(0);
-  if (workbench.panelVisible) resizePanel(0);
+  workbench.sideBarWidth = clampSideBar(workbench.sideBarWidth);
+  if (workbench.panelVisible) workbench.panelHeight = clampPanel(workbench.panelHeight);
 }
 onMounted(() => window.addEventListener('resize', onWindowResize));
 onBeforeUnmount(() => window.removeEventListener('resize', onWindowResize));
@@ -44,7 +56,12 @@ onBeforeUnmount(() => window.removeEventListener('resize', onWindowResize));
       <ActivityBar />
       <div v-if="workbench.sideBarVisible" class="sidebar-slot">
         <SideBar />
-        <Sash direction="vertical" class="sidebar-sash" @resize="resizeSideBar" />
+        <Sash
+          direction="vertical"
+          class="sidebar-sash"
+          @dragstart="sideBarStart = workbench.sideBarWidth"
+          @resize="resizeSideBar"
+        />
       </div>
       <div class="main-slot">
         <div class="editor-slot">
@@ -56,7 +73,12 @@ onBeforeUnmount(() => window.removeEventListener('resize', onWindowResize));
           :style="{ height: `${workbench.panelHeight}px` }"
         >
           <PanelArea />
-          <Sash direction="horizontal" class="panel-sash" @resize="resizePanel" />
+          <Sash
+            direction="horizontal"
+            class="panel-sash"
+            @dragstart="panelStart = workbench.panelHeight"
+            @resize="resizePanel"
+          />
         </div>
       </div>
     </div>
