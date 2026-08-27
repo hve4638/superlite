@@ -24,7 +24,7 @@ const env = {
   SUPERLIGHT_GRACE_SECS: '5', // 백엔드 제어 연결이 있는 한 안 죽는다 — 사후 정리용으로만 짧게
   SUPERLIGHT_SESSION_GRACE_SECS: '2', // reaper 주기 5s — 회수 확인은 최대 ~7s 대기
 };
-const bin = fileURLToPath(new URL('../target/debug/superlight-backend', import.meta.url));
+const bin = fileURLToPath(new URL('../../target/debug/superlight-backend', import.meta.url));
 const backend = spawn(bin, [wsRoot], { env, stdio: 'ignore' });
 backend.on('error', () => {});
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

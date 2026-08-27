@@ -16,8 +16,8 @@ const env = {
   SUPERLIGHT_HTTP: '127.0.0.1:18795',
   SUPERLIGHT_GRACE_SECS: '2',
 };
-const bin = fileURLToPath(new URL('../target/debug/superlight-backend', import.meta.url));
-const root = fileURLToPath(new URL('..', import.meta.url));
+const bin = fileURLToPath(new URL('../../target/debug/superlight-backend', import.meta.url));
+const root = fileURLToPath(new URL('../..', import.meta.url));
 const backend = spawn(bin, [root], { env, stdio: 'ignore' });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

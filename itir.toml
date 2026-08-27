@@ -5,4 +5,4 @@ source_root = "."
 languages = ["typescript", "rust", "vue"]
 
 [boundary]
-assembly = ["mock-front/src/model/host.ts"]
+assembly = ["front/src/model/host.ts"]

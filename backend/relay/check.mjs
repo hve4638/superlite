@@ -44,19 +44,19 @@ const info = await call('workspace');
 assert.ok(info.name.length > 0 && info.rootPath.startsWith('/'), 'workspace');
 
 const entries = await call('readDir', { path: '' });
-assert.ok(entries.some((e) => e.name === 'mock-front' && e.kind === 'directory'), 'readDir');
+assert.ok(entries.some((e) => e.name === 'front' && e.kind === 'directory'), 'readDir');
 
-const pkg = await call('readFile', { path: 'mock-front/package.json' });
+const pkg = await call('readFile', { path: 'front/package.json' });
 assert.ok(pkg.content.includes('"code-superlight"'), 'readFile content');
 assert.match(pkg.etag, /^\d+-\d+$/, 'readFile etag');
 
 await assert.rejects(call('readFile', { path: '../etc/passwd' }), /이탈/, 'safe_join');
 
 const files = await call('listFiles');
-assert.ok(files.includes('mock-front/src/main.ts'), 'listFiles');
+assert.ok(files.includes('front/src/main.ts'), 'listFiles');
 
 const hits = await call('search', { query: 'ThinBackend', opts: {} });
-assert.ok(hits.some((f) => f.path === 'mock-front/src/backend/types.ts'), 'search');
+assert.ok(hits.some((f) => f.path === 'front/src/backend/types.ts'), 'search');
 
 // 바이트→UTF-16 오프셋 변환 검증: 한글이 매치 앞에 있는 라인에서 slice 가 쿼리와 일치해야 한다
 const seam = await call('search', { query: 'seam', opts: {} });
@@ -72,19 +72,19 @@ const st = await call('gitStatus');
 assert.ok(typeof st.branch === 'string' && Array.isArray(st.changes), 'gitStatus');
 assert.match(st.head, /^([0-9a-f]{40}|[0-9a-f]{64})$/, 'gitStatus head 해시'); // sha1 | sha256 repo
 
-const orig = await call('gitOriginalContent', { path: 'mock-front/package.json' });
+const orig = await call('gitOriginalContent', { path: 'front/package.json' });
 assert.ok(orig.includes('"code-superlight"'), 'gitOriginalContent');
 
 // WHY: 추적 중인 폴더에 써야 한다 — untracked 폴더 안이면 git 이 폴더로 뭉쳐 보고한다
-await call('writeFile', { path: 'mock-front/.check-tmp', content: 'x' });
+await call('writeFile', { path: 'front/.check-tmp', content: 'x' });
 const st2 = await call('gitStatus');
-rmSync(new URL('../mock-front/.check-tmp', import.meta.url)); // assert 실패해도 잔여물 없게 먼저 삭제
+rmSync(new URL('../../front/.check-tmp', import.meta.url)); // assert 실패해도 잔여물 없게 먼저 삭제
 assert.ok(
-  st2.changes.some((c) => c.path === 'mock-front/.check-tmp' && c.kind === 'untracked'),
+  st2.changes.some((c) => c.path === 'front/.check-tmp' && c.kind === 'untracked'),
   'writeFile → untracked',
 );
 
-await assert.rejects(call('writeFile', { path: 'mock-front/.check-tmp' }), /content/, 'writeFile no content');
+await assert.rejects(call('writeFile', { path: 'front/.check-tmp' }), /content/, 'writeFile no content');
 
 send('createTerminal', { term: 1, cols: 80, rows: 24 });
 await sleep(700);

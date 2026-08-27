@@ -5,7 +5,7 @@
 //! 1:1 로 열어 그대로 중계한다 — id 재매핑 없음. 각 데몬 연결에 30초 주기 ping(생존 신호).
 //!
 //! 실행: superlight-backend [워크스페이스루트]  (기본 cwd)
-//!   SUPERLIGHT_HTTP=127.0.0.1:8795  SUPERLIGHT_DIST=mock-front/dist
+//!   SUPERLIGHT_HTTP=127.0.0.1:8795  SUPERLIGHT_DIST=front/dist
 //!   SUPERLIGHT_TOKEN=<토큰>  — 설정 시 /ws 는 ?tkn= 일치 필수 (loopback 밖 노출 전제조건)
 //!
 //! ponytail: unix 전용 (spawn 분리·socket) — Windows 지원 때 named pipe/DETACHED_PROCESS 분기.
@@ -41,7 +41,7 @@ async fn main() {
     // 네트워크 노출 지점은 여기 하나 — 기본은 localhost. 개발 LAN 접근은 vite(8793)가 프록시.
     let addr = std::env::var("SUPERLIGHT_HTTP").unwrap_or_else(|_| "127.0.0.1:8795".into());
     // 빌드된 프론트가 있으면 서빙. 개발 중엔 vite 가 프론트를 서빙하고 /ws 만 여기로 프록시.
-    let dist = std::env::var("SUPERLIGHT_DIST").unwrap_or_else(|_| "mock-front/dist".into());
+    let dist = std::env::var("SUPERLIGHT_DIST").unwrap_or_else(|_| "front/dist".into());
 
     // 상주 제어 연결 — 데몬 기동 보장 + 백엔드 생존 신호. 이게 있는 한 데몬은 안 죽는다.
     tokio::spawn(control_loop());
