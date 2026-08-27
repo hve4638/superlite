@@ -1,4 +1,4 @@
-import { workbench, openContextMenu, closeContextMenu, openQuickInput, closeQuickInput, showViewlet, toggleSideBar, togglePanel } from '../model/workbench'
+import { workbench, openContextMenu, closeContextMenu, closeQuickInput, showViewlet, toggleSideBar, togglePanel } from '../model/workbench'
 import { editors, activeTab, openFile, indentOf, languageLabel } from '../model/editors'
 import { files } from '../model/files'
 import { scm } from '../model/scm'
