@@ -144,6 +144,7 @@ pub(crate) fn handle_term(method: &str, p: &Value, terms: &Terms, sink: &Sink, r
             if let Err(e) = spawn_term(id, cols, rows, root, terms.clone(), sink.clone()) {
                 let msg = json!({"event": "termData", "term": id, "data": format!("pty 생성 실패: {e}\r\n")});
                 sink_send(sink, msg.to_string());
+                // code 없는 termExit = 비정상 — 프론트가 탭을 유지해 위 에러 출력을 보여준다
                 sink_send(sink, json!({"event": "termExit", "term": id}).to_string());
             }
         }
@@ -236,11 +237,17 @@ fn spawn_term(
         // read 종료 = 셸 자연 종료 또는 세션 회수(kill) — 맵에서 제거해 fd/좀비 누수를 막는다.
         // WHY: if let 스크루티니의 임시 가드는 블록 끝까지 산다 — kill/wait 를 락 밖에서
         let removed = terms.lock().unwrap().remove(&id);
-        if let Some(mut t) = removed {
+        // 자연 종료면 wait 가 exit code 를 준다 (이미 죽은 프로세스라 kill 은 무해).
+        // dispose·회수 경로(맵에 없음)는 code 없이 — 프론트가 어차피 무시하는 termExit 다
+        let code = removed.and_then(|mut t| {
             let _ = t.child.kill();
-            let _ = t.child.wait();
+            t.child.wait().ok().map(|s| s.exit_code())
+        });
+        let mut msg = json!({"event": "termExit", "term": id});
+        if let Some(c) = code {
+            msg["code"] = json!(c);
         }
-        sink_send(&sink, json!({"event": "termExit", "term": id}).to_string());
+        sink_send(&sink, msg.to_string());
     });
     Ok(())
 }

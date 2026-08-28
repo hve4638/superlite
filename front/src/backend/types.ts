@@ -71,8 +71,9 @@ export type WriteResult =
 export interface TerminalSession {
   write(data: string): void;
   onData(cb: (data: string) => void): void;
-  /** 셸이 스스로 종료(exit·crash)하면 발화. dispose 로 인한 정리에는 발화하지 않는다. */
-  onExit(cb: () => void): void;
+  /** 셸이 스스로 종료(exit·crash)하면 exit code 와 함께 발화 (spawn 실패는 null).
+   *  dispose 로 인한 정리에는 발화하지 않는다. */
+  onExit(cb: (code: number | null) => void): void;
   resize(cols: number, rows: number): void;
   dispose(): void;
 }

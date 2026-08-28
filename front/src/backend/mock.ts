@@ -298,7 +298,7 @@ export class MockBackend implements ThinBackend {
 /** 아주 작은 가짜 셸 — 프롬프트/echo/몇 개 명령만. 터미널 UI 개발용. */
 class MockPty implements TerminalSession {
   private cb: ((data: string) => void) | null = null;
-  private exitCb: (() => void) | null = null;
+  private exitCb: ((code: number | null) => void) | null = null;
   /** exit 이후 — 프롬프트·입력 처리를 멈춘다 (죽은 셸) */
   private exited = false;
   private buf = '';
@@ -349,7 +349,7 @@ class MockPty implements TerminalSession {
         this.exited = true;
         // WHY: 마이크로태스크로 미뤄서 xterm onData 디스패치 중에 구독자가 xterm 을
         //      dispose 하는 재진입을 피한다 (생성자 prompt 와 같은 패턴)
-        queueMicrotask(() => this.exitCb?.());
+        queueMicrotask(() => this.exitCb?.(Number(args[0]) || 0));
         break;
       default:
         this.out(`bash: ${name}: command not found\r\n`);
@@ -607,7 +607,7 @@ class MockPty implements TerminalSession {
     this.cb = cb;
   }
 
-  onExit(cb: () => void): void {
+  onExit(cb: (code: number | null) => void): void {
     this.exitCb = cb;
   }
 

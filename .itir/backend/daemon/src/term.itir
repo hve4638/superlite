@@ -22,7 +22,7 @@ fn reset_flow() {
   role: 세션 전 터미널의 미ack 카운터 리셋 — 재접속 시 프론트 카운터와 함께 0 에서 재시작 (유실 프레임 몫의 영구 누적 방지)
 }
 fn spawn_term() {
-  role: PTY 생성 + 전용 리더 스레드 — 출력은 UTF-8 경계 분할로 termData 푸시, 셸 자연 종료 시 자기 정리
+  role: PTY 생성 + 전용 리더 스레드 — 출력은 UTF-8 경계 분할로 termData 푸시, 셸 자연 종료 시 자기 정리. 자연 종료 termExit 에는 exit code 를 싣는다 (spawn 실패·dispose 경유는 code 없음)
 }
 fn kill_term() {
   role: SIGHUP + wait 를 스레드로 — read 루프를 안 막고 좀비를 안 남긴다

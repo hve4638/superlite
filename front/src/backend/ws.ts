@@ -40,7 +40,7 @@ export class WsBackend implements ThinBackend {
   private nextTerm = 1;
   private pending = new Map<number, Pending>();
   private termHandlers = new Map<number, (data: string) => void>();
-  private termExitHandlers = new Map<number, () => void>();
+  private termExitHandlers = new Map<number, (code: number | null) => void>();
   /** 터미널별 미ack 수신량 — CHAR_COUNT_ACK_SIZE 를 넘으면 termAck 로 비운다 */
   private termRecv = new Map<number, number>();
   private fsHandler: ((changes: FsChange[], overflow: boolean) => void) | null = null;
@@ -106,7 +106,8 @@ export class WsBackend implements ThinBackend {
         this.termHandlers.delete(msg.term);
         this.termExitHandlers.delete(msg.term);
         this.termRecv.delete(msg.term);
-        onExit?.();
+        // code 부재 = 비정상 종료(spawn 실패 등) — null 로 구분해 전달
+        onExit?.(typeof msg.code === 'number' ? msg.code : null);
         return;
       }
       if (msg.event) return;

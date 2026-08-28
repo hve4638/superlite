@@ -9,7 +9,7 @@ export type TerminalInstance
 export val terminals
 
 export fn createTerminal() -> TerminalInstance {
-  role: 백엔드 PTY 세션 생성 + 목록 등록 + 활성화. 셸 종료 시 스스로 목록에서 빠지도록 onExit 배선 — 단, 사용자 입력이 한 번도 없던 터미널(spawn 실패·즉사)은 탭을 유지해 에러 출력을 읽게 한다
+  role: 백엔드 PTY 세션 생성 + 목록 등록 + 활성화. 실제 종료 코드가 있는 죽음(code ≠ null)은 스스로 목록에서 빠지도록 onExit 배선 — spawn 실패(code null)만 탭을 유지해 에러 출력을 읽게 한다
 }
 export fn disposeTerminal(id) {
   role: 세션 정리 + 목록 제거, 활성 이양. 마지막 터미널이 빠지면 패널을 닫는다 (VS Code — kill·셸 종료·세션 회수 공통 경로)
