@@ -65,6 +65,13 @@ try {
   assert.strictEqual(r1.content, 'one\n', 'readFile content');
   assert.strictEqual(r1.etag, w1.etag, 'readFile etag == 쓰기 etag');
 
+  // stat: 내용 없이 같은 (mtime,size) etag — 정규 파일 전용
+  const s1 = await call('stat', { path: 'a.txt' });
+  assert.strictEqual(s1.etag, r1.etag, 'stat etag == readFile etag');
+  await assert.rejects(call('stat', { path: 'no-such.txt' }), 'stat 부재 → 에러');
+  mkdirSync(join(wsRoot, 'adir'));
+  await assert.rejects(call('stat', { path: 'adir' }), /정규 파일/, 'stat 디렉토리 → 에러');
+
   // 최신 etag 를 든 정상 저장 → 성공 + 새 etag (크기가 달라 mtime 해상도와 무관)
   const w2 = await call('writeFile', { path: 'a.txt', content: 'two two\n', etag: r1.etag });
   assert.ok(w2.etag && w2.etag !== r1.etag, '정상 저장 → 새 etag');

@@ -3,5 +3,5 @@ import { ThinBackend } from './types'
 role: 브라우저 단독 개발용 인메모리 백엔드 — tools/refspec/mock-workspace 픽스처와 파일·git 상태 1:1 (differential 비교 전제)
 
 export class MockBackend {
-  role: 고정 파일 맵 + 쓰기 세대 etag + 스크립트된 가짜 셸(exit 로 종료 — exit code 와 함께 onExit 발화). 0ms delay 로도 비동기 경계를 만들어 동기 가정 UI 를 걸러낸다
+  role: 고정 파일 맵 + 쓰기 세대 etag(stat 은 그 etag 만) + 스크립트된 가짜 셸(exit 로 종료 — exit code 와 함께 onExit 발화). 0ms delay 로도 비동기 경계를 만들어 동기 가정 UI 를 걸러낸다
 }

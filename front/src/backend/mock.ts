@@ -1,5 +1,5 @@
 import type {
-  DirEntry, FileContent, FileSearchResult, GitStatus, TerminalSession, ThinBackend,
+  DirEntry, FileContent, FileSearchResult, FileStat, GitStatus, TerminalSession, ThinBackend,
   WorkspaceInfo, WriteResult,
 } from './types';
 
@@ -180,6 +180,11 @@ export class MockBackend implements ThinBackend {
       return Promise.reject(new Error(`maxBytes 초과: ${path}`));
     }
     return delay({ content, etag: String(ETAGS.get(path) ?? 0) });
+  }
+
+  stat(path: string): Promise<FileStat> {
+    if (!(path in FILES)) return Promise.reject(new Error(`ENOENT: ${path}`));
+    return delay({ etag: String(ETAGS.get(path) ?? 0) });
   }
 
   // ponytail: mock 엔 외부 쓰기 주체가 없어 충돌이 생길 수 없다 — 검사 생략, etag 만 굴린다

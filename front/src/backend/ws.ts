@@ -12,6 +12,7 @@ import type {
   DirEntry,
   FileContent,
   FileSearchResult,
+  FileStat,
   FsChange,
   GitStatus,
   TerminalSession,
@@ -163,6 +164,9 @@ export class WsBackend implements ThinBackend {
   }
   readFile(path: string, opts?: { maxBytes?: number }): Promise<FileContent> {
     return this.call('readFile', { path, maxBytes: opts?.maxBytes });
+  }
+  stat(path: string): Promise<FileStat> {
+    return this.call('stat', { path });
   }
   writeFile(path: string, content: string, etag?: string): Promise<WriteResult> {
     // etag 가 undefined 면 JSON.stringify 가 키를 떨군다 — 데몬은 부재로 본다

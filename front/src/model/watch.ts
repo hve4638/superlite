@@ -32,17 +32,25 @@ function consumer<T>(ms: number, flush: (acc: T) => void, empty: () => T) {
   };
 }
 
-// 값 = 실존 검증 필요 여부 (창 안에 삭제 이벤트가 있었다). 검증 읽기는 dirty 여도 나간다 —
-// 재로드가 아니라 orphan 판정이 목적이고, 반영은 reloadDocFromDisk 가 dirty 를 재확인한다
+// 값 = 실존 검증 필요 여부 (창 안에 삭제 이벤트가 있었다). 검증은 dirty 여도 나간다 —
+// 재로드가 아니라 orphan 판정이 목적이다 (dirty 는 내용이 적용될 일이 없어 경량 stat 으로)
 const reload = consumer<Map<string, boolean>>(
   100,
   (paths) => {
     for (const [path, verify] of paths) {
       const doc = editors.docs.get(path);
-      // dirty 는 안 건드린다 — readFile 전에 거르고, 적용 시점에 reloadDocFromDisk 가 재확인.
-      // 단 orphan 경로는 dirty 여도 읽는다 — 재생성 이벤트(create·coalesce 된 change)가
-      // 해제로 이어져야 한다 (레퍼런스는 ADDED 를 재검증 없이 즉시 해제)
-      if (!doc || (doc.content !== doc.savedContent && !verify && !editors.orphaned.has(path))) continue;
+      if (!doc) continue;
+      if (doc.content !== doc.savedContent) {
+        // dirty 는 안 건드린다 — 실존 재검증만 남는데, 내용이 필요 없으므로 stat 으로.
+        // 단 orphan 경로는 verify 가 아니어도 검사한다 — 재생성 이벤트(create·coalesce 된
+        // change)가 해제로 이어져야 한다 (레퍼런스는 ADDED 를 재검증 없이 즉시 해제)
+        if (!verify && !editors.orphaned.has(path)) continue;
+        swallow(backend.stat(path).then(() => setOrphaned(path, false)).catch(() => {
+          // 끊김 중 reject 는 삭제가 아니다 — 아래 readFile 경로의 catch 와 같은 논리
+          if (verify && connection.ok) setOrphaned(path, true);
+        }));
+        continue;
+      }
       const issuedSaved = doc.savedContent;
       swallow(backend.readFile(path).then(({ content, etag }) => {
         // 읽혔다 = 디스크에 있다 (삭제 이벤트가 가짜였거나 재생성됨 — VS Code 의 재검증과 동일)

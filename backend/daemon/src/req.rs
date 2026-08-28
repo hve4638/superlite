@@ -92,6 +92,17 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
             let content = std::fs::read_to_string(&path).map_err(err)?;
             Ok(json!({"content": content, "etag": file_etag(&meta)}))
         }
+        "stat" => {
+            let path = safe_join(root, req_path(p)?)?;
+            // WHY: readFile 과 같은 락 — orphan 재검증의 응답 순서가 쓰기와의 직렬화에 기댄다
+            let _g = WRITE_LOCK.lock().await;
+            let meta = std::fs::metadata(&path).map_err(err)?;
+            // 정규 파일 전용 — 같은 경로의 디렉토리에 성공하면 재검증이 "파일 실존" 으로 오판한다
+            if !meta.is_file() {
+                return Err("정규 파일이 아니다".into());
+            }
+            Ok(json!({"etag": file_etag(&meta)}))
+        }
         "writeFile" => {
             // WHY: content 누락을 "" 로 해석하면 깨진 요청이 파일을 비운다 — 명시적 에러
             let content = p["content"].as_str().ok_or("content 필요")?;

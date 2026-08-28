@@ -62,6 +62,11 @@ export interface FileContent {
   etag: string;
 }
 
+export interface FileStat {
+  /** readFile 의 etag 와 같은 (mtime,size) 기반 불투명 토큰 */
+  etag: string;
+}
+
 /** conflict 면 쓰지 않았다 — etag 시점 이후 디스크가 바뀌었고 내용도 다르다. */
 export type WriteResult =
   | { etag: string; conflict?: undefined }
@@ -84,6 +89,8 @@ export interface ThinBackend {
   readDir(path: string): Promise<DirEntry[]>;
   /** maxBytes 를 주면 초과 파일(바이트 기준)은 읽지 않고 reject — undo 캡처 등 상한이 필요한 호출용 */
   readFile(path: string, opts?: { maxBytes?: number }): Promise<FileContent>;
+  /** 내용 없이 실존·변경만 확인하는 경량 검사 — 정규 파일 전용(디렉토리는 reject). orphan 재검증용 */
+  stat(path: string): Promise<FileStat>;
   /** etag 를 주면 낙관적 충돌 검사 — 불일치(+내용 상이) 시 쓰지 않고 conflict. 생략 시 무조건 쓴다. */
   writeFile(path: string, content: string, etag?: string): Promise<WriteResult>;
   /** 빈 파일 배타적 생성 — 중간 디렉토리 자동 생성, 이미 존재하면 reject (기존 내용 보호) */
