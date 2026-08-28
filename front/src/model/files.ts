@@ -126,6 +126,17 @@ export async function refreshAllFiles(): Promise<void> {
 }
 
 /** 현재 펼침 상태 기준 flat 목록 (가상 스크롤 없이 단순 렌더) */
+/** 수동 새로고침 (탐색기 Refresh 버튼) — 로드된 디렉토리 재나열 + Quick Open 목록 재조회.
+ *  실패는 삼킨다 (워처·다음 시도가 복구) — refreshDir 병합이라 펼침 상태는 보존된다 */
+export async function refreshTree(): Promise<void> {
+  await Promise.allSettled([...loadedDirPaths().map((d) => refreshDir(d)), refreshAllFiles()]);
+}
+
+/** 모두 접기 — 펼침 집합만 비운다. 로드된 자식은 유지되어 재펼침에 왕복이 없다 */
+export function collapseAll(): void {
+  files.expanded.clear();
+}
+
 export function visibleNodes(): TreeNode[] {
   const out: TreeNode[] = [];
   const walk = (nodes: TreeNode[]) => {

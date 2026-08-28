@@ -24,6 +24,12 @@ export fn loadedDirPaths() -> Path[] {
 export fn refreshAllFiles() {
   role: Quick Open 파일 목록 재조회
 }
+export fn refreshTree() {
+  role: 수동 새로고침 (탐색기 Refresh 버튼) — 로드된 디렉토리 재나열 + Quick Open 목록 재조회. 실패는 삼킨다 (워처·다음 시도가 복구)
+}
+export fn collapseAll() {
+  role: 모두 접기 — 펼침 집합만 비운다. 로드된 자식은 유지되어 재펼침에 왕복이 없다
+}
 export fn visibleNodes() -> TreeNode[] {
   role: 펼침 상태 기준 평탄화 — 렌더링용
 }

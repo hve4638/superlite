@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { files, parentOf, visibleNodes, toggleDir, type TreeNode } from '../../model/files';
+import { collapseAll, files, parentOf, refreshTree, visibleNodes, toggleDir, type TreeNode } from '../../model/files';
 import { editors, openFile } from '../../model/editors';
 import { createDir, createFile, deleteEntry, renameEntry, undoFileOp } from '../../model/fileops';
 import { decorationFor } from '../../model/scm';
@@ -226,8 +226,8 @@ function decoColor(node: TreeNode): string | undefined {
         <div class="actions">
           <span class="codicon codicon-new-file" title="New File..." @click="startCreate('createFile', null)" />
           <span class="codicon codicon-new-folder" title="New Folder..." @click="startCreate('createDir', null)" />
-          <span class="codicon codicon-refresh" title="Refresh Explorer" />
-          <span class="codicon codicon-collapse-all" title="Collapse Folders in Explorer" />
+          <span class="codicon codicon-refresh" title="Refresh Explorer" @click="refreshTree()" />
+          <span class="codicon codicon-collapse-all" title="Collapse Folders in Explorer" @click="collapseAll()" />
         </div>
       </div>
       <div
@@ -373,14 +373,11 @@ function decoColor(node: TreeNode): string | undefined {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* 레퍼런스는 pane hover 시에만 노출하지만, 여기서는 항시 표시한다 (사용자 결정) */
 .pane-header .actions {
-  display: none;
+  display: flex;
   margin-left: auto;
   margin-right: 8px;
-}
-/* WHY: VS Code 는 pane 전체 hover 시 헤더 액션을 노출한다 (paneview.css .pane:hover > .pane-header > .actions) */
-.explorer-pane:hover .actions {
-  display: flex;
 }
 .pane-header .actions .codicon {
   font-size: 16px;
