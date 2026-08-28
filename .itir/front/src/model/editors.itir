@@ -36,7 +36,13 @@ export fn pinTab(groupId, tabId) {
   role: preview 탭 고정 — 탭 더블클릭 (VS Code 동일)
 }
 export fn closeTab(groupId, tabId) {
-  role: 탭 닫기 — 빈 분할 그룹은 접고 이웃으로 포커스
+  role: 탭 닫기 — 빈 분할 그룹은 접고 이웃으로 포커스. 닫힌 탭은 복원 이력에 쌓인다
+}
+export fn reopenClosedEditor() {
+  role: 마지막으로 닫은 탭 복원 (Ctrl+Shift+T) — 활성 그룹에 고정 탭으로 연다
+}
+export fn hasDirtyDocs() -> Bool {
+  role: 미저장 문서 존재 여부 — 탭 닫힘(beforeunload) 안전망 판정용
 }
 export fn splitActiveEditor() {
   role: 활성 탭을 오른쪽 새 그룹으로 분할

@@ -1,5 +1,5 @@
 import { openQuickInput, showViewlet, toggleSideBar, togglePanel, workbench } from './workbench';
-import { closeTab, editors, saveActive, splitActiveEditor, activeGroup } from './editors';
+import { closeTab, editors, reopenClosedEditor, saveActive, splitActiveEditor, activeGroup } from './editors';
 import { createTerminal } from './terminal';
 import { refreshScm } from './scm';
 
@@ -144,6 +144,15 @@ export function setupCommands(): void {
       if (g.activeTabId) closeTab(g.id, g.activeTabId);
     },
   }, 'ctrl+w');
+
+  // WHY: Ctrl+Shift+T 도 브라우저 예약 키 — 탭에서는 palette 로만 닿고, 예약이 없는
+  //      환경(Tauri 등)에서 chord 가 산다. Ctrl+W 와 같은 사정.
+  register({
+    id: 'workbench.action.reopenClosedEditor',
+    title: 'View: Reopen Closed Editor',
+    keybinding: 'Ctrl+Shift+T',
+    run: () => void reopenClosedEditor(),
+  }, 'ctrl+shift+t');
 
   register({
     id: 'workbench.action.nextEditor',

@@ -70,7 +70,11 @@ export const editors = reactive({
   /** 외부 삭제로 디스크에서 사라진 열린 파일 path — 탭에 strikethrough, 저장하면 부활.
    *  (탭은 유지 — VS Code closeOnFileDelete=false. 앱 내 삭제는 closePathTabs 가 닫는다) */
   orphaned: new Set<string>(),
+  /** 닫은 탭 복원 이력 (최근이 뒤) — Ctrl+Shift+T 가 pop 한다 */
+  recentlyClosed: [] as { kind: Tab['kind']; path: string }[],
 });
+
+const RECENTLY_CLOSED_CAP = 20;
 
 export function activeGroup(): EditorGroup {
   return editors.groups.find((g) => g.id === editors.activeGroupId) ?? editors.groups[0];
@@ -281,8 +285,20 @@ function collapseIfEmpty(groupId: number): void {
 }
 
 export function closeTab(groupId: number, tabId: string): void {
-  if (!takeTab(groupId, tabId)) return;
+  const tab = takeTab(groupId, tabId);
+  if (!tab) return;
+  editors.recentlyClosed.push({ kind: tab.kind, path: tab.path });
+  if (editors.recentlyClosed.length > RECENTLY_CLOSED_CAP) editors.recentlyClosed.shift();
   collapseIfEmpty(groupId);
+}
+
+/** 마지막으로 닫은 탭 복원 (Ctrl+Shift+T) — 활성 그룹에 고정 탭으로 연다.
+ *  열기 실패(삭제된 파일 등)는 openFile/openDiff 가 notify 한다 — 이력에서는 소모된다 */
+export async function reopenClosedEditor(): Promise<void> {
+  const entry = editors.recentlyClosed.pop();
+  if (!entry) return;
+  if (entry.kind === 'diff') await openDiff(entry.path);
+  else await openFile(entry.path);
 }
 
 /** 탭 드래그 드롭 — 다른 그룹의 index 위치로 이동(생략 시 끝), 같은 그룹이면 순서 변경.
@@ -454,6 +470,14 @@ export function reloadDocFromDisk(path: string, content: string, etag: string): 
   applyExternalEdit?.(path, content);
   // 모델 편집이 change 리스너로 이미 갱신했어도 무해(같은 값) — 모델이 없던 경우를 커버한다
   updateContent(path, content);
+}
+
+/** 미저장 문서 존재 여부 — 탭 닫힘(beforeunload) 안전망 판정용 */
+export function hasDirtyDocs(): boolean {
+  for (const doc of editors.docs.values()) {
+    if (doc.content !== doc.savedContent) return true;
+  }
+  return false;
 }
 
 export async function saveActive(): Promise<void> {
