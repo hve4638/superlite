@@ -11,6 +11,7 @@ import { backend } from './host';
 import { editors, reloadDocFromDisk, setOrphaned } from './editors';
 import { loadedDirPaths, parentOf, refreshAllFiles, refreshDir } from './files';
 import { refreshScm } from './scm';
+import { autoRerunSearch } from './search';
 
 /** fire-and-forget — 리프레시 실패(삭제 경합, 연결 끊김)는 다음 이벤트·포커스가 복구한다 */
 const swallow = (p: Promise<unknown>): void => void p.catch(() => {});
@@ -88,6 +89,13 @@ const git = consumer<null>(
   () => null,
 );
 
+// 검색 결과 자동 재실행 — 결과가 떠 있으면 마지막 변경 후 250ms 에 한 번 (VS Code 동일)
+const searchRerun = consumer<null>(
+  250,
+  () => swallow(autoRerunSearch()),
+  () => null,
+);
+
 function onBatch(changes: FsChange[], overflow: boolean): void {
   if (overflow) {
     fullRefresh();
@@ -97,6 +105,7 @@ function onBatch(changes: FsChange[], overflow: boolean): void {
     git.add(() => {}); // 워킹트리든 .git 내부든 git status 신호다
     // .git 컴포넌트가 낀 경로(서브모듈 sub/.git 포함)는 SCM 신호일 뿐 — 트리·에디터와 무관
     if (c.path.split('/').includes('.git')) continue;
+    searchRerun.add(() => {});
     // 삭제도 reload 소비자로 — 실존 재검증을 거쳐 열린 탭에 orphan 표시 (탭·내용은 유지,
     // VS Code closeOnFileDelete=false). 같은 창에서 delete→create 가 겹쳐도 읽기가 판정한다
     reload.add((a) => a.set(c.path, (a.get(c.path) ?? false) || c.kind === 'delete'));
@@ -112,6 +121,7 @@ function fullRefresh(): void {
     a.all = true;
   });
   git.add(() => {});
+  searchRerun.add(() => {});
   reload.add((a) => {
     // verify=true — 안전망은 이벤트를 놓쳤다는 전제이므로 끊김·비포커스 중 삭제도 잡는다
     for (const path of editors.docs.keys()) a.set(path, true);
@@ -132,5 +142,3 @@ export function initWatch(): void {
   window.addEventListener('focus', fullRefresh);
   // 파일 목록·git 은 폴링하지 않는다 — 이벤트 + 포커스 안전망이 전부다
 }
-
-// ponytail: 검색 결과 자동 재실행(VS Code 250ms) 미구현 — 검색은 실행 시점 스냅샷.

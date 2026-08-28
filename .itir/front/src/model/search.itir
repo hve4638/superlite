@@ -1,7 +1,7 @@
 import { backend } from './host'
 import { FileSearchResult } from '../backend/types'
 
-role: 전문 검색 뷰 상태 — 실행 시점 스냅샷, 자동 재실행 없음
+role: 전문 검색 뷰 상태 — 파일 변경 시 자동 재실행 (250ms 디바운스는 watch 소비자 몫, 뷰 표시 여부와 무관)
 
 export val search
 
@@ -10,6 +10,9 @@ export fn setQuery(q) {
 }
 export fn runSearch() {
   role: 검색 실행 — 결과와 접힘 상태 초기화
+}
+export fn autoRerunSearch() {
+  role: 파일 변경에 의한 자동 재실행 — 결과가 떠 있을 때만, 접힘 상태 보존 (VS Code 동작)
 }
 export fn matchCount() -> Int {
   role: 총 매치 수 (요약 라벨)

@@ -29,14 +29,25 @@ export function setQuery(q: string): void {
   timer = setTimeout(runSearch, 200);
 }
 
-export async function runSearch(): Promise<void> {
+async function execSearch(preserveCollapsed: boolean): Promise<void> {
   if (!search.query) return;
   const mySeq = ++seq;
   const results = await backend.search(search.query, { caseSensitive: search.caseSensitive });
   if (mySeq !== seq) return; // 그 사이 새 검색/클리어가 발생
   search.results = results;
-  search.collapsed = new Set();
+  if (!preserveCollapsed) search.collapsed = new Set();
   search.done = true;
+}
+
+export function runSearch(): Promise<void> {
+  return execSearch(false);
+}
+
+/** 파일 변경에 의한 자동 재실행 — 결과가 떠 있을 때만. 사용자가 접어 둔 파일은 그대로
+ *  둔다 (자동 갱신이 접힘을 풀면 성가시다 — VS Code 동일). 250ms 디바운스는 watch 몫 */
+export function autoRerunSearch(): Promise<void> {
+  if (!search.done) return Promise.resolve();
+  return execSearch(true);
 }
 
 export function matchCount(): number {
