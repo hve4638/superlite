@@ -1,6 +1,6 @@
 # code-superlight
 
-이 repo 는 wtree 로 브랜치를 관리한다 (main → dev → feat/*·fix/* 등). 브랜치 생성·merge·제거는 wtree 로만 하고, 관리 브랜치에 `git merge`/`git switch`/`git branch -d`/`git worktree` 를 직접 쓰지 않는다. 사용법은 `wtree llms.txt`.
+이 repo 는 wtree 로 브랜치를 관리한다 (main ← feat/*·fix/*·refactor/*·docs/*·chore/*, squash 로만 합류 — dev 통합 라인은 2026-08-29 폐지). 브랜치 생성·merge·제거는 wtree 로만 하고, 관리 브랜치에 `git merge`/`git switch`/`git branch -d`/`git worktree` 를 직접 쓰지 않는다. 사용법은 `wtree llms.txt`.
 
 이 repo 는 intentir 를 쓴다. 프로젝트 파악은 소스보다 `.itir/` 트리를 먼저 읽는 것으로 시작한다.
 
