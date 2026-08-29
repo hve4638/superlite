@@ -1,6 +1,6 @@
 //! superlight-daemon — 워크스페이스·터미널을 소유하는 단일 상주 프로세스 (v0, 로컬).
 //!
-//! 백엔드하고만 unix socket 으로 통신한다 — 네트워크에 노출되지 않는다
+//! 백엔드하고만 로컬 IPC(unix socket / Windows named pipe)로 통신한다 — 네트워크에 노출되지 않는다
 //! (_docs/decision/process-topology.md). 프레이밍은 개행 구분 JSON 한 줄:
 //! {"id","method","params"} 요청 → {"id","result"|"error"} 응답, 터미널 출력은
 //! {"event":"termData","term","data"} 푸시. 연결마다 첫 요청은 attach(root) 여야 하고
@@ -30,7 +30,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{UnixListener, UnixStream};
+#[cfg(unix)]
+use tokio::net::UnixListener;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
 mod req;
@@ -71,17 +72,40 @@ fn err<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
 
+/// 와이어의 상대 경로는 '/' 구분이 계약이다 — Windows 가 산출한 경로의 '\' 를 정규화한다.
+/// unix 에선 '\' 가 파일명에 올 수 있는 문자라 치환하지 않는다.
+fn wire_rel(s: &str) -> String {
+    if cfg!(windows) { s.replace('\\', "/") } else { s.to_string() }
+}
+
 #[tokio::main]
 async fn main() {
     let sock = superlight_common::socket_path();
-    // WHY: 단독 보장은 flock 으로 — connect 검사→unlink→bind 순서는 원자적이지 않아
+    // WHY: 단독 보장은 파일 락으로 — connect 검사→unlink→bind 순서는 원자적이지 않아
     //      동시 기동 시 산 데몬의 소켓 파일을 다른 데몬이 지우는 race 가 있다.
     //      락을 쥔 쪽만 소켓 파일을 만들고 지운다. 락은 프로세스 종료와 함께 풀린다.
     let Some(_lock) = acquire_lock(&sock) else {
         return; // 다른 데몬이 이미 있다(또는 기동 중) — 조용히 물러난다
     };
-    let _ = std::fs::remove_file(&sock); // 락을 쥐었으니 기존 소켓은 crash 잔재다
-    let listener = UnixListener::bind(&sock).expect("socket bind 실패");
+    #[cfg(unix)]
+    let listener = {
+        let _ = std::fs::remove_file(&sock); // 락을 쥐었으니 기존 소켓은 crash 잔재다
+        UnixListener::bind(&sock).expect("socket bind 실패")
+    };
+    // named pipe 는 프로세스 종료와 함께 사라진다 — crash 잔재 정리가 없다.
+    // first_pipe_instance 는 같은 사용자의 중복 기동(락이 막는다)이 아니라 타 프로세스의
+    // 이름 선점을 드러내는 용도 — panic 대신 로그를 남겨 crash loop 의 원인이 보이게 한다
+    #[cfg(windows)]
+    let mut listener = match tokio::net::windows::named_pipe::ServerOptions::new()
+        .first_pipe_instance(true)
+        .create(&sock)
+    {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("superlight-daemon: named pipe 생성 실패 {}: {e}", sock.display());
+            return;
+        }
+    };
     eprintln!("superlight-daemon: {}", sock.display());
 
     let sessions: Sessions = Sessions::default();
@@ -107,7 +131,10 @@ async fn main() {
                     conns.load(Ordering::SeqCst) == 0 && sessions.lock().unwrap().is_empty();
                 idle = if quiet { idle + 1 } else { 0 };
                 if idle >= grace {
-                    let _ = std::fs::remove_file(&sock);
+                    // 파일 정리는 unix 소켓만 — named pipe 는 프로세스 종료와 함께 사라진다
+                    if cfg!(unix) {
+                        let _ = std::fs::remove_file(&sock);
+                    }
                     eprintln!("superlight-daemon: 유휴 {grace}s — 종료");
                     std::process::exit(0);
                 }
@@ -132,10 +159,30 @@ async fn main() {
     }
 
     loop {
-        let Ok((stream, _)) = listener.accept().await else {
-            // fd 고갈처럼 지속되는 accept 에러에서 100% CPU 스핀 방지
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            continue;
+        #[cfg(unix)]
+        let stream = match listener.accept().await {
+            Ok((s, _)) => s,
+            Err(_) => {
+                // fd 고갈처럼 지속되는 accept 에러에서 100% CPU 스핀 방지
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+        };
+        // named pipe 는 인스턴스 단위 — 접속된 인스턴스를 연결에 넘기고 다음 것을 만든다
+        #[cfg(windows)]
+        let stream = {
+            if listener.connect().await.is_err() {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+            // 재생성 실패는 이번 접속만 포기 (unix accept 에러와 같은 정책) —
+            // 접속된 인스턴스도 drop 되므로 클라이언트의 재시도 루프가 흡수한다
+            let Ok(next) = tokio::net::windows::named_pipe::ServerOptions::new().create(&sock)
+            else {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            };
+            std::mem::replace(&mut listener, next)
         };
         let conns = conns.clone();
         let sessions = sessions.clone();
@@ -148,9 +195,9 @@ async fn main() {
 }
 
 fn acquire_lock(sock: &Path) -> Option<std::fs::File> {
-    let f = std::fs::File::create(sock.with_extension("lock")).ok()?;
-    let ret = unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&f), libc::LOCK_EX | libc::LOCK_NB) };
-    (ret == 0).then_some(f)
+    let f = std::fs::File::create(superlight_common::lock_path(sock)).ok()?;
+    // WouldBlock 이든 다른 실패든 물러난다 (fail-closed)
+    f.try_lock().is_ok().then_some(f)
 }
 
 /// 세션 재사용 또는 신규 등록. 재접속이면 끊김 중 쌓인 이벤트를 flush 하고 sink 를 새
@@ -196,8 +243,11 @@ fn new_session(root: PathBuf, tx: &UnboundedSender<String>) -> Session {
     }
 }
 
-async fn handle_conn(stream: UnixStream, sessions: Sessions) {
-    let (read_half, mut write_half) = stream.into_split();
+async fn handle_conn(
+    stream: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static,
+    sessions: Sessions,
+) {
+    let (read_half, mut write_half) = tokio::io::split(stream);
     // WHY: 응답·터미널 이벤트가 여러 태스크/스레드에서 나오므로 단일 writer 태스크로 직렬화
     let (tx, mut rx) = unbounded_channel::<String>();
     tokio::spawn(async move {
@@ -230,7 +280,11 @@ async fn handle_conn(stream: UnixStream, sessions: Sessions) {
                     let _ = tx.send(json!({"id": req["id"], "error": "이미 attach 된 연결"}).to_string());
                     continue;
                 }
-                match PathBuf::from(req["params"]["root"].as_str().unwrap_or("")).canonicalize() {
+                // plain: verbatim 루트는 '/' 와이어 경로 join·자식 cwd 를 깨뜨린다 (common 참조)
+                match PathBuf::from(req["params"]["root"].as_str().unwrap_or(""))
+                    .canonicalize()
+                    .map(superlight_common::plain)
+                {
                     Ok(r) => {
                         // resumed — 재접속인데 false 면 세션이 이미 회수됐다는 뜻.
                         // 프론트가 죽은 터미널을 정리할 유일한 단서다

@@ -192,7 +192,7 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
             let mut args = vec!["--files"];
             args.extend(RG_EXCLUDE_ARGS);
             let out = run_rg(root, &args).await?;
-            Ok(json!(out.lines().collect::<Vec<_>>()))
+            Ok(json!(out.lines().map(crate::wire_rel).collect::<Vec<_>>()))
         }
         "search" => search(root, p).await,
         // git repo 가 아니어도 앱은 떠야 한다 — 빈 상태로 강등
@@ -241,7 +241,7 @@ async fn search(root: &Path, p: &Value) -> Result<Value, String> {
         else {
             continue;
         };
-        let path = path.to_string();
+        let path = crate::wire_rel(path);
         let text = text.trim_end_matches(['\n', '\r']);
         // WHY: rg 오프셋은 바이트, 프론트(SearchView)의 slice 는 UTF-16 코드유닛 —
         //      한글 주석 라인에서 하이라이트가 어긋나므로 여기서 변환한다
@@ -364,7 +364,8 @@ fn safe_join(root: &Path, rel: &str) -> Result<PathBuf, String> {
         let mut probe = joined.as_path();
         loop {
             match probe.canonicalize() {
-                Ok(r) => break Ok(r),
+                // plain: root 도 plain — verbatim 을 안 벗기면 starts_with 가 항상 어긋난다
+                Ok(r) => break Ok(superlight_common::plain(r)),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => match probe.parent() {
                     Some(parent) => probe = parent,
                     None => break Err(e),

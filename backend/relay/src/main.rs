@@ -1,14 +1,13 @@
 //! superlight-backend — 앱 인스턴스당 1개. 웹(정적) 서빙 + WS 인터페이스.
 //!
 //! 유일한 네트워크 노출 지점 (_docs/decision/process-topology.md). 데몬을 tmux 방식으로
-//! 자동 기동하고(접속 실패 → spawn → 재시도), 프론트 WS 연결마다 데몬 unix socket 연결을
-//! 1:1 로 열어 그대로 중계한다 — id 재매핑 없음. 각 데몬 연결에 30초 주기 ping(생존 신호).
+//! 자동 기동하고(접속 실패 → spawn → 재시도), 프론트 WS 연결마다 데몬 IPC 연결
+//! (unix socket / Windows named pipe)을 1:1 로 열어 그대로 중계한다 — id 재매핑 없음.
+//! 각 데몬 연결에 30초 주기 ping(생존 신호).
 //!
 //! 실행: superlight-backend [워크스페이스루트]  (기본 cwd)
 //!   SUPERLIGHT_HTTP=127.0.0.1:8795  SUPERLIGHT_DIST=front/dist
 //!   SUPERLIGHT_TOKEN=<토큰>  — 설정 시 /ws 는 ?tkn= 일치 필수 (loopback 밖 노출 전제조건)
-//!
-//! ponytail: unix 전용 (spawn 분리·socket) — Windows 지원 때 named pipe/DETACHED_PROCESS 분기.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -20,9 +19,14 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use serde_json::json;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{TcpListener, UnixStream};
+use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::net::TcpListener;
 use tower_http::services::ServeDir;
+
+#[cfg(unix)]
+type DaemonStream = tokio::net::UnixStream;
+#[cfg(windows)]
+type DaemonStream = tokio::net::windows::named_pipe::NamedPipeClient;
 
 #[derive(Clone)]
 struct App {
@@ -37,7 +41,9 @@ async fn main() {
         .nth(1)
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::current_dir().unwrap());
-    let root = root.canonicalize().expect("워크스페이스 루트 경로가 존재해야 한다");
+    // plain: Windows verbatim 루트는 '/' 와이어 경로·자식 cwd 를 깨뜨린다 (common 참조)
+    let root =
+        superlight_common::plain(root.canonicalize().expect("워크스페이스 루트 경로가 존재해야 한다"));
     // 네트워크 노출 지점은 여기 하나 — 기본은 localhost. 개발 LAN 접근은 vite(8793)가 프록시.
     let addr = std::env::var("SUPERLIGHT_HTTP").unwrap_or_else(|_| "127.0.0.1:8795".into());
     // 빌드된 프론트가 있으면 서빙. 개발 중엔 vite 가 프론트를 서빙하고 /ws 만 여기로 프록시.
@@ -71,10 +77,15 @@ async fn main() {
 /// 데몬 연결 확보. spawn 은 제어 루프에서만 — relay 까지 spawn 하면 백엔드 하나가
 /// 데몬을 두 번 띄우는 race 가 생긴다. 데몬 부재 시 제어 루프가 곧 재기동하므로
 /// relay 는 재시도만으로 충분하다.
-async fn daemon_conn(spawn: bool) -> Result<UnixStream, String> {
+async fn daemon_conn(spawn: bool) -> Result<DaemonStream, String> {
     let sock = superlight_common::socket_path();
     for i in 0..50 {
-        if let Ok(s) = UnixStream::connect(&sock).await {
+        #[cfg(unix)]
+        let conn = DaemonStream::connect(&sock).await;
+        // open 은 동기 — 파이프 부재·인스턴스 소진(busy) 모두 이 재시도 루프가 흡수한다
+        #[cfg(windows)]
+        let conn = tokio::net::windows::named_pipe::ClientOptions::new().open(sock.as_os_str());
+        if let Ok(s) = conn {
             return Ok(s);
         }
         if spawn && i == 0 {
@@ -96,7 +107,11 @@ fn spawn_daemon() -> Result<(), String> {
     let mut cmd = std::process::Command::new(&bin);
     // 프로세스 그룹 분리 — 백엔드 터미널의 Ctrl+C 가 데몬까지 죽이지 않게.
     // 로그는 상속 — 개발 중 백엔드 터미널에서 같이 보인다.
+    #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+    // CREATE_NEW_PROCESS_GROUP — 콘솔 Ctrl+C 이벤트 전파 차단. 상속 stdio 는 유지된다
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::creation_flags(&mut cmd, 0x0000_0200);
     let mut child = cmd.spawn().map_err(|e| format!("데몬 spawn 실패 {}: {e}", bin.display()))?;
     // 좀비 방지 — 이미 데몬이 있어 즉시 물러난 자식도 회수해야 한다
     std::thread::spawn(move || {
@@ -120,7 +135,7 @@ async fn control_loop() {
                 continue;
             }
         };
-        let (read_half, mut write_half) = stream.into_split();
+        let (read_half, mut write_half) = tokio::io::split(stream);
         let mut lines = BufReader::new(read_half).lines();
         loop {
             tokio::select! {
@@ -138,7 +153,7 @@ async fn control_loop() {
     }
 }
 
-async fn write_line(w: &mut tokio::net::unix::OwnedWriteHalf, s: &str) -> std::io::Result<()> {
+async fn write_line(w: &mut (impl AsyncWrite + Unpin), s: &str) -> std::io::Result<()> {
     w.write_all(s.as_bytes()).await?;
     w.write_all(b"\n").await
 }
@@ -188,7 +203,7 @@ async fn relay(mut ws: WebSocket, root: PathBuf, session: Option<String>) {
     let Ok(stream) = daemon_conn(false).await else {
         return; // ws 는 drop 으로 닫힌다 — 프론트 onclose 가 진행 중 요청을 실패 처리
     };
-    let (read_half, mut write_half) = stream.into_split();
+    let (read_half, mut write_half) = tokio::io::split(stream);
     let mut lines = BufReader::new(read_half).lines();
     // 첫 줄은 attach. 응답(id 0)이 프론트로 중계돼도 무시된다 — 프론트 id 는 1부터.
     let mut attach = json!({"id": 0, "method": "attach", "params": {"root": root.to_string_lossy()}});

@@ -1,5 +1,5 @@
 // 와이어 계약(JSON-RPC 메서드·이벤트)은 import 가 아니라 여기서 강제 못 한다 —
 // TS 쪽 사영은 front/src/backend/types.itir 의 port ThinBackend.
-role: 워크스페이스 데몬 — unix socket 전용 JSON-RPC, fs·git·rg·PTY·파일 감시, tmux 식 수명 (마지막 접속 후 grace 뒤 종료)
+role: 워크스페이스 데몬 — 로컬 IPC(unix socket / Windows named pipe) JSON-RPC, fs·git·rg·PTY·파일 감시, tmux 식 수명 (마지막 접속 후 grace 뒤 종료)
 
-import { socket_path } from '../../common/src'
+import { socket_path, lock_path, plain } from '../../common/src'

@@ -41,7 +41,7 @@ pub(crate) fn start_watcher(root: PathBuf, tx: UnboundedSender<String>, slot: Wa
         };
         for p in &ev.paths {
             let Ok(rel) = p.strip_prefix(&cb_root) else { continue };
-            let rel = rel.to_string_lossy().into_owned();
+            let rel = crate::wire_rel(&rel.to_string_lossy());
             if rel.is_empty() || !event_allowed(&rel) {
                 continue;
             }

@@ -1,6 +1,6 @@
-role: HTTP 진입점 (기본 127.0.0.1) — 정적 프론트 서빙 + /ws ↔ 데몬 unix socket 중계, 데몬 spawn·attach. loopback 밖 노출은 SUPERLIGHT_TOKEN 전제
+role: HTTP 진입점 (기본 127.0.0.1) — 정적 프론트 서빙 + /ws ↔ 데몬 IPC(unix socket / named pipe) 중계, 데몬 spawn·attach. loopback 밖 노출은 SUPERLIGHT_TOKEN 전제
 
-import { socket_path } from '../../common/src'
+import { socket_path, plain } from '../../common/src'
 
 fn ws_handler() {
   role: /ws 관문 — Origin=Host 검증(브라우저 CSRF) + SUPERLIGHT_TOKEN 설정 시 ?tkn= 일치 요구
@@ -9,7 +9,7 @@ fn token_eq() {
   role: 상수시간 토큰 비교 — 이른 반환 없이 XOR 누적
 }
 fn relay() {
-  role: WebSocket ↔ unix socket 양방향 중계 — 라인 프레이밍만 알고 내용은 불투명 (데몬이 유일한 해석자). 첫 줄 attach 에 root 와 (있으면) 프론트의 session id 를 실어 보낸다
+  role: WebSocket ↔ 데몬 IPC 양방향 중계 — 라인 프레이밍만 알고 내용은 불투명 (데몬이 유일한 해석자). 첫 줄 attach 에 root 와 (있으면) 프론트의 session id 를 실어 보낸다
 }
 fn daemon_conn() {
   role: 데몬 소켓 접속, 없으면 spawn 후 재시도

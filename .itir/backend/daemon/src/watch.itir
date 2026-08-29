@@ -1,4 +1,7 @@
-role: 연결별 파일 감시 — 재귀 inotify, 75ms 집계, 경로별 coalesce, 상한 초과 시 overflow 강등
+// crate::wire_rel(main.rs) — 와이어 경로 '/' 정규화
+import { wire_rel } from '.'
+
+role: 연결별 파일 감시 — 재귀 워처(inotify/ReadDirectoryChangesW), 75ms 집계, 경로별 coalesce, 상한 초과 시 overflow 강등
 
 fn start_watcher() {
   role: 감시 시작 — 등록(트리 walk)은 blocking 태스크, 워처는 slot 에 담겨 연결 종료와 함께 drop. 심링크 미추적 (루트 봉쇄와 일관)

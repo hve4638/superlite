@@ -190,9 +190,15 @@ fn spawn_term(
     let pty = native_pty_system()
         .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
         .map_err(err)?;
+    #[cfg(unix)]
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
+    // Windows 는 $SHELL 규약이 없다 — ComSpec(cmd.exe)이 대응물. ponytail: PowerShell 선호는 설정 몫
+    #[cfg(windows)]
+    let shell = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into());
     let mut cmd = CommandBuilder::new(shell);
     cmd.cwd(root);
+    // ConPTY 세계엔 TERM 규약이 없다 — 심어두면 Windows 태생 도구들이 오판한다
+    #[cfg(unix)]
     cmd.env("TERM", "xterm-256color");
     let child = pty.slave.spawn_command(cmd).map_err(err)?;
     let mut writer = pty.master.take_writer().map_err(err)?;
