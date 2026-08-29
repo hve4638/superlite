@@ -143,11 +143,6 @@ const noResults = computed(() => Boolean(search.query) && search.done && search.
           </div>
         </div>
       </div>
-      <div class="query-details">
-        <div class="more" title="Toggle Search Details">
-          <span class="codicon codicon-ellipsis" />
-        </div>
-      </div>
     </div>
 
     <div v-if="resultMessage || noResults" class="messages">
@@ -298,26 +293,6 @@ const noResults = computed(() => Boolean(search.query) && search.done && search.
   display: flex;
   align-items: center;
 }
-.query-details {
-  position: relative;
-  height: 1em;
-  margin-left: 18px;
-}
-.more {
-  position: absolute;
-  top: 0;
-  right: -2px;
-  width: 25px;
-  height: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-}
-.more .codicon {
-  font-size: 16px;
-}
-
 /* ── 결과 메시지 ── */
 .messages {
   margin-top: -5px;

@@ -32,9 +32,6 @@ function isActive(id: ViewletId): boolean {
       </div>
     </div>
     <div class="actions-bottom">
-      <div class="action-item" title="Accounts">
-        <span class="codicon codicon-account" />
-      </div>
       <div class="action-item" title="Manage">
         <span class="codicon codicon-settings-gear" />
       </div>

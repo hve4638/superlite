@@ -66,8 +66,12 @@ async function sync() {
     if (editors.activeGroupId === props.group.id) {
       const pos = ed.getPosition();
       if (pos) editors.cursor = { line: pos.lineNumber, col: pos.column };
-      // WHY: 파일을 연 직후 바로 타이핑할 수 있어야 한다 (VS Code 는 오픈 시 에디터에 포커스)
-      ed.focus();
+      // WHY: 포커스는 요청된 경우만 — 트리 단일 클릭(preview)은 포커스가 트리에 남아야
+      //      Delete 가 파일 삭제로 이어진다 (VS Code 동일). scm.head 갱신 sync 도 포커스를 안 뺏는다
+      if (editors.pendingFocus) {
+        editors.pendingFocus = false;
+        ed.focus();
+      }
     }
   } else {
     const ed = ensureDiffEditor();
@@ -78,7 +82,10 @@ async function sync() {
     if (!cur || cur.modified !== modified || cur.original !== original) {
       ed.setModel({ original, modified });
     }
-    if (editors.activeGroupId === props.group.id) ed.getModifiedEditor().focus();
+    if (editors.activeGroupId === props.group.id && editors.pendingFocus) {
+      editors.pendingFocus = false;
+      ed.getModifiedEditor().focus();
+    }
   }
 }
 

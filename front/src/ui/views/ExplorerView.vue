@@ -163,7 +163,8 @@ function onRowClick(node: TreeNode): void {
   if (node.kind === 'directory') {
     void toggleDir(node);
   } else {
-    void openFile(node.path, { preview: true });
+    // focus:false — 단일 클릭은 포커스가 트리에 남아야 Delete/F2 가 파일 조작으로 이어진다
+    void openFile(node.path, { preview: true, focus: false });
   }
 }
 

@@ -59,6 +59,21 @@ export function toggleCase(): void {
   if (search.query) void runSearch();
 }
 
+/** 타이틀 액션 Clear — 질의·결과·접힘을 초기 상태로 */
+export function clearSearch(): void {
+  clearTimeout(timer);
+  seq += 1; // 진행 중 검색 무효화
+  search.query = '';
+  search.results = [];
+  search.collapsed = new Set();
+  search.done = false;
+}
+
+/** 타이틀 액션 Collapse All — 결과의 모든 파일 그룹을 접는다 */
+export function collapseAllResults(): void {
+  search.collapsed = new Set(search.results.map((f) => f.path));
+}
+
 export function toggleFileCollapsed(path: string): void {
   if (search.collapsed.has(path)) search.collapsed.delete(path);
   else search.collapsed.add(path);

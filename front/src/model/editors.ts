@@ -72,6 +72,9 @@ export const editors = reactive({
   orphaned: new Set<string>(),
   /** 닫은 탭 복원 이력 (최근이 뒤) — Ctrl+Shift+T 가 pop 한다 */
   recentlyClosed: [] as { kind: Tab['kind']; path: string }[],
+  /** 에디터 포커스 요청 — MonacoHost 가 소비. 트리 단일 클릭(preview)은 세우지 않아
+   *  포커스가 트리에 남는다 (VS Code 동일 — Delete 가 파일 삭제로 이어져야 한다) */
+  pendingFocus: false,
 });
 
 const RECENTLY_CLOSED_CAP = 20;
@@ -104,7 +107,10 @@ async function ensureDoc(path: string): Promise<Doc> {
  * preview=false(더블 클릭/명시적 오픈)면 고정 탭으로 연다.
  */
 /** @returns 열기 성공 여부 — 읽기 실패는 notify 후 false (호출측 후속 동작 가드용) */
-export async function openFile(path: string, opts?: { preview?: boolean; groupId?: number }): Promise<boolean> {
+export async function openFile(
+  path: string,
+  opts?: { preview?: boolean; groupId?: number; focus?: boolean },
+): Promise<boolean> {
   let doc: Doc;
   try {
     doc = await ensureDoc(path);
@@ -121,6 +127,7 @@ export async function openFile(path: string, opts?: { preview?: boolean; groupId
     if (!opts?.preview) existing.preview = false;
     group.activeTabId = existing.id;
     editors.activeGroupId = group.id;
+    if (opts?.focus !== false) editors.pendingFocus = true;
     return true;
   }
 
@@ -139,6 +146,7 @@ export async function openFile(path: string, opts?: { preview?: boolean; groupId
   }
   group.activeTabId = tab.id;
   editors.activeGroupId = group.id;
+  if (opts?.focus !== false) editors.pendingFocus = true;
   return true;
 }
 
@@ -167,6 +175,7 @@ export async function openDiff(path: string): Promise<void> {
     });
   }
   group.activeTabId = id;
+  editors.pendingFocus = true;
 }
 
 export function setActiveTab(groupId: number, tabId: string): void {
@@ -174,6 +183,7 @@ export function setActiveTab(groupId: number, tabId: string): void {
   if (!group) return;
   group.activeTabId = tabId;
   editors.activeGroupId = groupId;
+  editors.pendingFocus = true;
 }
 
 /** preview 탭 고정 — 탭 더블클릭 (VS Code 동일) */
@@ -328,6 +338,7 @@ export function moveTabToGroup(fromGroupId: number, tabId: string, toGroupId: nu
   }
   to.activeTabId = tab.id;
   editors.activeGroupId = toGroupId;
+  editors.pendingFocus = true;
   collapseIfEmpty(fromGroupId);
 }
 
@@ -344,6 +355,7 @@ export function moveTabSplit(fromGroupId: number, tabId: string, refGroupId: num
   editors.groups.splice(editors.groups.indexOf(ref) + 1, 0, group);
   insertIntoLayout(refGroupId, group.id, side);
   editors.activeGroupId = group.id;
+  editors.pendingFocus = true;
   collapseIfEmpty(fromGroupId);
 }
 

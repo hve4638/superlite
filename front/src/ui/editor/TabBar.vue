@@ -97,9 +97,6 @@ function onTabsDrop(e: DragEvent) {
       <span class="group-action" title="Split Editor Right (Ctrl+\)" @click="splitActiveEditor()">
         <span class="codicon codicon-split-horizontal" />
       </span>
-      <span class="group-action" title="More Actions...">
-        <span class="codicon codicon-ellipsis" />
-      </span>
     </div>
   </div>
 </template>

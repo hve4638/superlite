@@ -23,3 +23,9 @@ export fn toggleCase() {
 export fn toggleFileCollapsed(path) {
   role: 파일 그룹 접힘 토글
 }
+export fn clearSearch() {
+  role: 타이틀 액션 Clear — 질의·결과·접힘을 초기 상태로 (진행 중 검색 무효화 포함)
+}
+export fn collapseAllResults() {
+  role: 타이틀 액션 Collapse All — 결과의 모든 파일 그룹을 접는다
+}

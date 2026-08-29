@@ -21,7 +21,7 @@ export fn activeTab() -> Tab? {
 }
 export fn baseName
 export fn openFile(path, opts) -> Bool {
-  role: 파일 열기 — preview 탭 교체 규칙 포함 (VS Code 단일/더블 클릭 구분). 읽기 실패는 notify 후 false
+  role: 파일 열기 — preview 탭 교체 규칙 포함 (VS Code 단일/더블 클릭 구분). focus:false 면 에디터 포커스 요청(pendingFocus)을 세우지 않는다 — 트리 단일 클릭은 포커스가 트리에 남는다. 읽기 실패는 notify 후 false
 }
 export fn openFileAt(path, line) {
   role: 열고 지정 라인으로 스크롤 (검색 결과 클릭)
@@ -30,7 +30,7 @@ export fn openDiff(path) {
   role: SCM diff 탭 열기 — modified 쪽은 워킹트리 문서 그 자체
 }
 export fn setActiveTab(groupId, tabId) {
-  role: 탭·그룹 활성화
+  role: 탭·그룹 활성화 + 에디터 포커스 요청 (탭 클릭은 항상 에디터로 포커스 — VS Code 동일)
 }
 export fn pinTab(groupId, tabId) {
   role: preview 탭 고정 — 탭 더블클릭 (VS Code 동일)

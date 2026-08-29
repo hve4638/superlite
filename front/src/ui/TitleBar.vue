@@ -15,7 +15,6 @@ import { workbench, toggleSideBar, togglePanel } from '../model/workbench';
         :class="{ off: !workbench.panelVisible }"
         @click="togglePanel()"
       />
-      <span class="codicon codicon-layout layout-icon" />
     </div>
   </div>
 </template>

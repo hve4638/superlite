@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { workbench } from '../model/workbench';
+import { runSearch, clearSearch, collapseAllResults } from '../model/search';
 import ExplorerView from './views/ExplorerView.vue';
 import SearchView from './views/SearchView.vue';
 import ScmView from './views/ScmView.vue';
@@ -20,15 +21,13 @@ const view = computed(() => {
 });
 const title = computed(() => TITLES[workbench.activeViewlet]);
 
-// 뷰별 타이틀 액션 (장식 — 레퍼런스와 아이콘 구성을 맞춘다)
-const ACTIONS: Record<string, { icon: string; label: string }[]> = {
+// 뷰별 타이틀 액션
+const ACTIONS: Record<string, { icon: string; label: string; run: () => void }[]> = {
   explorer: [],
   search: [
-    { icon: 'codicon-refresh', label: 'Refresh' },
-    { icon: 'codicon-clear-all', label: 'Clear Search Results' },
-    { icon: 'codicon-new-file', label: 'Open New Search Editor' },
-    { icon: 'codicon-list-tree', label: 'View as Tree' },
-    { icon: 'codicon-collapse-all', label: 'Collapse All' },
+    { icon: 'codicon-refresh', label: 'Refresh', run: () => void runSearch() },
+    { icon: 'codicon-clear-all', label: 'Clear Search Results', run: clearSearch },
+    { icon: 'codicon-collapse-all', label: 'Collapse All', run: collapseAllResults },
   ],
   scm: [],
 };
@@ -46,6 +45,7 @@ const actions = computed(() => ACTIONS[workbench.activeViewlet] ?? []);
           class="codicon"
           :class="a.icon"
           :title="a.label"
+          @click="a.run()"
         />
         <span
           v-if="workbench.activeViewlet !== 'search'"
