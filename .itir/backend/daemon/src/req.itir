@@ -28,6 +28,9 @@ fn git_status() {
 fn run_rg() {
   role: rg 실행 — exit 1(무매치)도 성공 취급
 }
+fn walk_files() {
+  role: rg 부재 시 listFiles 강등 — RG_EXCLUDE_ARGS 의 basename 제외를 흉내 낸 자체 재귀 walk (gitignore 미적용이 의도된 차이, 심링크 미추적). 부팅이 listFiles 를 await 하므로 rg 없는 실기기에서도 앱은 떠야 한다
+}
 fn run() {
   role: 외부 명령 실행 — 실패 시 stderr, 비면 stdout 을 에러로
 }

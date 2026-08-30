@@ -1,0 +1,20 @@
+role: 중계 코어 — 준비된 TcpListener 위에 /ws 라우터를 얹어 serve. 데몬 spawn·attach, 상주 제어 연결 포함. dist 는 옵션 (bin 은 정적 서빙, Tauri 앱은 자산 번들이라 불필요)
+
+fn serve() {
+  role: 서버 기동 단일 진입점 — control_loop spawn + /ws 라우터(+옵션 dist ServeDir) axum serve. bin 과 Tauri 앱이 공유한다
+}
+fn ws_handler() {
+  role: /ws 관문 — SUPERLIGHT_TOKEN 설정 시 ?tkn= 일치 요구(일치가 곧 인증 — Origin 검증 생략, tauri:// 오리진 수용). 토큰 미설정 시 Origin=Host 검증(브라우저 CSRF)
+}
+fn token_eq() {
+  role: 상수시간 토큰 비교 — 이른 반환 없이 XOR 누적
+}
+fn relay() {
+  role: WebSocket ↔ 데몬 IPC 양방향 중계 — 라인 프레이밍만 알고 내용은 불투명 (데몬이 유일한 해석자). 첫 줄 attach 에 root 와 (있으면) 프론트의 session id 를 실어 보낸다
+}
+fn daemon_conn() {
+  role: 데몬 소켓 접속, 없으면 spawn 후 재시도
+}
+fn control_loop() {
+  role: 백엔드 자체 수명 — 데몬 기동 보장 + 30초 ping 생존 신호
+}

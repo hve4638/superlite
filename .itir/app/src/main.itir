@@ -1,0 +1,5 @@
+role: 앱 기동 — 127.0.0.1:0 bind 로 포트 충돌 원천 차단, 기동마다 새 랜덤 토큰(외부 브라우저의 /ws 접근 차단), 별도 스레드 tokio 런타임에서 relay serve, initialization_script 로 __SUPERLIGHT_WS__ 주입
+
+fn main() {
+  role: root 인자 해석(기본 cwd) → listener bind·토큰 생성 → relay 스레드 기동 → Tauri 창 생성 (주입 스크립트는 프론트 코드 실행 전에 평가돼야 하므로 initialization_script). 숨김 기동은 금지 — WebView2 가 숨김 중 로딩을 미뤄 역효과, 흰 플래시는 창 배경색+인라인 배경으로 방지
+}

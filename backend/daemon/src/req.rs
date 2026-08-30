@@ -191,8 +191,17 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
             // 부팅이 이 호출을 await 하므로 실패 시 앱이 안 뜬다 — exit 1(0건)은 성공이다
             let mut args = vec!["--files"];
             args.extend(RG_EXCLUDE_ARGS);
-            let out = run_rg(root, &args).await?;
-            Ok(json!(out.lines().map(crate::wire_rel).collect::<Vec<_>>()))
+            match run_rg(root, &args).await {
+                Ok(out) => Ok(json!(out.lines().map(crate::wire_rel).collect::<Vec<_>>())),
+                // rg 부재(spawn ENOENT 메시지 — windows/unix 문구가 다르다)에도 앱은 떠야
+                // 한다 — 자체 walk 로 강등. 검색은 여전히 rg 가 필요하다 (에러로 표면화).
+                Err(e) if e.contains("program not found") || e.contains("No such file") => {
+                    let mut files = Vec::new();
+                    walk_files(root, root, &mut files);
+                    Ok(json!(files))
+                }
+                Err(e) => Err(e),
+            }
         }
         "search" => search(root, p).await,
         // git repo 가 아니어도 앱은 떠야 한다 — 빈 상태로 강등
@@ -309,6 +318,31 @@ async fn git_status(root: &Path) -> Result<Value, String> {
         changes.push(json!({"path": path, "kind": kind}));
     }
     Ok(json!({"branch": branch, "head": head, "dirty": !changes.is_empty(), "changes": changes}))
+}
+
+/// rg 부재 시의 listFiles 강등 — RG_EXCLUDE_ARGS 의 basename 글롭 제외와 --hidden 포함을
+/// 흉내 낸 자체 재귀 walk. gitignore 미적용이 rg 경로와의 의도된 차이고, 심링크는
+/// rg 기본값과 같이 추적하지 않는다.
+fn walk_files(root: &Path, dir: &Path, out: &mut Vec<String>) {
+    const EXCLUDED: [&str; 7] =
+        [".git", ".svn", ".hg", ".DS_Store", "Thumbs.db", "node_modules", "bower_components"];
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for ent in rd.flatten() {
+        let name = ent.file_name();
+        let name = name.to_string_lossy();
+        if EXCLUDED.contains(&name.as_ref()) || name.ends_with(".code-search") {
+            continue;
+        }
+        // file_type 은 심링크를 따라가지 않는다 — 심링크 디렉토리 순환 방지
+        let Ok(ft) = ent.file_type() else { continue };
+        if ft.is_dir() {
+            walk_files(root, &ent.path(), out);
+        } else if let Ok(rel) = ent.path().strip_prefix(root) {
+            let parts: Vec<String> =
+                rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+            out.push(parts.join("/"));
+        }
+    }
 }
 
 /// rg 전용 — exit code 계약이 0=매치, 1=무매치(정상), 2+=에러다

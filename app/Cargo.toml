@@ -1,0 +1,14 @@
+[package]
+name = "superlight-app"
+version = "0.1.0"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+superlight-backend = { path = "../backend/relay" }
+superlight-common = { path = "../backend/common" }
+tauri = { version = "2", features = [] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
+getrandom = "0.3"
