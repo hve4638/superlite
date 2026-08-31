@@ -198,6 +198,39 @@ fn attach_os_drop(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
     });
 }
 
+/// 두 번째 실행 수신 (single-instance) — 넘어온 argv·cwd 로 root 를 정해 기존 프로세스에
+/// 새 세션 창을 추가한다. 창들은 대등하므로 기존 창은 건드리지 않는다
+/// ("폴더 인자 실행 → 기존 앱에 새 세션" UX — app-installer 의 "CSL로 열기"가 이 경로를 탄다).
+fn open_second_instance(app: &tauri::AppHandle, argv: Vec<String>, cwd: String) {
+    // 상대 경로 인자는 두 번째 프로세스의 cwd 기준 — join 은 절대 경로 인자를 그대로 쓴다
+    let root = match argv.get(1) {
+        Some(arg) => PathBuf::from(&cwd).join(arg),
+        None => PathBuf::from(&cwd),
+    };
+    // WHY: 별도 스레드 경유 — 이 콜백은 메인 스레드의 플러그인 이벤트 처리 중일 수 있고,
+    //      run_on_main_thread 는 메인 스레드에서 인라인 실행되므로 곧장 부르면 이벤트
+    //      재진입 상태로 webview 창을 만들게 된다 (attach_os_drop 과 같은 회피).
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            // plain: Windows verbatim 루트는 '/' 와이어 경로·자식 cwd 를 깨뜨린다 (common 참조)
+            // 경로 오류는 로그만 — 두 번째 실행의 잘못된 인자가 기존 앱을 죽이면 안 된다
+            match root.canonicalize() {
+                Ok(root) => {
+                    let state = handle.state::<AppState>();
+                    if let Err(e) =
+                        open_workspace(&handle, &state, superlight_common::plain(root))
+                    {
+                        eprintln!("superlight-app: 두 번째 실행 세션 열기 실패: {e}");
+                    }
+                }
+                Err(e) => eprintln!("superlight-app: 두 번째 실행 경로 확인 실패: {e}"),
+            }
+        });
+    });
+}
+
 fn main() {
     let root = std::env::args()
         .nth(1)
@@ -237,6 +270,11 @@ fn main() {
     }
 
     tauri::Builder::default()
+        // WHY: single-instance 는 맨 먼저 등록 — 두 번째 실행이 다른 초기화를 밟기 전에
+        //      argv·cwd 를 첫 프로세스로 넘기고 즉시 종료해야 한다 (공식 권고).
+        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            open_second_instance(app, argv, cwd)
+        }))
         .manage(AppState { ws_url, sessions })
         .invoke_handler(tauri::generate_handler![open_folder])
         .setup(move |app| {

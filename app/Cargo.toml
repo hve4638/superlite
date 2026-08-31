@@ -10,6 +10,8 @@ tauri-build = { version = "2", features = [] }
 superlight-backend = { path = "../backend/relay" }
 superlight-common = { path = "../backend/common" }
 tauri = { version = "2", features = [] }
+# 프로세스 1개 강제 — 두 번째 실행의 argv·cwd 를 첫 프로세스에 전달하고 종료
+tauri-plugin-single-instance = "2"
 tokio = { version = "1", features = ["rt-multi-thread"] }
 getrandom = "0.3"
 # 폴더 선택 dialog — plugin-dialog 대신 rfd 직접 사용 (권한·JS 패키지 추가 없이 커맨드 안에서 끝난다)
