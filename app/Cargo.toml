@@ -14,3 +14,10 @@ tokio = { version = "1", features = ["rt-multi-thread"] }
 getrandom = "0.3"
 # 폴더 선택 dialog — plugin-dialog 대신 rfd 직접 사용 (권한·JS 패키지 추가 없이 커맨드 안에서 끝난다)
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
+
+# OS 드롭 경로 수신 (WebMessageObjects) — tauri/wry 가 쓰는 것과 같은 버전 계열이어야
+# with_webview 로 받은 COM 인터페이스 타입이 일치한다
+[target."cfg(windows)".dependencies]
+webview2-com = "0.38"
+windows-core = "0.61"
+serde_json = "1"

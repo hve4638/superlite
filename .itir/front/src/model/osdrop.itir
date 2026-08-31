@@ -1,0 +1,8 @@
+import { openFile } from './editors'
+import { workbench } from './workbench'
+
+role: OS 파일/폴더 드롭 (앱·WebView2 전용) — DOM 의 File 객체에는 경로가 없으므로 드롭된 File 객체를 chrome.webview 로 native 에 넘기고 (폴더도 File 로 온다 — 종류 판별은 native 가 stat 으로), 폴더는 native 가 세션을 전환하며, 파일은 native 가 돌려준 절대 경로를 여기서 루트 상대화해 연다. 루트 밖 파일은 와이어 절대 경로('/' 구분자)로 그대로 연다 (VS Code 파리티). 브라우저 모드에서는 무동작
+
+export fn initOsDrop() {
+  role: chrome.webview 가 있을 때만 — window 캡처 단계에 dragenter/dragover/drop 등록 ('Files' 타입 드래그 전용이라 내부 DnD 불간섭, monaco 가 OS 드롭을 삼키지 않게 stopPropagation) + native 응답(message) 수신·열기
+}

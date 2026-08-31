@@ -17,6 +17,8 @@ export interface ContextMenuItem {
  */
 export const workbench = reactive({
   workspaceName: '',
+  /** 루트 절대 경로 — OS 드롭 경로 상대화용 (와이어 계약의 path 는 전부 이 기준 상대) */
+  rootPath: '',
 
   sideBarVisible: true,
   sideBarWidth: 300,
@@ -41,6 +43,7 @@ export const workbench = reactive({
 export async function initWorkbench(): Promise<void> {
   const info = await backend.workspace();
   workbench.workspaceName = info.name;
+  workbench.rootPath = info.rootPath;
 }
 
 export function toggleSideBar(): void {

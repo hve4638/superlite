@@ -1,7 +1,7 @@
 // crate::err(main.rs) 참조 — crate:: 는 crate 루트(main.rs 디렉토리) 좌표 '.' 로 정규화된다
 import { err, wire_rel } from '.'
 
-role: RPC 요청 처리 — fs 읽기/쓰기(etag 낙관적 충돌 검사)·stat(내용 없는 경량 etag)·생성/이름변경/삭제, rg 검색, git 상태·커밋. 모든 경로는 safe_join 관문. excludes 는 VS Code 기본값 하드코딩 (설정 시스템 없음)
+role: RPC 요청 처리 — fs 읽기/쓰기(etag 낙관적 충돌 검사)·stat(내용 없는 경량 etag)·생성/이름변경/삭제, rg 검색, git 상태·커밋. 경로는 safe_join 관문 — 단 파일 단건(readFile/stat/writeFile)은 file_path 를 거쳐 절대 경로도 허용한다 (워크스페이스 밖 파일 열기, VS Code 파리티). excludes 는 VS Code 기본값 하드코딩 (설정 시스템 없음)
 
 // 쓰기 계열 RPC(write/create/rename/delete)의 직렬화 락 — etag 검사-쓰기 원자성의 근거
 val WRITE_LOCK
@@ -14,7 +14,10 @@ fn handle_req() {
   role: 메서드 디스패치 — 요청은 태스크로 병렬, 쓰기 경합은 WRITE_LOCK 직렬화
 }
 fn safe_join() {
-  role: 루트 이탈 방지 — 렉시컬 검사 + 심링크 해소 실경로 확인, 모든 RPC 경로의 관문
+  role: 루트 이탈 방지 — 렉시컬 검사 + 심링크 해소 실경로 확인, 트리·조작 계열 RPC 경로의 관문
+}
+fn file_path() {
+  role: 파일 단건 호출(readFile/stat/writeFile)의 경로 해석 — 절대 경로면 '..' 만 거부하고 그대로, 아니면 safe_join. 워크스페이스 밖 파일 열기(OS 드롭)의 관문
 }
 fn file_etag() {
   role: (mtime_ms, size) etag — VS Code 동일 구성, stat 스냅샷

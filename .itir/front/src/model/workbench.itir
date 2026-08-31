@@ -7,7 +7,7 @@ export type ContextMenuItem
 export val workbench
 
 export fn initWorkbench() {
-  role: 워크스페이스 이름 로드 (타이틀 표시)
+  role: 워크스페이스 이름(타이틀 표시)·루트 절대 경로(OS 드롭 상대화용) 로드
 }
 export fn toggleSideBar() {
   role: 사이드바 접기/펴기

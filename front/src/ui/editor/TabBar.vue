@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import type { EditorGroup, Tab } from '../../model/editors';
 import { closeTab, editors, moveTabToGroup, openFile, pinTab, setActiveTab, splitActiveEditor } from '../../model/editors';
 import { editorDrag, endEditorDrag, startTabDrag } from './tabDnd';
@@ -10,6 +10,32 @@ const props = defineProps<{ group: EditorGroup }>();
 function iconName(tab: Tab): string {
   // diff 탭 이름은 "x (Working Tree)" 라서 아이콘은 실제 파일명으로 찾는다
   return tab.path.slice(tab.path.lastIndexOf('/') + 1);
+}
+
+// 같은 이름의 탭이 그룹에 여럿이면 구분용 디렉토리 힌트를 붙인다 (VS Code 동일)
+const descriptions = computed(() => {
+  const byName = new Map<string, Tab[]>();
+  for (const t of props.group.tabs) {
+    byName.set(t.name, [...(byName.get(t.name) ?? []), t]);
+  }
+  const out = new Map<string, string>();
+  for (const tabs of byName.values()) {
+    if (tabs.length < 2) continue;
+    for (const t of tabs) out.set(t.id, dirHint(t.path));
+  }
+  return out;
+});
+
+/** 경로의 디렉토리 부분을 짧게 — 루트 상대는 그대로, 절대 경로는 "D:\…\마지막폴더" 로 축약 */
+function dirHint(path: string): string {
+  const dir = path.slice(0, Math.max(path.lastIndexOf('/'), 0));
+  if (dir === '') return '';
+  const segs = dir.split('/');
+  const winAbs = /^[a-zA-Z]:$/.test(segs[0]);
+  if (!winAbs && segs[0] !== '') return dir;
+  const sep = winAbs ? '\\' : '/';
+  if (segs.length <= 2) return segs.join(sep);
+  return `${segs[0]}${sep}…${sep}${segs[segs.length - 1]}`;
 }
 
 function onClose(tabId: string) {
@@ -85,6 +111,7 @@ function onTabsDrop(e: DragEvent) {
       >
         <FileIcon :name="iconName(tab)" />
         <span class="tab-label">{{ tab.name }}</span>
+        <span v-if="descriptions.get(tab.id)" class="tab-description">{{ descriptions.get(tab.id) }}</span>
         <span class="tab-actions">
           <span class="tab-action" @click.stop="onClose(tab.id)">
             <span class="codicon codicon-close" />
@@ -176,6 +203,14 @@ function onTabsDrop(e: DragEvent) {
 }
 .tab.preview .tab-label {
   font-style: italic;
+}
+/* 이름 중복 구분 힌트 — VS Code label-description 상당 (작고 흐리게) */
+.tab-description {
+  margin-left: 6px;
+  font-size: 11px;
+  line-height: 35px;
+  white-space: nowrap;
+  opacity: 0.7;
 }
 /* 외부 삭제된 파일 — 라벨 취소선 (VS Code monaco-icon-label.strikethrough 동일) */
 .tab.orphaned .tab-label {

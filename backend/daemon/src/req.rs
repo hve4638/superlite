@@ -76,7 +76,7 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
             Ok(Value::Array(out))
         }
         "readFile" => {
-            let path = safe_join(root, req_path(p)?)?;
+            let path = file_path(root, req_path(p)?)?;
             let _g = WRITE_LOCK.lock().await;
             // WHY: stat 이 read 뒤면 etag 가 내용보다 새것일 수 있다 — 그 etag 로 저장하면
             //      최신 내용을 조용히 덮는다. stat 먼저면 최악이 스퓨리어스 충돌(내용 비교
@@ -93,7 +93,7 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
             Ok(json!({"content": content, "etag": file_etag(&meta)}))
         }
         "stat" => {
-            let path = safe_join(root, req_path(p)?)?;
+            let path = file_path(root, req_path(p)?)?;
             // WHY: readFile 과 같은 락 — orphan 재검증의 응답 순서가 쓰기와의 직렬화에 기댄다
             let _g = WRITE_LOCK.lock().await;
             let meta = std::fs::metadata(&path).map_err(err)?;
@@ -106,7 +106,7 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
         "writeFile" => {
             // WHY: content 누락을 "" 로 해석하면 깨진 요청이 파일을 비운다 — 명시적 에러
             let content = p["content"].as_str().ok_or("content 필요")?;
-            let path = safe_join(root, req_path(p)?)?;
+            let path = file_path(root, req_path(p)?)?;
             let _g = WRITE_LOCK.lock().await;
             // 낙관적 충돌 검사 (VS Code FILE_MODIFIED_SINCE 상당). etag 없으면 무조건 쓴다
             // (덮어쓰기·신규 파일). 파일이 사라진 경우는 쓰기로 진행 — 저장이 파일을 되살린다.
@@ -385,6 +385,20 @@ fn req_path(p: &Value) -> Result<&str, String> {
 }
 
 /// 루트 이탈 방지 — 렉시컬 검사에 더해 심링크를 해소한 실제 경로가 루트 안인지 확인한다.
+/// 파일 단건 호출(readFile/stat/writeFile)의 경로 해석 — 루트 상대가 기본이지만 절대
+/// 경로도 허용한다 (워크스페이스 밖 파일 열기: OS 드롭 등, VS Code 파리티). 트리·감시·
+/// 조작(rename/delete 등) 계열은 여전히 safe_join(루트 상대) 전용이다.
+fn file_path(root: &Path, wire: &str) -> Result<PathBuf, String> {
+    let p = Path::new(wire);
+    if p.is_absolute() {
+        if p.components().any(|c| matches!(c, Component::ParentDir)) {
+            return Err(format!("경로 이탈: {wire}"));
+        }
+        return Ok(p.to_path_buf());
+    }
+    safe_join(root, wire)
+}
+
 fn safe_join(root: &Path, rel: &str) -> Result<PathBuf, String> {
     let p = Path::new(rel);
     if p.is_absolute() || p.components().any(|c| matches!(c, Component::ParentDir)) {

@@ -10,13 +10,13 @@ port ThinBackend {
     role: 디렉토리 1층 나열 (트리 lazy 로드 단위). files.exclude 기본값(.git 등 VCS 메타)은 숨긴다 — node_modules 는 보인다
   }
   fn readFile(path, maxBytes?) -> FileContent {
-    role: 파일 내용 + 그 시점 디스크 etag. maxBytes 상한 초과는 읽지 않고 에러 (undo 캡처용)
+    role: 파일 내용 + 그 시점 디스크 etag. maxBytes 상한 초과는 읽지 않고 에러 (undo 캡처용). 루트 상대 외에 절대 경로도 허용 — 워크스페이스 밖 파일 열기 (OS 드롭, VS Code 파리티)
   }
   fn stat(path) -> FileStat {
-    role: 내용 없이 실존·변경만 확인하는 경량 etag 스냅샷 — 정규 파일 전용(디렉토리는 에러). orphan 재검증용
+    role: 내용 없이 실존·변경만 확인하는 경량 etag 스냅샷 — 정규 파일 전용(디렉토리는 에러). orphan 재검증용. readFile 과 같이 절대 경로 허용
   }
   fn writeFile(path, content, etag?) -> WriteResult {
-    role: 저장. etag 제시 시 낙관적 충돌 검사 — stale 이면 미기록으로 conflict 반환, 생략 시 무조건 쓰기
+    role: 저장. etag 제시 시 낙관적 충돌 검사 — stale 이면 미기록으로 conflict 반환, 생략 시 무조건 쓰기. readFile 과 같이 절대 경로 허용
   }
   fn listFiles() -> Path[] {
     role: Quick Open 용 전체 파일 나열 — dotfile 포함, .gitignore·files/search.exclude 제외
