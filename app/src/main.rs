@@ -92,6 +92,8 @@ fn spawn_session_window(
     )
     .title("superlight")
     .inner_size(1200.0, 800.0)
+    // OS 창 헤더 없음 — 창 제어(닫기·최소화·최대화·드래그)는 front TitleBar 가 가진다
+    .decorations(false)
     // WHY: Tauri 의 drag-drop 핸들러가 켜져 있으면 WebView2(Windows)가 HTML5 DnD
     //      이벤트를 가로채 내부 DnD(pane 분할·탭·탐색기 드래그)가 DOM 에 도달하지 않는다.
     .disable_drag_drop_handler()

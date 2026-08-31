@@ -1,0 +1,13 @@
+role: Tauri 창 제어 (앱 전용) — withGlobalTauri 전역(__TAURI__)으로 현재 창의 최소화·최대화 토글·닫기를 노출하고, resize 이벤트로 최대화 상태를 추적한다 (최대화/복원 아이콘 전환용). 브라우저에서는 inApp=false 이고 TitleBar 가 창 제어 버튼 자체를 숨긴다
+
+export val inApp
+export val appWindow
+export fn minimizeWindow() {
+  role: 창 최소화
+}
+export fn toggleMaximizeWindow() {
+  role: 최대화/복원 토글
+}
+export fn closeWindow() {
+  role: 창 닫기 — 세션 창 수명은 native 규칙(마지막 창 닫힘 = 앱 종료)을 따른다
+}
