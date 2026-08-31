@@ -9,5 +9,5 @@ export fn toggleMaximizeWindow() {
   role: 최대화/복원 토글
 }
 export fn closeWindow() {
-  role: 창 닫기 — 세션 창 수명은 native 규칙(마지막 창 닫힘 = 앱 종료)을 따른다
+  role: 창 닫기 — 보이는 세션 창의 close 는 native 가 앱 전체 종료로 확장한다 (배경 탭인 숨은 창만 남지 않게, app/src/main 참조)
 }

@@ -1,5 +1,6 @@
 import { workbench, openContextMenu, closeContextMenu, closeQuickInput, showViewlet, toggleSideBar, togglePanel } from '../model/workbench'
 import { inApp, appWindow, minimizeWindow, toggleMaximizeWindow, closeWindow } from '../model/window'
+import { sessions, ownSession, activateSession, closeSession, addSession, SessionTab } from '../model/sessions'
 import { editors, activeTab, openFile, indentOf, languageLabel } from '../model/editors'
 import { files } from '../model/files'
 import { scm } from '../model/scm'

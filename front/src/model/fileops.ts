@@ -3,112 +3,137 @@
  * 성공 즉시 가까운 로드된 조상을 refreshDir — 자기 조작은 감시 이벤트를 기다리지 않는다
  * (VS Code 의 onDidRunOperation 즉시 반영과 동일. 뒤따라오는 fsChanges 는 중복 리프레시일 뿐).
  */
-import { backend } from './host';
-import { baseName, closePathTabs, remapPaths } from './editors';
-import { loadedDirPaths, parentOf, refreshAllFiles, refreshDir } from './files';
+import type { ThinBackend } from '../backend/types';
+import { ctx } from './ctx';
+import { baseName, type createEditors } from './editors';
+import { type createFiles, parentOf } from './files';
 import { errText, notify } from './notifications';
-import { refreshScm } from './scm';
+import type { createScm } from './scm';
 
 /** undo-of-delete 의 내용 캡처 상한 (VS Code 동일 5MB) — 넘으면 undo 없는 삭제 */
 const UNDO_CAPTURE_MAX = 5 * 1024 * 1024;
 
 const swallow = (p: Promise<unknown>): void => void p.catch(() => {});
 
-/** 중첩 생성(a/b/c.ts)의 부모는 미로드일 수 있다 — 리프레시는 로드된 조상에서 시작해야 보인다 */
-function nearestLoaded(dir: string): string {
-  const loaded = new Set(loadedDirPaths());
-  let d = dir;
-  while (d !== '' && !loaded.has(d)) d = parentOf(d);
-  return d;
-}
+/** 세션별 파일 조작 모듈 — undo 스택이 세션에 묶인다 */
+export function createFileops(
+  backend: ThinBackend,
+  editorsM: ReturnType<typeof createEditors>,
+  filesM: ReturnType<typeof createFiles>,
+  scmM: ReturnType<typeof createScm>,
+) {
+  const { closePathTabs, remapPaths } = editorsM;
+  const { loadedDirPaths, refreshAllFiles, refreshDir } = filesM;
+  const { refreshScm } = scmM;
 
-// ponytail: 디렉토리 rename 시 하위 펼침 상태는 잃는다 — 새 경로 노드는 새로 로드된다
-async function refreshAfter(paths: string[]): Promise<void> {
-  const dirs = [...new Set(paths.map((p) => nearestLoaded(parentOf(p))))];
-  await Promise.all(dirs.map((d) => refreshDir(d)));
-  swallow(refreshAllFiles());
-  swallow(refreshScm());
-}
+  /** 중첩 생성(a/b/c.ts)의 부모는 미로드일 수 있다 — 리프레시는 로드된 조상에서 시작해야 보인다 */
+  function nearestLoaded(dir: string): string {
+    const loaded = new Set(loadedDirPaths());
+    let d = dir;
+    while (d !== '' && !loaded.has(d)) d = parentOf(d);
+    return d;
+  }
 
-/** ponytail: 스택 하나, redo 없음, 폴더 삭제는 미등록 — VS Code 파일 조작 undo 의 최소판 */
-const undoStack: Array<() => Promise<void>> = [];
+  // ponytail: 디렉토리 rename 시 하위 펼침 상태는 잃는다 — 새 경로 노드는 새로 로드된다
+  async function refreshAfter(paths: string[]): Promise<void> {
+    const dirs = [...new Set(paths.map((p) => nearestLoaded(parentOf(p))))];
+    await Promise.all(dirs.map((d) => refreshDir(d)));
+    swallow(refreshAllFiles());
+    swallow(refreshScm());
+  }
 
-// raw* 는 undo 를 쌓지 않는다 — undo 실행이 다시 undo 를 쌓으면 Ctrl+Z 가 스택을
-// 내려가는 대신 마지막 조작만 핑퐁한다
-async function rawDelete(path: string): Promise<void> {
-  await backend.delete(path);
-  closePathTabs(path);
-  await refreshAfter([path]);
-}
+  /** ponytail: 스택 하나, redo 없음, 폴더 삭제는 미등록 — VS Code 파일 조작 undo 의 최소판 */
+  const undoStack: Array<() => Promise<void>> = [];
 
-async function rawRename(from: string, to: string): Promise<void> {
-  await backend.rename(from, to);
-  remapPaths(from, to);
-  await refreshAfter([from, to]);
-}
+  // raw* 는 undo 를 쌓지 않는다 — undo 실행이 다시 undo 를 쌓으면 Ctrl+Z 가 스택을
+  // 내려가는 대신 마지막 조작만 핑퐁한다
+  async function rawDelete(path: string): Promise<void> {
+    await backend.delete(path);
+    closePathTabs(path);
+    await refreshAfter([path]);
+  }
 
-export async function createFile(path: string): Promise<void> {
-  await backend.createFile(path);
-  undoStack.push(() => rawDelete(path));
-  await refreshAfter([path]);
-}
+  async function rawRename(from: string, to: string): Promise<void> {
+    await backend.rename(from, to);
+    remapPaths(from, to);
+    await refreshAfter([from, to]);
+  }
 
-export async function createDir(path: string): Promise<void> {
-  await backend.createDir(path);
-  undoStack.push(() => rawDelete(path));
-  await refreshAfter([path]);
-}
+  async function createFile(path: string): Promise<void> {
+    await backend.createFile(path);
+    undoStack.push(() => rawDelete(path));
+    await refreshAfter([path]);
+  }
 
-export async function renameEntry(from: string, to: string): Promise<void> {
-  await rawRename(from, to);
-  undoStack.push(() => rawRename(to, from));
-}
+  async function createDir(path: string): Promise<void> {
+    await backend.createDir(path);
+    undoStack.push(() => rawDelete(path));
+    await refreshAfter([path]);
+  }
 
-export async function deleteEntry(path: string, kind: 'file' | 'directory'): Promise<void> {
-  // 삭제 전에 내용을 캡처해야 undo 로 되살릴 수 있다 — 바이너리(read 실패)·대용량·폴더는
-  // 캡처 없이 지우고 undo 미등록 (VS Code 동일: 폴더·5MB 초과는 undo 불가)
-  let captured: string | null = null;
-  if (kind === 'file') {
+  async function renameEntry(from: string, to: string): Promise<void> {
+    await rawRename(from, to);
+    undoStack.push(() => rawRename(to, from));
+  }
+
+  async function deleteEntry(path: string, kind: 'file' | 'directory'): Promise<void> {
+    // 삭제 전에 내용을 캡처해야 undo 로 되살릴 수 있다 — 바이너리(read 실패)·대용량·폴더는
+    // 캡처 없이 지우고 undo 미등록 (VS Code 동일: 폴더·5MB 초과는 undo 불가)
+    let captured: string | null = null;
+    if (kind === 'file') {
+      try {
+        // maxBytes: 상한 초과 파일을 읽어 나른 뒤 버리는 낭비 방지 — 백엔드가 stat 로 거른다
+        const { content } = await backend.readFile(path, { maxBytes: UNDO_CAPTURE_MAX });
+        captured = content;
+      } catch {
+        /* 캡처 실패(바이너리·대용량) — undo 만 포기 */
+      }
+    }
+    // try 는 delete RPC 만 감싼다 — 성공한 삭제의 후처리(리프레시) 실패가
+    // "Failed to delete" 로 위장하고 undo 등록까지 건너뛰면 안 된다
     try {
-      // maxBytes: 상한 초과 파일을 읽어 나른 뒤 버리는 낭비 방지 — 백엔드가 stat 로 거른다
-      const { content } = await backend.readFile(path, { maxBytes: UNDO_CAPTURE_MAX });
-      captured = content;
-    } catch {
-      /* 캡처 실패(바이너리·대용량) — undo 만 포기 */
+      await backend.delete(path);
+    } catch (e) {
+      notify('error', `Failed to delete '${baseName(path)}': ${errText(e)}`);
+      return;
+    }
+    closePathTabs(path);
+    await refreshAfter([path]);
+    if (captured !== null) {
+      const content = captured;
+      undoStack.push(async () => {
+        // WHY: 스택에 쌓인 사이 외부가 같은 경로를 만들었을 수 있다 — 일치할 리 없는 etag 를
+        //      제시하면 데몬 검사가 "없으면 생성(부활), 있으면 conflict 로 미기록" 이 된다
+        const r = await backend.writeFile(path, content, '0-0');
+        if (r.conflict) {
+          notify('warning', `Undo skipped: a file already exists at '${baseName(path)}'`);
+          return;
+        }
+        await refreshAfter([path]);
+      });
     }
   }
-  // try 는 delete RPC 만 감싼다 — 성공한 삭제의 후처리(리프레시) 실패가
-  // "Failed to delete" 로 위장하고 undo 등록까지 건너뛰면 안 된다
-  try {
-    await backend.delete(path);
-  } catch (e) {
-    notify('error', `Failed to delete '${baseName(path)}': ${errText(e)}`);
-    return;
+
+  /** 마지막 파일 조작 역연산 (탐색기 포커스 Ctrl+Z). 실패하면 해당 항목은 버려진다. */
+  async function undoFileOp(): Promise<void> {
+    const undo = undoStack.pop();
+    if (!undo) return;
+    try {
+      await undo();
+    } catch (e) {
+      notify('error', `Failed to undo: ${errText(e)}`);
+    }
   }
-  closePathTabs(path);
-  await refreshAfter([path]);
-  if (captured !== null) {
-    const content = captured;
-    undoStack.push(async () => {
-      // WHY: 스택에 쌓인 사이 외부가 같은 경로를 만들었을 수 있다 — 일치할 리 없는 etag 를
-      //      제시하면 데몬 검사가 "없으면 생성(부활), 있으면 conflict 로 미기록" 이 된다
-      const r = await backend.writeFile(path, content, '0-0');
-      if (r.conflict) {
-        notify('warning', `Undo skipped: a file already exists at '${baseName(path)}'`);
-        return;
-      }
-      await refreshAfter([path]);
-    });
-  }
+
+  return { createFile, createDir, renameEntry, deleteEntry, undoFileOp };
 }
 
-/** 마지막 파일 조작 역연산 (탐색기 포커스 Ctrl+Z). 실패하면 해당 항목은 버려진다. */
-export async function undoFileOp(): Promise<void> {
-  const undo = undoStack.pop();
-  if (!undo) return;
-  try {
-    await undo();
-  } catch (e) {
-    notify('error', `Failed to undo: ${errText(e)}`);
-  }
-}
+// ---- 활성 세션 전달 shim
+
+export const createFile = (path: string): Promise<void> => ctx().fileops.createFile(path);
+export const createDir = (path: string): Promise<void> => ctx().fileops.createDir(path);
+export const renameEntry = (from: string, to: string): Promise<void> =>
+  ctx().fileops.renameEntry(from, to);
+export const deleteEntry = (path: string, kind: 'file' | 'directory'): Promise<void> =>
+  ctx().fileops.deleteEntry(path, kind);
+export const undoFileOp = (): Promise<void> => ctx().fileops.undoFileOp();

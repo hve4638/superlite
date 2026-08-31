@@ -7,7 +7,6 @@
 //! bin(main.rs)은 env 를 해석해 dist 정적 서빙을 얹은 단독 웹서버로 뜨고,
 //! Tauri 앱(app/)은 front 를 자산으로 번들하므로 dist 없이 in-process 로 serve 를 부른다.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -34,16 +33,20 @@ type DaemonStream = tokio::net::windows::named_pipe::NamedPipeClient;
 pub enum SessionRoots {
     /// 모든 세션이 root 하나를 쓴다 — bin(기동 인자)·종전 동작
     Fixed(PathBuf),
-    /// 등록된 세션만 허용 — Tauri 앱이 dialog·드롭·argv 로 얻은 root 를 등록한다
-    Registry(Arc<Mutex<HashMap<String, PathBuf>>>),
+    /// 등록된 세션만 허용 — Tauri 앱이 dialog·드롭·argv 로 얻은 root 를 등록한다.
+    /// Vec 인 이유: 등록 순서가 곧 세션 탭 순서다 — 순서의 단일 출처를 레지스트리에 둔다
+    /// (세션 수가 한 자리라 조회는 선형 탐색으로 충분)
+    Registry(Arc<Mutex<Vec<(String, PathBuf)>>>),
 }
 
 impl SessionRoots {
     fn resolve(&self, session: Option<&str>) -> Option<PathBuf> {
         match self {
             SessionRoots::Fixed(root) => Some(root.clone()),
-            SessionRoots::Registry(map) => {
-                map.lock().unwrap().get(session?).cloned()
+            SessionRoots::Registry(list) => {
+                let session = session?;
+                let list = list.lock().unwrap();
+                list.iter().find(|(id, _)| id == session).map(|(_, root)| root.clone())
             }
         }
     }

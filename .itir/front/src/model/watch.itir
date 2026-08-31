@@ -1,17 +1,19 @@
-import { FsChange } from '../backend/types'
-import { backend } from './host'
-import { editors, reloadDocFromDisk, setOrphaned } from './editors'
-import { loadedDirPaths, refreshAllFiles, refreshDir } from './files'
-import { refreshScm } from './scm'
-import { autoRerunSearch } from './search'
+import { ctx, viewOf } from './ctx'
+import { FsChange, ThinBackend } from '../backend/types'
+import { createEditors } from './editors'
+import { createFiles, parentOf } from './files'
+import { createScm } from './scm'
+import { createSearch } from './search'
 
-role: 데몬 fsChanges 배치 소비 — 소비자별 고정 창 디바운스 (에디터 100ms · 탐색기 500ms · git 1000ms · 검색 250ms), 창 포커스 시 전체 리프레시 안전망. 연결 상태(재접속 재동기화)도 여기서 소비한다. 열린 문서의 삭제 이벤트는 실존 재검증(깨끗한 문서는 readFile 재로드 겸용, dirty 는 내용이 적용될 일이 없어 경량 stat)을 거쳐 orphan 표시로 잇는다 (가짜 삭제 이벤트 방어 — VS Code 동일). orphan 경로는 dirty 여도 후속 이벤트에 검사해 재생성 해제를 보장하고, 끊김 중 검사 실패는 orphan 으로 세우지 않는다
+role: 데몬 fsChanges 배치 소비 — 소비자별 고정 창 디바운스 (에디터 100ms · 탐색기 500ms · git 1000ms · 검색 250ms), 창 포커스 시 전체 리프레시 안전망. 연결 상태(재접속 재동기화)도 여기서 소비한다. 열린 문서의 삭제 이벤트는 실존 재검증(깨끗한 문서는 readFile 재로드 겸용, dirty 는 내용이 적용될 일이 없어 경량 stat)을 거쳐 orphan 표시로 잇는다 (가짜 삭제 이벤트 방어 — VS Code 동일). orphan 경로는 dirty 여도 후속 이벤트에 검사해 재생성 해제를 보장하고, 끊김 중 검사 실패는 orphan 으로 세우지 않는다. 세션별 팩토리(createWatch) — 이벤트가 자기 세션의 files·editors·scm·search 인스턴스에만 반영돼, 배경 세션의 변경이 활성 세션 상태를 오염시키지 않는다
 
 // 백엔드 연결 상태 — 상태바 표시용. 재연결 시 전체 리프레시로 끊김 중 놓친 변경을 재동기화
 export val connection
 
+export fn createWatch(backend, editorsM, filesM, scmM, searchM) {
+  role: 세션별 감시 소비 모듈 생성 — 디바운스 소비자(누적 버퍼·타이머)가 세션마다 독립이다
+}
 export fn initWatch() {
   role: onFsChanges·onConnection 구독 + 포커스 안전망 등록 (mock 은 구독 자체가 없어 no-op)
-  depends: { reloadDocFromDisk, refreshDir, refreshScm }
   effects: { 외부 변경이 열린 문서·트리·SCM 에 흘러든다 }
 }

@@ -64,6 +64,8 @@ export class WsBackend implements ThinBackend {
   private sessionLostHandler: ((deadTerms: number[]) => void) | null = null;
   /** 이번 연결이 재연결인가 — attach 응답(id 0)의 resumed 해석에 쓴다 */
   private isReconnect = false;
+  /** dispose 됨 — 재연결 루프를 멈춘다 (세션 탭 닫기 등 의도적 종료) */
+  private disposed = false;
 
   constructor(url: string, session?: string) {
     // 세션 id — 재접속 시 데몬이 같은 세션(터미널)을 이어 붙이는 키. 주입(Tauri —
@@ -79,6 +81,7 @@ export class WsBackend implements ThinBackend {
   }
 
   private connect(): void {
+    if (this.disposed) return; // dispose 후 도착한 재시도 타이머
     this.ws = new WebSocket(this.url);
     this.ws.onopen = () => {
       this.opened = true;
@@ -201,6 +204,7 @@ export class WsBackend implements ThinBackend {
       else p.resolve(msg.result);
     };
     this.ws.onclose = () => {
+      if (this.disposed) return; // 의도적 종료 — 실패 통보·재연결 모두 없음 (dispose 가 정리했다)
       // WHY: 재시도 실패도 close 를 쏜다(브라우저 1006) — 열렸던 연결의 close 일 때만
       //      reject 해야 한다. 안 그러면 끊김 중 만들어져 큐(미전송)에 있는 요청이
       //      "실패" 통보 후 재연결 때 조용히 전송돼 유령 쓰기가 된다 (응답은 버려져
@@ -216,6 +220,15 @@ export class WsBackend implements ThinBackend {
       // ponytail: 고정 1초 재시도, 무한 — 백오프·포기는 필요해지면
       setTimeout(() => this.connect(), 1000);
     };
+  }
+
+  /** 세션 탭 닫기 등 의도적 종료 — 재연결을 멈추고 연결·대기 요청을 정리한다 */
+  dispose(): void {
+    this.disposed = true;
+    for (const p of this.pending.values()) p.reject(new Error('세션이 닫혔다'));
+    this.pending.clear();
+    this.queue.length = 0;
+    this.ws.close();
   }
 
   private send(obj: unknown): void {

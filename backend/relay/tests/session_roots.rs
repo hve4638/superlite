@@ -2,7 +2,6 @@
 //! check*.mjs 는 bin(Fixed) 경로만 지나므로 Registry 는 여기서 잡는다.
 //! 데몬은 안 띄운다 — upgrade 응답(101/403)까지만 본다 (attach 이후는 check 스크립트 몫).
 
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -33,11 +32,8 @@ async fn spawn_serve(roots: superlight_backend::SessionRoots) -> u16 {
 
 #[tokio::test]
 async fn registry_rejects_unknown_and_accepts_registered() {
-    let map = Arc::new(Mutex::new(HashMap::from([(
-        "s1".to_string(),
-        std::env::temp_dir(),
-    )])));
-    let port = spawn_serve(superlight_backend::SessionRoots::Registry(map)).await;
+    let list = Arc::new(Mutex::new(vec![("s1".to_string(), std::env::temp_dir())]));
+    let port = spawn_serve(superlight_backend::SessionRoots::Registry(list)).await;
 
     // 미등록 세션·세션 부재 — root 를 해석할 수 없으므로 관문에서 거부
     assert!(ws_status(port, "?tkn=t0k&session=zz").await.contains("403"));

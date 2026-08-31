@@ -1,0 +1,18 @@
+role: 워크스페이스 세션 탭 (앱 전용) — 목록·순서의 단일 출처는 native 세션 레지스트리고 여기는 그 사영 (list_sessions 초기 로드 + sessions-changed 이벤트 구독, 숨김 해제 시 재조회). 활성 탭 = 이 창 자신의 세션 (__SUPERLIGHT_SESSION__) — 세션마다 창이 있고 전환·닫기·추가의 실행은 전부 native invoke 다. 브라우저(__TAURI__ 없음)에서는 빈 목록이고 TitleBar 가 탭 스트립을 그리지 않는다
+
+export type SessionTab
+export val ownSession
+export val sessions
+
+export fn initSessions() {
+  role: 초기 목록 로드 + 이벤트 구독 배선 — 브라우저에서는 무동작
+}
+export fn activateSession(id) {
+  role: 탭 전환 — native 가 대상 세션 창을 이 자리에 보이고 이 창을 숨긴다
+}
+export fn closeSession(id) {
+  role: 탭 닫기 = 세션 종료 — native 가 레지스트리 제거·창 close, 데몬 터미널은 grace 후 회수
+}
+export fn addSession() {
+  role: 탭 추가 — 폴더 선택 dialog 로 새 세션 (폴더 열기 커맨드와 같은 native 경로)
+}

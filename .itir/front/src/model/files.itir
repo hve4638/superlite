@@ -1,13 +1,16 @@
-import { backend } from './host'
-import { DirEntry } from '../backend/types'
+import { ctx, viewOf } from './ctx'
+import { DirEntry, ThinBackend } from '../backend/types'
 
-role: 탐색기 파일 트리 — lazy 디렉토리 로드, 외부 변경 시 로드된 디렉토리만 병합 리프레시
+role: 탐색기 파일 트리 — lazy 디렉토리 로드, 외부 변경 시 로드된 디렉토리만 병합 리프레시. 세션별 팩토리(createFiles) + 활성 세션 전달 shim — UI 는 종전 이름 그대로 활성 세션에 작용한다
 
 export type TreeNode
 export val files
 
+export fn createFiles(backend) {
+  role: 세션별 트리 모듈 생성 — 트리·펼침·로딩 상태가 팩토리 클로저에 산다 (한 페이지에 세션 여럿)
+}
 export fn parentOf(path) {
-  role: 부모 디렉토리 경로 (루트는 '')
+  role: 부모 디렉토리 경로 (루트는 '') — 순수 함수, 세션 무관
 }
 export fn initFiles() {
   role: 루트 나열로 트리 초기화

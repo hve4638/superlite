@@ -1,0 +1,17 @@
+import { ThinBackend } from '../backend/types'
+import { createEditors } from './editors'
+import { createFileops } from './fileops'
+import { createFiles } from './files'
+import { createScm } from './scm'
+import { createSearch } from './search'
+import { createTerminals } from './terminal'
+import { createWatch } from './watch'
+import { createWorkbench } from './workbench'
+
+role: 세션 컨텍스트 조립 — 세션(워크스페이스) 하나가 쓰는 model 모듈 인스턴스 일습을 백엔드 연결 하나에 묶는다. 세션 탭 = 이 컨텍스트 여럿이 한 페이지에 사는 것 (전환은 ctx.ts 의 activeCtx 교체). 배경 세션도 연결·이벤트 소비가 살아 있어 에디터·터미널 상태가 전환에도 온전히 유지된다
+
+export type SessionCtx
+
+export fn createSessionCtx(backend) -> SessionCtx {
+  role: 모듈 팩토리들을 의존 순서(files·editors → scm·search·workbench → terminals·fileops → watch)로 생성해 컨텍스트로 묶는다
+}

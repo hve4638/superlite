@@ -1,14 +1,18 @@
-import { backend } from './host'
+import { ctx } from './ctx'
+import { ThinBackend } from '../backend/types'
 import { notify } from './notifications'
-import { refreshDir, refreshAllFiles, loadedDirPaths, parentOf } from './files'
-import { remapPaths, closePathTabs, baseName } from './editors'
-import { refreshScm } from './scm'
+import { createFiles, parentOf } from './files'
+import { createEditors, baseName } from './editors'
+import { createScm } from './scm'
 
-role: 파일 조작(생성·이름변경·삭제) + 파일 한정 undo 스택. 성공 즉시 로드된 최근접 조상을 refreshDir — 감시 이벤트를 기다리지 않는다 (VS Code 자기 조작 즉시 반영과 동일)
+role: 파일 조작(생성·이름변경·삭제) + 파일 한정 undo 스택. 성공 즉시 로드된 최근접 조상을 refreshDir — 감시 이벤트를 기다리지 않는다 (VS Code 자기 조작 즉시 반영과 동일). 세션별 팩토리(createFileops) + 활성 세션 전달 shim — undo 스택이 세션에 묶여 다른 탭의 조작을 되돌리지 않는다
 
 // 삭제 undo 의 내용 캡처 상한(5MB) — 초과·바이너리는 캡처 없이 삭제만
 val UNDO_CAPTURE_MAX
 
+export fn createFileops(backend, editorsM, filesM, scmM) {
+  role: 세션별 파일 조작 모듈 생성 — 리프레시·탭 정리가 같은 세션의 인스턴스로 간다
+}
 export fn createFile(path) {
   role: 배타적 생성 후 부모 리프레시. undo = delete
 }
@@ -17,11 +21,9 @@ export fn createDir(path) {
 }
 export fn renameEntry(from, to) {
   role: 이름 변경 + 열린 문서/탭 경로 재매핑 (etag 유지). undo = 역방향 rename
-  depends: { remapPaths }
 }
 export fn deleteEntry(path, kind) {
   role: 삭제 + 해당 경로(하위 포함) 탭 닫기. 파일이면 5MB 내에서 내용 캡처를 시도해 undo = 재생성 — 캡처 불가(바이너리·대용량)와 디렉토리는 undo 없음. 삭제 실패는 notify 후 삼킨다
-  depends: { closePathTabs }
 }
 export fn undoFileOp() {
   role: 마지막 조작 역연산 (탐색기 포커스 Ctrl+Z) — 실패는 notify, 외부 파일 보호로 물러난 재생성은 warning notify

@@ -1,6 +1,8 @@
 import { MockBackend } from '../backend/mock';
 import { WsBackend } from '../backend/ws';
 import type { ThinBackend } from '../backend/types';
+import { activeCtx, ctx, viewOf } from './ctx';
+import { createSessionCtx } from './session';
 
 // WHY: 백엔드 구현체 선택이 일어나는 유일한 지점.
 //      ?ws → 백엔드 /ws (같은 오리진 — 개발은 vite 프록시, 프론트는 데몬 주소를 모른다).
@@ -20,7 +22,7 @@ if (tkn !== null) wsQuery.set('tkn', tkn);
 const folder = params.get('folder');
 if (folder !== null) wsQuery.set('folder', folder);
 const wsQs = wsQuery.toString();
-export const backend: ThinBackend = injected
+const bootBackend: ThinBackend = injected
   ? new WsBackend(injected, injectedSession)
   : params.has('ws') || tkn !== null
     ? new WsBackend(
@@ -28,10 +30,17 @@ export const backend: ThinBackend = injected
       )
     : new MockBackend();
 
+// 부팅 세션 — 페이지는 세션 컨텍스트를 여럿 들 수 있으나(세션 탭) 부팅 시점엔 하나다.
+// 모듈 평가 시점에 세운다 — model shim 을 쓰는 모든 모듈(commands 등)보다 앞서야 한다
+activeCtx.value = createSessionCtx(bootBackend);
+
+/** 활성 세션의 백엔드 — 종전 싱글턴 이름 유지 (monaco·QuickInput·commands 가 쓴다) */
+export const backend: ThinBackend = viewOf(() => ctx().backend);
+
 /**
  * '폴더 열기' 확정의 단일 진입점 — 환경 분기가 여기 숨어 퀵인풋은 환경을 모른다.
- * Tauri 는 native 커맨드 open_folder_path invoke (canonicalize·검증·세션 전환은
- * native 소유 — ws docs/decision/web-folder-open.md 개정), 웹은 같은 페이지 URL 에서
+ * Tauri 는 native 커맨드 open_folder_path invoke — 새 세션 탭 추가 (canonicalize·검증·
+ * 세션 등록은 native 소유 — ws docs/decision/web-folder-open.md 개정), 웹은 같은 페이지 URL 에서
  * ?folder= 만 바꾼 주소로 이동한다. 새 페이지 로드 = 새 세션 (세션 전환의 브라우저
  * 형태 — 브라우저 탭이 곧 대등한 창). mock 은 무동작.
  */

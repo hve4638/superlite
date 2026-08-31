@@ -1,7 +1,7 @@
 import { reactive } from '@vue/reactivity';
-import { backend } from './host';
-import type { GitChangeKind } from '../backend/types';
-import { openDiff, openFile } from './editors';
+import type { GitChangeKind, ThinBackend } from '../backend/types';
+import { ctx, viewOf } from './ctx';
+import type { createEditors } from './editors';
 import { errText, notify } from './notifications';
 
 export interface ScmChange {
@@ -11,56 +11,73 @@ export interface ScmChange {
   kind: GitChangeKind;
 }
 
-export const scm = reactive({
-  branch: '',
-  dirty: false,
-  changes: [] as ScmChange[],
-  commitMessage: '',
-  /** HEAD 커밋 해시 — diff original 캐시 무효화 키. 백엔드가 주므로 앱 밖 커밋도 잡는다 */
-  head: '',
-});
+/** 세션별 SCM 모듈 — git 상태·커밋이 세션의 backend·editors 에 묶인다 */
+export function createScm(backend: ThinBackend, editorsM: ReturnType<typeof createEditors>) {
+  const { openDiff, openFile } = editorsM;
 
-let refreshSeq = 0;
-
-export async function refreshScm(): Promise<void> {
-  // WHY: 데몬이 요청을 병렬 처리해 겹친 gitStatus 가 역순으로 완료될 수 있다 — 낡은 응답이
-  //      head 를 과거로 되돌리면 stale diff 캐시가 되살아나므로 마지막 발행분만 반영한다
-  const seq = ++refreshSeq;
-  const status = await backend.gitStatus();
-  if (seq !== refreshSeq) return;
-  scm.branch = status.branch;
-  scm.head = status.head;
-  scm.dirty = status.dirty;
-  scm.changes = status.changes.map((c) => {
-    const slash = c.path.lastIndexOf('/');
-    return {
-      path: c.path,
-      name: c.path.slice(slash + 1),
-      dir: slash === -1 ? '' : c.path.slice(0, slash),
-      kind: c.kind,
-    };
+  const scm = reactive({
+    branch: '',
+    dirty: false,
+    changes: [] as ScmChange[],
+    commitMessage: '',
+    /** HEAD 커밋 해시 — diff original 캐시 무효화 키. 백엔드가 주므로 앱 밖 커밋도 잡는다 */
+    head: '',
   });
-}
 
-/** 변경 파일 클릭 → diff (untracked 는 diff 대상이 없으므로 파일로) */
-export async function openChange(change: ScmChange): Promise<void> {
-  if (change.kind === 'untracked' || change.kind === 'added') {
-    await openFile(change.path, { preview: true });
-  } else {
-    await openDiff(change.path);
-  }
-}
+  let refreshSeq = 0;
 
-export async function commit(): Promise<void> {
-  if (!scm.commitMessage.trim() || scm.changes.length === 0) return;
-  try {
-    await backend.gitCommit(scm.commitMessage);
-  } catch (e) {
-    notify('error', `Failed to commit: ${errText(e)}`);
-    return;
+  async function refreshScm(): Promise<void> {
+    // WHY: 데몬이 요청을 병렬 처리해 겹친 gitStatus 가 역순으로 완료될 수 있다 — 낡은 응답이
+    //      head 를 과거로 되돌리면 stale diff 캐시가 되살아나므로 마지막 발행분만 반영한다
+    const seq = ++refreshSeq;
+    const status = await backend.gitStatus();
+    if (seq !== refreshSeq) return;
+    scm.branch = status.branch;
+    scm.head = status.head;
+    scm.dirty = status.dirty;
+    scm.changes = status.changes.map((c) => {
+      const slash = c.path.lastIndexOf('/');
+      return {
+        path: c.path,
+        name: c.path.slice(slash + 1),
+        dir: slash === -1 ? '' : c.path.slice(0, slash),
+        kind: c.kind,
+      };
+    });
   }
-  scm.commitMessage = '';
-  await refreshScm(); // 새 head 가 여기서 들어온다 — 수동 무효화 불필요
+
+  /** 변경 파일 클릭 → diff (untracked 는 diff 대상이 없으므로 파일로) */
+  async function openChange(change: ScmChange): Promise<void> {
+    if (change.kind === 'untracked' || change.kind === 'added') {
+      await openFile(change.path, { preview: true });
+    } else {
+      await openDiff(change.path);
+    }
+  }
+
+  async function commit(): Promise<void> {
+    if (!scm.commitMessage.trim() || scm.changes.length === 0) return;
+    try {
+      await backend.gitCommit(scm.commitMessage);
+    } catch (e) {
+      notify('error', `Failed to commit: ${errText(e)}`);
+      return;
+    }
+    scm.commitMessage = '';
+    await refreshScm(); // 새 head 가 여기서 들어온다 — 수동 무효화 불필요
+  }
+
+  /** path 의 git 데코레이션 (explorer 용). 디렉토리는 하위 변경 여부만 본다. */
+  function decorationFor(path: string, isDir: boolean): { letter: string; color: string } | null {
+    if (isDir) {
+      const hit = scm.changes.find((c) => c.path.startsWith(`${path}/`));
+      return hit ? { letter: '', color: CHANGE_COLOR[hit.kind] } : null;
+    }
+    const hit = scm.changes.find((c) => c.path === path);
+    return hit ? { letter: CHANGE_LETTER[hit.kind], color: CHANGE_COLOR[hit.kind] } : null;
+  }
+
+  return { scm, refreshScm, openChange, commit, decorationFor };
 }
 
 export const CHANGE_LETTER: Record<GitChangeKind, string> = {
@@ -75,12 +92,11 @@ export const CHANGE_COLOR: Record<GitChangeKind, string> = {
   added: '--vscode-gitDecoration-addedResourceForeground',
 };
 
-/** path 의 git 데코레이션 (explorer 용). 디렉토리는 하위 변경 여부만 본다. */
-export function decorationFor(path: string, isDir: boolean): { letter: string; color: string } | null {
-  if (isDir) {
-    const hit = scm.changes.find((c) => c.path.startsWith(`${path}/`));
-    return hit ? { letter: '', color: CHANGE_COLOR[hit.kind] } : null;
-  }
-  const hit = scm.changes.find((c) => c.path === path);
-  return hit ? { letter: CHANGE_LETTER[hit.kind], color: CHANGE_COLOR[hit.kind] } : null;
-}
+// ---- 활성 세션 전달 shim
+
+export const scm = viewOf(() => ctx().scm.scm);
+export const refreshScm = (): Promise<void> => ctx().scm.refreshScm();
+export const openChange = (change: ScmChange): Promise<void> => ctx().scm.openChange(change);
+export const commit = (): Promise<void> => ctx().scm.commit();
+export const decorationFor = (path: string, isDir: boolean): { letter: string; color: string } | null =>
+  ctx().scm.decorationFor(path, isDir);

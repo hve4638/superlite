@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue';
 import { workbench, toggleSideBar, togglePanel } from '../model/workbench';
 import {
   inApp,
@@ -7,13 +8,65 @@ import {
   toggleMaximizeWindow,
   closeWindow,
 } from '../model/window';
+import {
+  sessions,
+  ownSession,
+  activateSession,
+  closeSession,
+  addSession,
+  type SessionTab,
+} from '../model/sessions';
+
+// 같은 이름(루트 basename)의 세션이 여럿이면 부모 디렉토리 힌트로 구분한다 (에디터 탭과 같은 규칙)
+const descriptions = computed(() => {
+  const byName = new Map<string, SessionTab[]>();
+  for (const t of sessions.list) byName.set(t.name, [...(byName.get(t.name) ?? []), t]);
+  const out = new Map<string, string>();
+  for (const tabs of byName.values()) {
+    if (tabs.length < 2) continue;
+    for (const t of tabs) out.set(t.id, parentHint(t.root));
+  }
+  return out;
+});
+
+/** 루트의 부모 디렉토리명 — root 는 native 경로라 구분자가 OS 마다 다르다 */
+function parentHint(root: string): string {
+  const sep = root.includes('\\') ? '\\' : '/';
+  const segs = root.split(sep).filter((s) => s !== '');
+  return segs.length >= 2 ? segs[segs.length - 2] : sep;
+}
 </script>
 
 <template>
   <!-- data-tauri-drag-region 은 이벤트 target 에만 적용된다 — 드래그할 빈 영역마다 직접 붙인다 -->
   <div class="titlebar" data-tauri-drag-region>
-    <!-- 중앙: 추후 워크스페이스 세션 탭 자리 (decision/workspace-session-tabs.md) — 비워둔다 -->
-    <div class="titlebar-center" data-tauri-drag-region />
+    <!-- 중앙: 워크스페이스 세션 탭 (decision/workspace-session-tabs.md) — 탭 밖 여백은 드래그 영역 -->
+    <div class="titlebar-center" data-tauri-drag-region>
+      <div v-if="inApp && sessions.list.length" class="session-tabs">
+        <div
+          v-for="tab in sessions.list"
+          :key="tab.id"
+          class="session-tab"
+          :class="{ active: tab.id === ownSession }"
+          :title="tab.root"
+          @click="activateSession(tab.id)"
+        >
+          <span class="session-name">{{ tab.name }}</span>
+          <span v-if="descriptions.get(tab.id)" class="session-description">{{
+            descriptions.get(tab.id)
+          }}</span>
+          <span
+            class="session-close codicon codicon-close"
+            @click.stop="closeSession(tab.id)"
+          />
+        </div>
+        <span
+          class="session-add codicon codicon-add"
+          title="Open Folder as New Session"
+          @click="addSession()"
+        />
+      </div>
+    </div>
     <div class="titlebar-right" data-tauri-drag-region>
       <span
         class="codicon codicon-layout-sidebar-left layout-icon"
@@ -56,6 +109,65 @@ import {
 }
 .titlebar-center {
   flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+}
+.session-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  overflow: hidden;
+}
+.session-tab {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 4px 0 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  color: var(--vscode-titleBar-inactiveForeground);
+  background: var(--vscode-tab-inactiveBackground);
+}
+.session-tab:hover {
+  background: var(--vscode-toolbar-hoverBackground);
+}
+.session-tab.active {
+  background: var(--vscode-tab-activeBackground);
+  color: var(--vscode-titleBar-activeForeground);
+  outline: 1px solid var(--vscode-tab-border);
+}
+.session-description {
+  font-size: 10px;
+  opacity: 0.7;
+}
+.session-close {
+  font-size: 14px;
+  padding: 1px;
+  border-radius: 3px;
+  visibility: hidden;
+}
+.session-tab:hover .session-close,
+.session-tab.active .session-close {
+  visibility: visible;
+}
+.session-close:hover {
+  background: var(--vscode-toolbar-hoverBackground);
+}
+.session-add {
+  font-size: 14px;
+  padding: 3px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.session-add:hover {
+  background: var(--vscode-toolbar-hoverBackground);
 }
 .titlebar-right {
   display: flex;

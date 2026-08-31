@@ -1,10 +1,13 @@
-import { backend } from './host'
-import { FileSearchResult } from '../backend/types'
+import { ctx, viewOf } from './ctx'
+import { FileSearchResult, ThinBackend } from '../backend/types'
 
-role: 전문 검색 뷰 상태 — 파일 변경 시 자동 재실행 (250ms 디바운스는 watch 소비자 몫, 뷰 표시 여부와 무관)
+role: 전문 검색 뷰 상태 — 파일 변경 시 자동 재실행 (250ms 디바운스는 watch 소비자 몫, 뷰 표시 여부와 무관). 세션별 팩토리(createSearch) + 활성 세션 전달 shim
 
 export val search
 
+export fn createSearch(backend) {
+  role: 세션별 검색 모듈 생성 — 질의·결과·디바운스 타이머·시퀀스 토큰이 세션에 묶인다
+}
 export fn setQuery(q) {
   role: 질의 갱신 (디바운스 실행은 뷰 쪽)
 }
