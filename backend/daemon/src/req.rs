@@ -273,26 +273,26 @@ async fn search(root: &Path, p: &Value) -> Result<Value, String> {
 }
 
 async fn git_status(root: &Path) -> Result<Value, String> {
-    // WHY: core.quotePath 기본값이 비ASCII 경로를 C-quote("\355...") 로 내보낸다 — 끈다.
-    // ponytail: 따옴표·제어문자 포함 경로는 여전히 quote 됨 — 완전 해결은 -z(NUL 구분) 파싱
-    let out = run(root, "git", &["-c", "core.quotePath=false", "status", "--porcelain=v2", "--branch"]).await?;
+    // WHY: -z(NUL 구분)라야 경로가 quote 없이 원문 그대로 나온다 — 비ASCII·따옴표·제어문자 모두.
+    let out = run(root, "git", &["status", "--porcelain=v2", "--branch", "-z"]).await?;
     let mut branch = String::new();
     let mut head = String::new();
     let mut changes = Vec::new();
-    for line in out.lines() {
-        if let Some(b) = line.strip_prefix("# branch.head ") {
+    let mut entries = out.split('\0');
+    while let Some(entry) = entries.next() {
+        if let Some(b) = entry.strip_prefix("# branch.head ") {
             branch = b.to_string();
             continue;
         }
         // HEAD 커밋 해시 — 프론트 diff original 캐시의 무효화 키. unborn 은 "(initial)" → 빈 문자열
-        if let Some(o) = line.strip_prefix("# branch.oid ") {
+        if let Some(o) = entry.strip_prefix("# branch.oid ") {
             head = if o == "(initial)" { String::new() } else { o.to_string() };
             continue;
         }
-        let (kind, path) = if let Some(rest) = line.strip_prefix("? ") {
+        let (kind, path) = if let Some(rest) = entry.strip_prefix("? ") {
             ("untracked", rest.to_string())
-        } else if line.starts_with("1 ") || line.starts_with("2 ") {
-            let xy = &line[2..4];
+        } else if entry.starts_with("1 ") || entry.starts_with("2 ") {
+            let xy = &entry[2..4];
             let kind = if xy.contains('A') {
                 "added"
             } else if xy.contains('D') {
@@ -301,16 +301,12 @@ async fn git_status(root: &Path) -> Result<Value, String> {
                 "modified"
             };
             // porcelain v2: '1' 은 9번째 필드부터 경로, '2'(rename) 는 score 가 껴서 10번째.
-            // rename 은 "새경로\t원경로" — 새 경로만 취한다.
-            let n = if line.starts_with("1 ") { 9 } else { 10 };
-            let path = line
-                .splitn(n, ' ')
-                .nth(n - 1)
-                .unwrap_or("")
-                .split('\t')
-                .next()
-                .unwrap_or("")
-                .to_string();
+            // -z 의 rename 은 원경로가 다음 NUL 토큰으로 이어진다 — 새 경로만 취하고 소비한다.
+            let n = if entry.starts_with("1 ") { 9 } else { 10 };
+            let path = entry.splitn(n, ' ').nth(n - 1).unwrap_or("").to_string();
+            if entry.starts_with("2 ") {
+                entries.next();
+            }
             (kind, path)
         } else {
             continue;

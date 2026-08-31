@@ -26,7 +26,7 @@ fn search() {
   role: rg --json 파싱 — 바이트 오프셋을 UTF-16 코드유닛으로 변환 (프론트 slice 좌표계)
 }
 fn git_status() {
-  role: porcelain v2 파싱 — quotePath 끔, rename 은 새 경로만, branch.oid → head (unborn 은 빈 문자열)
+  role: porcelain v2 -z(NUL 구분) 파싱 — 경로 quote 없음, rename 은 새 경로만(원경로 토큰 소비), branch.oid → head (unborn 은 빈 문자열)
 }
 fn run_rg() {
   role: rg 실행 — exit 1(무매치)도 성공 취급
