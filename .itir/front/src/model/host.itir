@@ -5,6 +5,6 @@ import { WsBackend } from '../backend/ws'
 role: ThinBackend 조립 지점 — 구현체를 직접 참조해도 되는 유일한 파일 (itir boundary assembly). Tauri 앱이 주입한 __SUPERLIGHT_WS__ 가 최우선 endpoint 이고 (자산 로드라 location 이 relay 가 아니다), 이때 __SUPERLIGHT_SESSION__ (native 세션 레지스트리가 발급한 session id)도 함께 넘긴다. 그 외엔 페이지 URL 의 ?tkn= 을 /ws 연결 토큰으로, ?folder= 를 root 지정(Fixed relay 전용)으로 전달하며 tkn 존재 자체가 실 백엔드 선택 신호다
 
 export val backend
-export fn openFolderUrl(root) -> url? {
-  role: 웹(브라우저) 모드 '폴더 열기' — 같은 페이지 URL 에서 ?folder= 만 바꾼 주소. 새 페이지 로드 = 새 세션 (세션 전환의 브라우저 형태 — 탭이 곧 대등한 창). Tauri(root 결정권 native)·mock 은 null
+export fn openFolder(root) {
+  role: '폴더 열기' 확정의 단일 진입점 — Tauri 는 native 커맨드 open_folder_path invoke(검증·세션 전환은 native 소유), 웹은 같은 페이지 URL 에서 ?folder= 만 바꾼 주소로 이동 (새 페이지 로드 = 새 세션 — 탭이 곧 대등한 창). mock 은 무동작. 환경 분기가 여기 숨어 퀵인풋은 환경을 모른다
 }

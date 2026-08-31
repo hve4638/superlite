@@ -11,6 +11,13 @@ pub fn socket_path() -> PathBuf {
     ipc_path()
 }
 
+/// 데몬 와이어 버전 — 데몬 메서드 추가·의미 변경 시 올린다. IPC 주소에 들어가므로 와이어가
+/// 다른 빌드의 백엔드는 구버전 상주 데몬에 붙지 못하고 제 빌드의 데몬을 띄운다 (구 데몬은
+/// 제 주소에서 기존 백엔드를 계속 섬기다 수명 규칙대로 자진 종료).
+/// 2: browseDir 추가 — 구버전 상주 데몬이 unknown method 를 돌려줘 웹 폴더 열기 자동완성이
+///    조용히 빈 결과("No matching results")로 빠졌다.
+const WIRE_VERSION: u32 = 2;
+
 /// 0700 전용 디렉터리를 만들어 그 안에 소켓을 둔다.
 #[cfg(unix)]
 fn ipc_path() -> PathBuf {
@@ -27,7 +34,7 @@ fn ipc_path() -> PathBuf {
     //      (가짜 데몬에 파일·터미널 전부 노출)이 가능하다. 조용히 넘어가지 않고 죽는다.
     let mode = std::fs::metadata(&dir).map(|m| m.permissions().mode()).unwrap_or(0);
     assert!(mode & 0o077 == 0, "IPC 디렉터리 권한 이상 (0700 이어야 한다): {}", dir.display());
-    dir.join("daemon.sock")
+    dir.join(format!("daemon-{WIRE_VERSION}.sock"))
 }
 
 /// named pipe 는 파일시스템 밖 네임스페이스 — 디렉터리·권한 준비가 없다.
@@ -38,7 +45,7 @@ fn ipc_path() -> PathBuf {
 #[cfg(windows)]
 fn ipc_path() -> PathBuf {
     let user = std::env::var("USERNAME").unwrap_or_else(|_| "default".into());
-    PathBuf::from(format!(r"\\.\pipe\superlight-{user}"))
+    PathBuf::from(format!(r"\\.\pipe\superlight-{user}-{WIRE_VERSION}"))
 }
 
 /// 데몬 단독 보장용 락 파일 경로 — IPC 주소에서 파생해 SUPERLIGHT_SOCK 우회가 락에도

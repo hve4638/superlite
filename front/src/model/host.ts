@@ -29,13 +29,24 @@ export const backend: ThinBackend = injected
     : new MockBackend();
 
 /**
- * 웹(브라우저) 모드 '폴더 열기' — 같은 페이지 URL 에서 ?folder= 만 바꾼 주소를 준다.
- * 새 페이지 로드 = 새 세션이다 (세션 전환의 브라우저 형태 — 브라우저 탭이 곧 대등한 창).
- * Tauri(주입 endpoint — root 결정권이 native)·mock 은 해당 없음 — null.
+ * '폴더 열기' 확정의 단일 진입점 — 환경 분기가 여기 숨어 퀵인풋은 환경을 모른다.
+ * Tauri 는 native 커맨드 open_folder_path invoke (canonicalize·검증·세션 전환은
+ * native 소유 — ws docs/decision/web-folder-open.md 개정), 웹은 같은 페이지 URL 에서
+ * ?folder= 만 바꾼 주소로 이동한다. 새 페이지 로드 = 새 세션 (세션 전환의 브라우저
+ * 형태 — 브라우저 탭이 곧 대등한 창). mock 은 무동작.
  */
-export function openFolderUrl(root: string): string | null {
-  if (injected || !(params.has('ws') || tkn !== null)) return null;
+export function openFolder(root: string): void {
+  const tauri = (
+    window as {
+      __TAURI__?: { core: { invoke: (cmd: string, args?: object) => Promise<void> } };
+    }
+  ).__TAURI__;
+  if (tauri) {
+    void tauri.core.invoke('open_folder_path', { path: root });
+    return;
+  }
+  if (!(params.has('ws') || tkn !== null)) return;
   const url = new URL(location.href);
   url.searchParams.set('folder', root);
-  return url.toString();
+  location.assign(url.toString());
 }

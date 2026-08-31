@@ -155,26 +155,26 @@ export function setupCommands(): void {
     run: () => void reopenClosedEditor(),
   }, 'ctrl+shift+t');
 
-  // Tauri 환경에서만 — dialog·세션 전환은 전부 native(open_folder 커맨드)가 수행하고,
-  // 여기서는 invoke 만 한다 (root 결정권이 native 에 있다). 브라우저에는 이 커맨드가 없다.
-  const tauri = (window as { __TAURI__?: { core: { invoke: (cmd: string) => Promise<void> } } })
-    .__TAURI__;
-  if (tauri) {
-    register({
-      id: 'workbench.action.files.openFolder',
-      title: 'File: Open Folder...',
-      keybinding: 'Ctrl+O',
-      run: () => void tauri.core.invoke('open_folder'),
-    }, 'ctrl+o');
-  } else if (backend.browseDir) {
-    // 웹(브라우저) 모드 — OS 다이얼로그가 없어 경로 입력 퀵인풋으로 폴더를 고른다
-    // (VS Code 원격과 같은 방식). 확정은 ?folder= 페이지 이동 — host.openFolderUrl.
+  // '폴더 열기'는 경로 퀵인풋이 공통 (VS Code 원격과 같은 방식 — 확정은 host.openFolder).
+  // mock 은 browseDir 가 없어 미등록. Tauri 는 OS 다이얼로그(native open_folder)를
+  // Ctrl+Shift+O 로 병행 제공한다 — 이원화 폐지는 ws docs/decision/web-folder-open.md 개정.
+  if (backend.browseDir) {
     register({
       id: 'workbench.action.files.openFolder',
       title: 'File: Open Folder...',
       keybinding: 'Ctrl+O',
       run: () => openQuickInput('folder'),
     }, 'ctrl+o');
+  }
+  const tauri = (window as { __TAURI__?: { core: { invoke: (cmd: string) => Promise<void> } } })
+    .__TAURI__;
+  if (tauri) {
+    register({
+      id: 'workbench.action.files.openFolderDialog',
+      title: 'File: Open Folder (OS Dialog)...',
+      keybinding: 'Ctrl+Shift+O',
+      run: () => void tauri.core.invoke('open_folder'),
+    }, 'ctrl+shift+o');
   }
 
   register({

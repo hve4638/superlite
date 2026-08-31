@@ -16,5 +16,5 @@ export fn installKeybindings(target) {
   role: window keydown 에 chord 상태기 설치
 }
 export fn setupCommands() {
-  role: 내장 커맨드 전부 등록 (저장·분할·뷰 전환·터미널 등). '폴더 열기'는 이원화 — Tauri 환경(__TAURI__ 존재)은 native open_folder(OS 다이얼로그) invoke, 그 외 backend.browseDir 지원 시(웹 실 백엔드) folder 퀵인풋(경로 입력·자동완성 — VS Code 원격과 같은 방식). mock 은 미등록
+  role: 내장 커맨드 전부 등록 (저장·분할·뷰 전환·터미널 등). '폴더 열기'는 퀵인풋(경로 입력·자동완성)이 공통 — backend.browseDir 지원 시 Ctrl+O 로 등록 (mock 은 미등록). Tauri 환경(__TAURI__ 존재)은 native open_folder(OS 다이얼로그)를 Ctrl+Shift+O 로 병행 등록 — 이원화 폐지는 ws docs/decision/web-folder-open.md 개정 참조
 }

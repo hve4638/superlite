@@ -1,7 +1,7 @@
 role: 데몬·백엔드 공유 규약 — IPC 주소(unix socket / Windows named pipe)와 락 파일 경로
 
 export fn socket_path() -> PathBuf {
-  role: 데몬 IPC 주소 — unix 는 사용자 전용(0700) 런타임 디렉토리 밑 소켓, Windows 는 사용자별 named pipe 이름. 두 프로세스가 같은 주소를 계산하는 것이 접속 규약
+  role: 데몬 IPC 주소 — unix 는 사용자 전용(0700) 런타임 디렉토리 밑 소켓, Windows 는 사용자별 named pipe 이름. 두 프로세스가 같은 주소를 계산하는 것이 접속 규약. 주소에 와이어 버전(WIRE_VERSION)을 넣어 와이어가 다른 빌드의 백엔드가 구버전 상주 데몬에 조용히 붙지 않게 한다 — 데몬 메서드 추가·의미 변경 시 버전을 올린다
 }
 export fn lock_path(sock) -> PathBuf {
   role: 데몬 단독 보장용 락 파일 경로 — IPC 주소에서 파생해 SUPERLIGHT_SOCK 우회(격리 인스턴스)가 락에도 전파된다. Windows 의 pipe 이름은 파일 경로가 아니라 평탄화해 %TEMP% 밑에 둔다

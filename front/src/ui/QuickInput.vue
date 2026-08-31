@@ -4,7 +4,7 @@ import { closeQuickInput, workbench } from '../model/workbench';
 import { files } from '../model/files';
 import { commandList, type Command } from '../model/commands';
 import { editors, openFile } from '../model/editors';
-import { backend, openFolderUrl } from '../model/host';
+import { backend, openFolder } from '../model/host';
 import FileIcon from './widgets/FileIcon.vue';
 
 interface FileItem {
@@ -21,12 +21,12 @@ interface CmdItem {
 }
 interface FolderItem {
   kind: 'folder';
-  /** 절대 경로 — open 이면 확정 대상, 아니면 진입할 하위 디렉토리 */
+  /** 절대 경로 — up 이면 돌아갈 부모('/' 끝), 아니면 진입할 하위 디렉토리 */
   path: string;
   name: string;
   highlights: number[];
-  /** true 면 "이 경로 열기" 확정 행 — accept 가 진입 대신 세션을 연다 */
-  open?: boolean;
+  /** true 면 ".." 상위 이동 행 */
+  up?: boolean;
 }
 type Item = FileItem | CmdItem | FolderItem;
 
@@ -34,15 +34,33 @@ const widgetEl = ref<HTMLElement | null>(null);
 const inputEl = ref<HTMLInputElement | null>(null);
 const listEl = ref<HTMLElement | null>(null);
 
+/** Windows 드라이브 경로(C:\ 류)만 '/' 구분으로 정규화 — unix 파일명의 '\' 는 합법 문자다 */
+function normPath(p: string): string {
+  return /^[A-Za-z]:[\\/]/.test(p) ? p.replace(/\\/g, '/') : p;
+}
+/** browseDir 에 넘길 수 있는 절대 경로인지 — unix '/' 또는 Windows 드라이브 접두사 */
+function isAbsDir(p: string): boolean {
+  return p.startsWith('/') || /^[A-Za-z]:\//.test(p);
+}
+/** 파일시스템 루트('/'·'C:/')인지 — '..' 표시와 확정 대상의 꼬리 '/' 처리가 갈린다 */
+function isFsRoot(dir: string): boolean {
+  return dir === '/' || /^[A-Za-z]:\/$/.test(dir);
+}
+
 /** folder 모드 초기 입력 — 현재 워크스페이스 루트에서 시작한다 (VS Code 원격 열기와 동일) */
 function initialQuery(mode: string): string {
   if (mode === 'commands') return '>';
-  if (mode === 'folder') return workbench.rootPath.endsWith('/') ? workbench.rootPath : `${workbench.rootPath}/`;
+  if (mode === 'folder') {
+    const root = normPath(workbench.rootPath);
+    return root.endsWith('/') ? root : `${root}/`;
+  }
   return '';
 }
 
 const query = ref(initialQuery(workbench.quickInput.mode));
-const focusedIndex = ref(0);
+// folder 모드는 -1 = 목록 선택 없음(입력창 상태) — 화살표로만 목록에 들어간다.
+// 파일·커맨드 모드는 종전대로 첫 항목이 기본 포커스다.
+const focusedIndex = ref(workbench.quickInput.mode === 'folder' ? -1 : 0);
 
 // folder 모드는 접두사 판별 밖 — 경로에 '>' 가 들어와도 모드가 흔들리지 않게 open 시점에 고정
 const isFolderMode = computed(() => workbench.quickInput.mode === 'folder');
@@ -68,7 +86,7 @@ watch(
   async () => {
     if (!isFolderMode.value || !backend.browseDir) return;
     const dir = dirPart.value;
-    if (!dir.startsWith('/')) {
+    if (!isAbsDir(dir)) {
       dirListing.value = null;
       return;
     }
@@ -121,17 +139,11 @@ const items = computed<Item[]>(() => {
     const listing = dirListing.value;
     if (!listing || listing.dir !== dirPart.value) return out;
     const frag = fragment.value;
-    // "이 경로 열기" 확정 행 — 입력이 실존 디렉토리를 가리킬 때만 맨 앞에.
-    // 조각이 비면 부모 자체(나열 성공이 실존 증거), 아니면 후보와 정확 일치해야 한다.
-    const target =
-      frag === ''
-        ? listing.dir === '/'
-          ? '/'
-          : listing.dir.slice(0, -1)
-        : listing.names.includes(frag)
-          ? listing.dir + frag
-          : null;
-    if (target) out.push({ kind: 'folder', path: target, name: target, highlights: [], open: true });
+    // ".." 상위 이동 행 (VS Code simple file dialog 파리티) — 타이핑 중엔 필터 밖이라 숨긴다
+    if (frag === '' && !isFsRoot(listing.dir)) {
+      const parent = listing.dir.slice(0, listing.dir.lastIndexOf('/', listing.dir.length - 2) + 1);
+      out.push({ kind: 'folder', path: parent, name: '..', highlights: [], up: true });
+    }
     for (const name of listing.names) {
       const hl = matchSubsequence(name, frag.toLowerCase());
       if (hl === null) continue;
@@ -167,7 +179,7 @@ const items = computed<Item[]>(() => {
 });
 
 watch(query, () => {
-  focusedIndex.value = 0;
+  focusedIndex.value = isFolderMode.value ? -1 : 0;
 });
 
 // 외부(타이틀바 등)에서 열린 채로 모드가 바뀌는 경우 입력값을 재설정
@@ -175,7 +187,7 @@ watch(
   () => workbench.quickInput.mode,
   (mode) => {
     query.value = initialQuery(mode);
-    focusedIndex.value = 0;
+    focusedIndex.value = mode === 'folder' ? -1 : 0;
   },
 );
 
@@ -203,17 +215,51 @@ function segments(text: string, hl: number[]): { text: string; hl: boolean }[] {
   return out;
 }
 
+/** 타이핑된 입력이 가리키는 실존 디렉토리 — 조각이 비면 부모 자체(나열 성공이 실존
+ *  증거), 아니면 후보와 정확 일치해야 한다. */
+const openTarget = computed<string | null>(() => {
+  const listing = dirListing.value;
+  if (!isFolderMode.value || !listing || listing.dir !== dirPart.value) return null;
+  const frag = fragment.value;
+  // 루트('/'·'C:/')는 꼬리 '/' 를 남긴다 — 'C:' 는 드라이브 상대 경로라 절대 경로가 아니다
+  if (frag === '') return isFsRoot(listing.dir) ? listing.dir : listing.dir.slice(0, -1);
+  return listing.names.includes(frag) ? listing.dir + frag : null;
+});
+
+/** Enter·OK 의 확정 대상 — 화살표로 고른 후보가 있으면 그 경로, 없으면 타이핑된 경로 */
+const confirmTarget = computed<string | null>(() => {
+  const it = focusedIndex.value >= 0 ? items.value[focusedIndex.value] : null;
+  if (it && it.kind === 'folder')
+    return it.up ? (isFsRoot(it.path) ? it.path : it.path.slice(0, -1)) : it.path;
+  return openTarget.value;
+});
+
+/** 입력창 표시 값 — 화살표 선택이 있으면 그 경로가 채워진다 (URL 바 자동완성 방식).
+ *  필터(dirPart·fragment)는 타이핑된 query 기준이라 선택 중에도 목록이 안 흔들린다. */
+const displayValue = computed(() =>
+  isFolderMode.value && focusedIndex.value >= 0 ? (confirmTarget.value ?? query.value) : query.value,
+);
+
+function onInput(e: Event): void {
+  // 선택 중 타이핑 → 선택 해제·입력창 복귀. 채워진 표시 값에서 이어서 편집된다.
+  // normPath: Windows 경로 붙여넣기(C:\ 역슬래시)도 '/' 관례로 받아들인다
+  focusedIndex.value = isFolderMode.value ? -1 : 0;
+  query.value = normPath((e.target as HTMLInputElement).value);
+}
+
+// 확정 — 그 경로의 새 세션. 환경 분기(?folder= 이동 / Tauri native invoke)는 host.openFolder
+function confirmOpen(): void {
+  const target = confirmTarget.value;
+  if (!target) return;
+  closeQuickInput();
+  openFolder(target);
+}
+
 function accept(it: Item): void {
   if (it.kind === 'folder') {
-    if (it.open) {
-      // 확정 — ?folder= 로 페이지 이동 = 그 경로의 새 세션 (host.openFolderUrl 참조)
-      const url = openFolderUrl(it.path);
-      closeQuickInput();
-      if (url) location.assign(url);
-    } else {
-      // 하위 디렉토리 진입 — 입력을 그 경로로 바꾸면 나열이 다시 돈다
-      query.value = `${it.path}/`;
-    }
+    // 진입·상위 이동 — 입력을 그 경로로 바꾸면 나열이 다시 돈다. 확정은 OK 버튼
+    // (VS Code simple file dialog 파리티: Enter 는 탐색, OK 가 열기)
+    query.value = it.up ? it.path : `${it.path}/`;
     return;
   }
   closeQuickInput();
@@ -225,7 +271,16 @@ function accept(it: Item): void {
 
 function moveFocus(dir: 1 | -1): void {
   const n = items.value.length;
-  if (n) focusedIndex.value = (focusedIndex.value + dir + n) % n;
+  if (!n) return;
+  if (isFolderMode.value) {
+    // -1(입력창) ↔ 목록 순환 — 목록 끝을 지나면 입력창(타이핑 값 표시)으로 돌아온다
+    let next = focusedIndex.value + dir;
+    if (next < -1) next = n - 1;
+    else if (next >= n) next = -1;
+    focusedIndex.value = next;
+    return;
+  }
+  focusedIndex.value = (focusedIndex.value + dir + n) % n;
 }
 
 function onKeydown(e: KeyboardEvent): void {
@@ -234,7 +289,9 @@ function onKeydown(e: KeyboardEvent): void {
   switch (e.key) {
     case 'Escape':
       e.preventDefault();
-      closeQuickInput();
+      // folder 모드에서 선택 중이면 먼저 선택만 해제(타이핑 값 복원) — 한 번 더 누르면 닫힘
+      if (isFolderMode.value && focusedIndex.value >= 0) focusedIndex.value = -1;
+      else closeQuickInput();
       return;
     case 'ArrowDown':
       e.preventDefault();
@@ -246,16 +303,23 @@ function onKeydown(e: KeyboardEvent): void {
       return;
     case 'Enter': {
       e.preventDefault();
+      // folder 모드 — 선택 중이면 자동완성만(그 경로로 진입해 계속 탐색), 입력창 상태면 확정 이동
+      if (isFolderMode.value) {
+        const it = focusedIndex.value >= 0 ? items.value[focusedIndex.value] : null;
+        if (it && it.kind === 'folder') query.value = it.up ? it.path : `${it.path}/`;
+        else confirmOpen();
+        return;
+      }
       const it = items.value[focusedIndex.value];
       if (it) accept(it);
       return;
     }
     case 'Tab': {
-      // folder 모드 셸식 완성 — 포커스된 하위 디렉토리를 입력에 반영하고 계속 탐색
+      // folder 모드 셸식 완성 — 선택(없으면 첫 후보) 하위 디렉토리를 입력에 반영하고 계속 탐색
       if (!isFolderMode.value) break;
       e.preventDefault();
-      const it = items.value[focusedIndex.value];
-      if (it && it.kind === 'folder' && !it.open) query.value = `${it.path}/`;
+      const it = items.value[Math.max(focusedIndex.value, 0)];
+      if (it && it.kind === 'folder' && !it.up) query.value = `${it.path}/`;
       return;
     }
     case 'F1':
@@ -301,26 +365,35 @@ const placeholder = computed(() =>
 
 function keyOf(it: Item): string {
   if (it.kind === 'command') return it.cmd.id;
-  // folder 확정 행과 하위 후보가 같은 경로일 수 있다 (조각이 후보와 정확 일치할 때)
-  if (it.kind === 'folder' && it.open) return `open:${it.path}`;
   return it.path;
 }
 </script>
 
 <template>
   <div ref="widgetEl" class="quick-input">
+    <div v-if="isFolderMode" class="qi-title">Open Folder</div>
     <div class="qi-header">
       <div class="qi-inputbox">
         <input
           ref="inputEl"
-          v-model="query"
+          :value="displayValue"
           type="text"
           spellcheck="false"
           autocomplete="off"
           :placeholder="placeholder"
+          @input="onInput"
           @keydown="onKeydown"
         />
       </div>
+      <button
+        v-if="isFolderMode"
+        class="qi-ok"
+        :disabled="!confirmTarget"
+        @mousedown.prevent
+        @click="confirmOpen"
+      >
+        OK
+      </button>
     </div>
     <div ref="listEl" class="qi-list">
       <div
@@ -342,12 +415,7 @@ function keyOf(it: Item): string {
           <span v-if="it.dir" class="qi-desc">{{ it.dir }}</span>
         </template>
         <template v-else-if="it.kind === 'folder'">
-          <span class="codicon codicon-folder qi-folder-icon" />
-          <template v-if="it.open">
-            <span class="qi-label">Open Folder</span>
-            <span class="qi-desc">{{ it.path }}</span>
-          </template>
-          <span v-else class="qi-label">
+          <span class="qi-label">
             <template v-for="(seg, si) in segments(it.name, it.highlights)" :key="si">
               <span v-if="seg.hl" class="qi-hl">{{ seg.text }}</span>
               <template v-else>{{ seg.text }}</template>
@@ -392,12 +460,41 @@ function keyOf(it: Item): string {
   z-index: 2000;
   font-size: 13px;
 }
+.qi-title {
+  text-align: center;
+  height: 24px;
+  line-height: 24px;
+  background: var(--vscode-quickInputTitle-background);
+  border-radius: 12px 12px 0 0;
+}
 .qi-header {
+  display: flex;
+  gap: 6px;
   padding: 6px 6px 4px;
+}
+.qi-ok {
+  flex-shrink: 0;
+  height: 28px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 4px;
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  font-size: 13px;
+  cursor: pointer;
+}
+.qi-ok:hover:not(:disabled) {
+  background: var(--vscode-button-hoverBackground);
+}
+.qi-ok:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 .qi-inputbox {
   display: flex;
   align-items: center;
+  flex: 1;
+  min-width: 0;
   height: 28px;
   box-sizing: border-box;
   background: var(--vscode-input-background);
@@ -449,10 +546,6 @@ function keyOf(it: Item): string {
 .qi-row .file-icon {
   margin-right: 4px;
   line-height: 22px;
-}
-.qi-folder-icon {
-  margin-right: 4px;
-  font-size: 16px;
 }
 .qi-label {
   overflow: hidden;

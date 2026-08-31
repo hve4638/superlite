@@ -104,6 +104,30 @@ async fn open_folder(app: tauri::AppHandle, window: tauri::WebviewWindow) -> Res
         .map_err(|e| e.to_string())
 }
 
+/// front 폴더 퀵인풋(Ctrl+O)이 확정한 절대 경로로 세션 전환. 경로 지목 통로 개방의
+/// 근거는 ws docs/decision/web-folder-open.md 개정 — webview 는 이미 /ws 로 셸을
+/// 가지므로 권한 확대가 아니고, 검증·세션 등록은 여전히 여기(native)가 소유한다.
+#[tauri::command]
+async fn open_folder_path(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    path: String,
+) -> Result<(), String> {
+    // plain: Windows verbatim 루트는 '/' 와이어 경로·자식 cwd 를 깨뜨린다 (common 참조)
+    let root = superlight_common::plain(
+        std::path::Path::new(&path)
+            .canonicalize()
+            .map_err(|e| format!("경로 확인 실패: {e}"))?,
+    );
+    if !root.is_dir() {
+        return Err(format!("디렉토리가 아니다: {}", root.display()));
+    }
+    // WHY: open_folder 와 같은 이유 — webview 창 생성은 메인 스레드에서
+    let handle = app.clone();
+    app.run_on_main_thread(move || switch_session(&handle, &window, root))
+        .map_err(|e| e.to_string())
+}
+
 /// 세션 교체 실행부 — 메인 스레드에서만 호출한다. dialog 와 OS 폴더 드롭이 공유한다.
 fn switch_session(app: &tauri::AppHandle, window: &tauri::WebviewWindow, root: PathBuf) {
     let state = app.state::<AppState>();
@@ -332,7 +356,7 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
             open_second_instance(app, argv, cwd)
         }))
-        .invoke_handler(tauri::generate_handler![open_folder])
+        .invoke_handler(tauri::generate_handler![open_folder, open_folder_path])
         // 창 닫힘 시 레지스트리 정리 — 사용자가 창을 직접 닫는 경로를 잡는다.
         // switch_session 경유 닫힘은 이미 제거돼 있어 no-op (remove 성공시에만 저장).
         .on_window_event(|window, event| {
