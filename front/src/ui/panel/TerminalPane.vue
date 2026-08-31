@@ -13,8 +13,8 @@ interface Binding {
   el: HTMLDivElement;
   term: Terminal | null;
   fit: FitAddon | null;
-  /** xterm 이 열리기 전에 도착한 세션 출력 (mock 프롬프트 등) */
-  pending: string[];
+  /** xterm 이 열리기 전에 도착한 세션 출력 (mock 프롬프트 등) — 처리 완료(done) 콜백 동반 */
+  pending: [string, (() => void) | undefined][];
 }
 
 const bindings = new Map<number, Binding>();
@@ -28,9 +28,10 @@ watch(
       if (bindings.has(inst.id)) continue;
       const b: Binding = { el: document.createElement('div'), term: null, fit: null, pending: [] };
       b.el.className = 'term-attach';
-      inst.session.onData((chunk) => {
-        if (b.term) b.term.write(chunk);
-        else b.pending.push(chunk);
+      // done — 렌더러 배압 신호. xterm 이 청크 처리를 마치면 호출해 WsBackend 가 ack 한다
+      inst.session.onData((chunk, done) => {
+        if (b.term) b.term.write(chunk, done);
+        else b.pending.push([chunk, done]);
       });
       bindings.set(inst.id, b);
     }
@@ -154,7 +155,7 @@ function ensureOpened(inst: TerminalInstance) {
     return true;
   });
   term.open(b.el);
-  for (const chunk of b.pending) term.write(chunk);
+  for (const [chunk, done] of b.pending) term.write(chunk, done);
   b.pending.length = 0;
   term.onData((d) => inst.session.write(d));
   term.onResize(({ cols, rows }) => inst.session.resize(cols, rows));

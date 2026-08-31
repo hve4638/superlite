@@ -3,7 +3,7 @@ import { TerminalSession } from '../backend/types'
 import { notify } from './notifications'
 import { workbench, togglePanel } from './workbench'
 
-role: 터미널 인스턴스 목록 — 세션 핸들 보유, 렌더링(xterm)은 UI 몫. 셸 자연 종료(onExit)와 데몬 세션 회수(onSessionLost) 시 죽은 터미널을 정리한다 (회수는 warning 알림 포함)
+role: 터미널 인스턴스 목록 — 세션 핸들 보유, 렌더링(xterm)은 UI 몫. 셸 자연 종료(onExit)와 데몬 세션 회수(onSessionLost) 시 죽은 터미널을 정리한다 (회수는 warning 알림 포함 — 회수 명단은 onSessionLost 가 주는 id 목록과 대조해, 끊김 중 만들어져 살아 있는 터미널은 남긴다). 입력 배압(onInputBlocked) 진입 시 warning 알림 — 터미널당 에피소드 1회로 중복 제거
 
 export type TerminalInstance
 export val terminals

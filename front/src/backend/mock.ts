@@ -300,8 +300,12 @@ export class MockBackend implements ThinBackend {
   }
 }
 
+let nextMockPtyId = 1;
+
 /** 아주 작은 가짜 셸 — 프롬프트/echo/몇 개 명령만. 터미널 UI 개발용. */
 class MockPty implements TerminalSession {
+  // mock 은 세션 유실이 없어 대조에 쓰일 일은 없다 — 계약 충족용 유일 식별자
+  readonly id = nextMockPtyId++;
   private cb: ((data: string) => void) | null = null;
   private exitCb: ((code: number | null) => void) | null = null;
   /** exit 이후 — 프롬프트·입력 처리를 멈춘다 (죽은 셸) */

@@ -41,6 +41,7 @@ export function disposeTerminal(id: number): void {
   const idx = terminals.list.findIndex((t) => t.id === id);
   if (idx === -1) return;
   terminals.list[idx].session.dispose();
+  inputBlocked.delete(terminals.list[idx].session.id);
   terminals.list.splice(idx, 1);
   if (terminals.activeId === id) {
     terminals.activeId = terminals.list[terminals.list.length - 1]?.id ?? 0;
@@ -54,10 +55,27 @@ export function setActiveTerminal(id: number): void {
   terminals.activeId = id;
 }
 
-// 재연결은 됐지만 데몬 세션이 회수된 경우(장기 끊김) — 이쪽 터미널은 전부 죽었다.
+// 입력 배압 진입 — 입력이 소비되지 않아 이후 입력이 로컬 대기 중임을 알린다.
+// (셸 정체가 보통이지만 장시간 끊김 중에도 도달한다 — 문구는 원인을 단정하지 않는다)
+// 에피소드당 한 번만 (해제 후 재진입하면 다시). 해제 알림은 소음이라 생략
+const inputBlocked = new Set<number>();
+backend.onInputBlocked?.((term, blocked) => {
+  if (!blocked) {
+    inputBlocked.delete(term);
+    return;
+  }
+  if (inputBlocked.has(term)) return;
+  inputBlocked.add(term);
+  const title = terminals.list.find((t) => t.session.id === term)?.title ?? 'terminal';
+  notify('warning', `Terminal "${title}" is not consuming input — further input is queued`);
+});
+
+// 재연결은 됐지만 데몬 세션이 회수된 경우(장기 끊김) — 명단(deadTerms)의 터미널만 죽었다.
+// 끊김 중 만든 터미널은 새 세션에 살아 있으므로 남긴다.
 // 응답 없는 유령으로 남기는 대신 정리하고 알린다 (다음 패널 열기가 새 터미널을 만든다)
-backend.onSessionLost?.(() => {
-  if (terminals.list.length === 0) return;
-  for (const t of [...terminals.list]) disposeTerminal(t.id);
+backend.onSessionLost?.((deadTerms) => {
+  const gone = terminals.list.filter((t) => deadTerms.includes(t.session.id));
+  if (gone.length === 0) return;
+  for (const t of gone) disposeTerminal(t.id);
   notify('warning', 'Terminal sessions were lost while disconnected');
 });

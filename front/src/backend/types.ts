@@ -74,8 +74,12 @@ export type WriteResult =
 
 /** mock PTY 세션. 실제 백엔드에서는 원격 PTY 로 대체된다. */
 export interface TerminalSession {
+  /** 백엔드 구현이 발급하는 식별자 — onSessionLost 의 죽은 터미널 명단과 대조하는 용도 */
+  readonly id: number;
   write(data: string): void;
-  onData(cb: (data: string) => void): void;
+  /** done 이 오면 구독자는 청크 처리(xterm 그리기)를 마친 뒤 호출해야 한다 —
+   *  WsBackend 가 이를 ack 시점으로 삼아 렌더러 속도를 배압에 반영한다 (mock 은 생략). */
+  onData(cb: (data: string, done?: () => void) => void): void;
   /** 셸이 스스로 종료(exit·crash)하면 exit code 와 함께 발화 (spawn 실패는 null).
    *  dispose 로 인한 정리에는 발화하지 않는다. */
   onExit(cb: (code: number | null) => void): void;
@@ -127,8 +131,15 @@ export interface ThinBackend {
    */
   onConnection?(cb: (connected: boolean) => void): void;
   /**
-   * 재연결은 됐지만 데몬 세션이 회수된 경우(장기 끊김) 구독. 이때 기존 터미널은 전부
-   * 죽어 있다 — 구독자가 정리해야 응답 없는 유령 터미널이 남지 않는다.
+   * 터미널 입력 배압 상태 구독 (옵셔널 — mock 은 즉시 소화라 미구현). 셸이 입력을 읽지
+   * 않아 미소화 전송량이 창을 넘으면 (TerminalSession.id, true) — 이후 입력은 로컬 대기.
+   * 대기분이 모두 나가면 false.
    */
-  onSessionLost?(cb: () => void): void;
+  onInputBlocked?(cb: (term: number, blocked: boolean) => void): void;
+  /**
+   * 재연결은 됐지만 데몬 세션이 회수된 경우(장기 끊김) 구독. deadTerms 는 죽은 터미널의
+   * TerminalSession.id 명단 — 구독자가 정리해야 응답 없는 유령 터미널이 남지 않는다.
+   * 끊김 중에 만든 터미널은 재연결 큐 flush 로 새 세션에 살아 있으므로 명단 밖이다.
+   */
+  onSessionLost?(cb: (deadTerms: number[]) => void): void;
 }

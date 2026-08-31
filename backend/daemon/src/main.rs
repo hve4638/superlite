@@ -118,9 +118,8 @@ async fn main() {
     // 단 detach 세션이 남아 있으면 버틴다 — 세션 grace(재접속 약속)가 유휴 종료 60초에
     // 조용히 잘리지 않게. reaper 가 세션을 회수하고 나서야 유휴 카운트가 시작된다.
     // ponytail: 종료 직전 새 접속이 오는 race 는 백엔드의 접속 실패 → spawn 재시도가 흡수.
-    //           handle_conn 이 panic 으로 detach 전환을 건너뛴 세션은 detached_at=None 으로
-    //           영원히 남아 이 조건이 데몬을 무기한 붙든다 — 예전 60초 backstop 이 사라진
-    //           대가. mutex poison 은 어차피 데몬 전면 장애라 수용, 문제되면 drop guard.
+    //           handle_conn 이 panic 해도 detach 전환·연결 카운터 감소는 drop guard
+    //           (ConnCleanup·ConnCount)가 보장한다 — 이 조건이 영구히 붙드는 일은 없다.
     {
         let (conns, sock, sessions) = (conns.clone(), sock.clone(), sessions.clone());
         tokio::spawn(async move {
@@ -188,8 +187,10 @@ async fn main() {
         let sessions = sessions.clone();
         conns.fetch_add(1, Ordering::SeqCst);
         tokio::spawn(async move {
+            // 감소는 drop guard 로 — handle_conn 이 panic 하면 이 뒤 코드는 실행되지 않아
+            // 카운터가 새고, 유휴 종료(연결 0 판정)가 영구히 막힌다
+            let _count = ConnCount(conns);
             handle_conn(stream, sessions).await;
-            conns.fetch_sub(1, Ordering::SeqCst);
         });
     }
 }
@@ -243,6 +244,46 @@ fn new_session(root: PathBuf, tx: &UnboundedSender<String>) -> Session {
     }
 }
 
+/// 연결 수 카운터의 drop guard — handle_conn 이 panic 해도 감소를 보장한다
+struct ConnCount(Arc<AtomicUsize>);
+
+impl Drop for ConnCount {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// 연결 종료 뒷정리의 drop guard — 정상 종료든 panic 이든 반드시 실행된다.
+/// 누락되면 등록 세션이 detached_at=None 으로 영원히 남아 reaper 와 유휴 종료를
+/// 무기한 막는다. 락은 poison 이어도 복구해 잡는다 — unwind 중의 뒷정리가 다시
+/// panic 하면 이중 panic 으로 프로세스가 abort 된다.
+struct ConnCleanup {
+    session: Option<Arc<Session>>,
+    /// 세션 맵에 등록됐는가 — 익명이면 연결 종료가 곧 세션 종료
+    named: bool,
+    tx: UnboundedSender<String>,
+}
+
+impl Drop for ConnCleanup {
+    fn drop(&mut self) {
+        // 익명 세션은 터미널을 즉시 정리, 등록 세션은 detach 로 전환해
+        // 재접속을 기다린다 (회수는 reaper 몫)
+        let Some(s) = self.session.take() else { return };
+        if self.named {
+            let mut sink = s.sink.lock().unwrap_or_else(|e| e.into_inner());
+            // WHY: 내 연결의 sink 일 때만 detach — 다른 연결이 세션을 탈취했으면 그대로 둔다
+            if matches!(&*sink, SinkState::Attached(cur) if cur.same_channel(&self.tx)) {
+                *sink = SinkState::Detached(VecDeque::new(), 0);
+                *s.detached_at.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+            }
+        } else {
+            for (_, t) in s.terms.lock().unwrap_or_else(|e| e.into_inner()).drain() {
+                term::kill_term(t);
+            }
+        }
+    }
+}
+
 async fn handle_conn(
     stream: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static,
     sessions: Sessions,
@@ -259,8 +300,7 @@ async fn handle_conn(
         }
     });
 
-    let mut session: Option<Arc<Session>> = None;
-    let mut named = false; // 세션 맵에 등록됐는가 — 익명이면 연결 종료가 곧 세션 종료
+    let mut cleanup = ConnCleanup { session: None, named: false, tx: tx.clone() };
     let watcher_slot = watch::WatcherSlot::default();
     let mut lines = BufReader::new(read_half).lines();
     loop {
@@ -276,7 +316,7 @@ async fn handle_conn(
             "attach" => {
                 // WHY: 재-attach 를 허용하면 클라이언트가 root 를 갈아끼워 safe_join 의
                 //      루트 봉쇄를 통째로 우회한다 — 연결당 한 번만
-                if session.is_some() {
+                if cleanup.session.is_some() {
                     let _ = tx.send(json!({"id": req["id"], "error": "이미 attach 된 연결"}).to_string());
                     continue;
                 }
@@ -291,7 +331,7 @@ async fn handle_conn(
                         let (s, resumed) = match req["params"]["session"].as_str() {
                             Some(sid) => match attach_session(&sessions, sid, &r, &tx) {
                                 Ok(pair) => {
-                                    named = true;
+                                    cleanup.named = true;
                                     pair
                                 }
                                 Err(e) => {
@@ -310,7 +350,7 @@ async fn handle_conn(
                         // 감시 실패(inotify 한도 등)는 치명적이지 않다 — 감시 없이 동작.
                         // 워처는 연결 스코프 — 끊김 중 놓친 이벤트는 프론트가 재접속 시 전체 리프레시
                         watch::start_watcher(r, tx.clone(), watcher_slot.clone());
-                        session = Some(s);
+                        cleanup.session = Some(s);
                         let _ = tx.send(
                             json!({"id": req["id"], "result": {"rootPath": path, "resumed": resumed}})
                                 .to_string(),
@@ -324,12 +364,12 @@ async fn handle_conn(
             }
             // 터미널 계열은 입력 순서 보장이 필요해 read 루프에서 즉시 처리 (전부 논블로킹)
             "createTerminal" | "termWrite" | "termResize" | "termAck" | "disposeTerminal" => {
-                let Some(s) = &session else { continue };
+                let Some(s) = &cleanup.session else { continue };
                 term::handle_term(&method, &req["params"], &s.terms, &s.sink, &s.root);
             }
             _ => {
                 let (id, params) = (req["id"].clone(), req["params"].clone());
-                let Some(root) = session.as_ref().map(|s| s.root.clone()) else {
+                let Some(root) = cleanup.session.as_ref().map(|s| s.root.clone()) else {
                     if !id.is_null() {
                         let _ = tx.send(json!({"id": id, "error": "attach 전 요청"}).to_string());
                     }
@@ -346,20 +386,5 @@ async fn handle_conn(
             }
         }
     }
-    // 연결 종료 — 익명 세션은 터미널을 즉시 정리, 등록 세션은 detach 로 전환해
-    // 재접속을 기다린다 (회수는 reaper 몫)
-    if let Some(s) = session {
-        if named {
-            let mut sink = s.sink.lock().unwrap();
-            // WHY: 내 연결의 sink 일 때만 detach — 다른 연결이 세션을 탈취했으면 그대로 둔다
-            if matches!(&*sink, SinkState::Attached(cur) if cur.same_channel(&tx)) {
-                *sink = SinkState::Detached(VecDeque::new(), 0);
-                *s.detached_at.lock().unwrap() = Some(Instant::now());
-            }
-        } else {
-            for (_, t) in s.terms.lock().unwrap().drain() {
-                term::kill_term(t);
-            }
-        }
-    }
+    // 연결 종료 뒷정리는 cleanup(ConnCleanup)의 Drop 이 수행한다 — panic 경로와 통일
 }

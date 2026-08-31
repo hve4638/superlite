@@ -6,6 +6,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read as _, Write as _};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
@@ -21,6 +22,7 @@ pub(crate) struct Term {
     master: Box<dyn portable_pty::MasterPty + Send>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
     flow: Arc<Flow>,
+    budget: Arc<InputBudget>,
 }
 
 pub(crate) type Terms = Arc<Mutex<HashMap<u64, Term>>>;
@@ -29,6 +31,62 @@ pub(crate) type Terms = Arc<Mutex<HashMap<u64, Term>>>;
 // (프론트 data.length 와 일치시키려고 encode_utf16 으로 센다)
 const HIGH_WATERMARK_CHARS: u64 = 100_000;
 const LOW_WATERMARK_CHARS: u64 = 5_000;
+
+// 입력 큐 안전판(바이트) — 프론트가 입력 배압 창(termInputAck 기반)을 지키면 도달하지
+// 않는다. 터미널별 상한은 한 터미널의 폭주를 그 터미널에 가두고(다른 터미널 입력은
+// 정상), 전역 상한은 데몬 프로세스 메모리의 마지막 방어선이다.
+const TERM_INPUT_MAX_BYTES: usize = 8 * 1024 * 1024;
+const GLOBAL_INPUT_MAX_BYTES: usize = 64 * 1024 * 1024;
+
+/// 데몬 전체(세션 불문) 입력 큐 적재량
+static GLOBAL_INPUT_BYTES: AtomicUsize = AtomicUsize::new(0);
+
+/// 터미널별 입력 큐 예산 — 상한 검사는 근사면 충분한 안전판이라 원자 카운터로 끝낸다
+pub(crate) struct InputBudget {
+    bytes: AtomicUsize,
+    /// 상한 초과로 폐기 중인가 — 폐기 안내를 에피소드당 한 번만 찍는다 (큐가 비면 해제)
+    dropping: AtomicBool,
+}
+
+impl InputBudget {
+    fn new() -> Arc<Self> {
+        Arc::new(InputBudget { bytes: AtomicUsize::new(0), dropping: AtomicBool::new(false) })
+    }
+
+    /// 터미널·전역 상한 안에서 n 바이트 확보 — 초과면 되돌리고 false (폐기 신호)
+    fn try_reserve(&self, n: usize) -> bool {
+        let g = GLOBAL_INPUT_BYTES.fetch_add(n, Ordering::Relaxed);
+        let t = self.bytes.fetch_add(n, Ordering::Relaxed);
+        if g + n > GLOBAL_INPUT_MAX_BYTES || t + n > TERM_INPUT_MAX_BYTES {
+            GLOBAL_INPUT_BYTES.fetch_sub(n, Ordering::Relaxed);
+            self.bytes.fetch_sub(n, Ordering::Relaxed);
+            return false;
+        }
+        true
+    }
+
+    /// 큐에서 빠진 몫 반환. 큐가 비면 폐기 에피소드도 종료
+    fn release(&self, n: usize) {
+        GLOBAL_INPUT_BYTES.fetch_sub(n, Ordering::Relaxed);
+        if self.bytes.fetch_sub(n, Ordering::Relaxed) == n {
+            self.dropping.store(false, Ordering::Relaxed);
+        }
+    }
+
+    /// 폐기 에피소드 진입 — 처음일 때만 true (안내 1회 조건)
+    fn begin_dropping(&self) -> bool {
+        !self.dropping.swap(true, Ordering::Relaxed)
+    }
+}
+
+// WHY: 쓰기 스레드의 종료 drain 직후 send 가 끼어들면 그 몫이 반환되지 않는다 — 터미널
+//      카운터는 Term 과 함께 사라지지만 전역 카운터는 프로세스 수명 내내 남아 단조
+//      누적된다. 마지막 보유자(Term·쓰기 스레드)가 사라질 때 잔여분을 전역에서 빼 닫는다
+impl Drop for InputBudget {
+    fn drop(&mut self) {
+        GLOBAL_INPUT_BYTES.fetch_sub(self.bytes.load(Ordering::Relaxed), Ordering::Relaxed);
+    }
+}
 
 /// 터미널별 ack 기반 배압 — 미ack 이 high 를 넘으면 리더 스레드가 멈추고,
 /// ack 로 low 이하가 되면 재개한다. 느린 회선에서 출력 폭주가 메모리·지연으로
@@ -155,10 +213,35 @@ pub(crate) fn handle_term(method: &str, p: &Value, terms: &Terms, sink: &Sink, r
             }
         }
         "termWrite" => {
+            let data = p["data"].as_str().unwrap_or("");
+            // Some(첫 폐기 여부) — sink 전송은 terms 락 밖에서 (terms → sink 중첩을 안 만든다)
+            let mut dropped = None;
             if let Some(t) = terms.lock().unwrap().get(&id) {
+                // 예산 초과(끊김 반복 등으로 창 리셋이 겹치면 규약을 지키는 프론트도 도달
+                // 가능) — 폐기가 안전. 안내는 셸 입력이 아니라 그 터미널 화면으로만 나간다
+                if !t.budget.try_reserve(data.len()) {
+                    dropped = Some(t.budget.begin_dropping());
+                }
                 // 채널 send 는 논블로킹 — 실제 pty write 는 전용 스레드가 한다.
-                // ponytail: 입력 큐 무한 — 사람 입력·붙여넣기 규모라 상한 없이 둔다
-                let _ = t.input.send(p["data"].as_str().unwrap_or("").to_string());
+                // 실패 = 쓰기 스레드가 이미 종료(pty 사망) — 잔여 예산 회수와 어긋나지 않게 반환
+                else if t.input.send(data.to_string()).is_err() {
+                    t.budget.release(data.len());
+                }
+            }
+            if let Some(first) = dropped {
+                if first {
+                    let msg = json!({"event": "termData", "term": id,
+                        "data": "\r\n[superlight: 입력 큐 상한 초과 — 초과 입력을 폐기함]\r\n"});
+                    sink_send(sink, msg.to_string(), true);
+                }
+                // 폐기분도 창은 돌려준다 — 큐를 점유하지 않으므로. 안 돌려주면 프론트의
+                // 미소화 카운터가 영구히 남아 창이 그만큼 좁아진 채 잠긴다
+                let chars = data.encode_utf16().count() as u64;
+                sink_send(
+                    sink,
+                    json!({"event": "termInputAck", "term": id, "chars": chars}).to_string(),
+                    true,
+                );
             }
         }
         "termResize" => {
@@ -212,20 +295,39 @@ fn spawn_term(
     let flow = Flow::new();
     // 터미널별 쓰기 스레드 — Term drop(dispose·회수) 으로 채널이 닫히면 끝난다.
     // 막힌 write 중이라면 child kill 후 pty 쪽 에러로 풀린다
+    let budget = InputBudget::new();
     let (input, input_rx) = std::sync::mpsc::channel::<String>();
-    std::thread::spawn(move || {
-        while let Ok(data) = input_rx.recv() {
-            if writer.write_all(data.as_bytes()).is_err() {
-                break;
+    {
+        let (budget, sink) = (budget.clone(), sink.clone());
+        std::thread::spawn(move || {
+            while let Ok(data) = input_rx.recv() {
+                // 예산은 큐 적재량을 잰다 — 꺼낸 즉시 반환 (블로킹 write 중 보유는 청크 1개)
+                budget.release(data.len());
+                if writer.write_all(data.as_bytes()).is_err() {
+                    break;
+                }
+                // 소화량 통지 — 프론트 입력 배압 창이 이만큼 되돌아온다.
+                // WHY: 단위는 프론트 data.length 와 같은 UTF-16 (termAck 와 같은 이유)
+                let chars = data.encode_utf16().count() as u64;
+                sink_send(
+                    &sink,
+                    json!({"event": "termInputAck", "term": id, "chars": chars}).to_string(),
+                    true,
+                );
             }
-        }
-    });
+            // 종료 시 채널 잔여분 예산 반환 — drain 직후 send 가 끼어드는 미시 race 의
+            // 잔여분은 InputBudget 의 Drop(마지막 Arc 해제 시)이 전역에서 마저 뺀다
+            while let Ok(data) = input_rx.try_recv() {
+                budget.release(data.len());
+            }
+        });
+    }
     // WHY: 리더 스레드가 종료 시 맵에서 자기 항목을 지우므로, 스레드 시작 전에 등록해야
     //      즉사한 셸이 맵에 유령으로 남는 race 가 없다
     terms
         .lock()
         .unwrap()
-        .insert(id, Term { input, master: pty.master, child, flow: flow.clone() });
+        .insert(id, Term { input, master: pty.master, child, flow: flow.clone(), budget });
     // WHY: portable-pty 의 reader 는 블로킹 — 전용 스레드에서 읽어 writer 채널로 넘긴다
     std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
@@ -267,6 +369,20 @@ fn spawn_term(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 입력 예산 — 터미널 상한 초과 시 폐기 신호, release 로 회복, 폐기 안내는 에피소드당 1회
+    #[test]
+    fn input_budget_caps_and_recovers() {
+        let b = InputBudget::new();
+        assert!(b.try_reserve(TERM_INPUT_MAX_BYTES));
+        assert!(!b.try_reserve(1), "터미널 상한 초과는 거부되어야 한다");
+        assert!(b.begin_dropping(), "첫 폐기는 안내한다");
+        assert!(!b.begin_dropping(), "같은 에피소드의 반복 폐기는 조용해야 한다");
+        b.release(TERM_INPUT_MAX_BYTES);
+        assert!(b.try_reserve(1), "큐를 비우면 다시 받는다");
+        assert!(b.begin_dropping(), "큐가 비면 에피소드가 끝나 다음 폐기를 다시 안내한다");
+        b.release(1); // 전역 카운터 원상복구 (테스트 간 공유 상태)
+    }
 
     /// 버퍼 초과 eviction 이 termData(evictable)만 버리고 termExit(보존)는 순서 그대로
     /// 남기는지 — 유실되면 프론트에 유령 탭이 남는 회귀를 막는다

@@ -4,7 +4,10 @@ import { err } from '.'
 role: PTY 터미널 — 생성·입출력·리사이즈·정리. 입력은 터미널별 쓰기 스레드로 넘겨 read 루프를 절대 막지 않는다 (배압으로 셸이 출력에서 막히면 pty 입력 큐도 차기 때문 — termAck 이 같은 read 루프라 블로킹 쓰기는 데드락). 출력은 연결이 아니라 세션의 sink 로 — 끊김 중엔 버퍼, 재접속 시 flush
 
 class Term {
-  role: PTY 한 벌 — 입력 채널(전용 쓰기 스레드), master, child 핸들
+  role: PTY 한 벌 — 입력 채널(전용 쓰기 스레드), master, child 핸들, 입력 예산
+}
+class InputBudget {
+  role: 입력 큐 안전판 — 터미널별·전역(데몬 전체) 바이트 상한의 원자 카운터. 프론트가 입력 배압 창을 지키면 거의 도달하지 않는다 (끊김 반복으로 창 리셋이 겹치면 도달 가능). 초과분 폐기는 에피소드당 한 번만 안내(dropping 플래그, 큐가 비면 해제) — 한 터미널의 폭주가 그 터미널에 갇히고 다른 터미널 입력은 정상 동작한다. Drop 시 잔여분을 전역 카운터에서 마저 빼 영구 누수를 닫는다
 }
 class Sink {
   role: 터미널 이벤트의 세션 스코프 출구 — Attached(연결 tx) | Detached(버퍼). 리더 스레드는 연결을 모른다
@@ -16,13 +19,13 @@ class Flow {
   role: 터미널별 ack 기반 배압 (VS Code 상수: high 100k / low 5k) — 미ack 이 high 를 넘으면 리더 스레드가 condvar 대기, ack 로 low 이하가 되면 재개. 재접속 시 리셋, kill 시 해제
 }
 fn handle_term() {
-  role: 터미널 계열 메서드 디스패치 — 같은 id 재생성 무시 (PTY 누수 방지), termAck 는 Flow 카운터 차감
+  role: 터미널 계열 메서드 디스패치 — 같은 id 재생성 무시 (PTY 누수 방지), termAck 는 Flow 카운터 차감. termWrite 는 입력 예산 확보 후 적재 — 실패 시 폐기하되 그 터미널 화면에 안내를 출력하고 폐기분도 termInputAck 로 창을 돌려준다 (큐를 점유하지 않으므로 — 안 돌려주면 프론트 창이 영구 축소). sink 전송은 terms 락 밖 — terms→sink 락 중첩을 만들지 않는다
 }
 fn reset_flow() {
   role: 세션 전 터미널의 미ack 카운터 리셋 — 재접속 시 프론트 카운터와 함께 0 에서 재시작 (유실 프레임 몫의 영구 누적 방지)
 }
 fn spawn_term() {
-  role: PTY 생성 + 전용 리더 스레드 — 출력은 UTF-8 경계 분할로 termData 푸시, 셸 자연 종료 시 자기 정리. 자연 종료 termExit 에는 exit code 를 싣는다 (spawn 실패·dispose 경유는 code 없음). 셸 기본값은 $SHELL(unix) / COMSPEC(Windows)
+  role: PTY 생성 + 전용 리더 스레드 — 출력은 UTF-8 경계 분할로 termData 푸시, 셸 자연 종료 시 자기 정리. 자연 종료 termExit 에는 exit code 를 싣는다 (spawn 실패·dispose 경유는 code 없음). 셸 기본값은 $SHELL(unix) / COMSPEC(Windows). 쓰기 스레드는 셸에 쓴 몫을 termInputAck(UTF-16 단위 — 프론트 data.length 와 일치)로 통지한다 — 프론트 입력 배압 창의 반쪽
 }
 fn kill_term() {
   role: kill(unix SIGHUP / Windows TerminateProcess) + wait 를 스레드로 — read 루프를 안 막고 좀비를 안 남긴다

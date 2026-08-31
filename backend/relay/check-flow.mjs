@@ -33,6 +33,8 @@ let ws;
 let received = 0;
 let acking = false;
 const chunks = [];
+/** 터미널별 termInputAck 누계 — 데몬이 셸에 쓴 입력량 통지 (입력 배압의 반쪽) */
+const inputAcked = new Map();
 const send = (method, params) => ws.send(JSON.stringify({ method, params }));
 
 try {
@@ -49,6 +51,10 @@ try {
   }
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
+    if (m.event === 'termInputAck') {
+      inputAcked.set(m.term, (inputAcked.get(m.term) ?? 0) + m.chars);
+      return;
+    }
     if (m.event !== 'termData') return;
     received += m.data.length;
     chunks.push(m.data);
@@ -91,6 +97,12 @@ try {
   const flat = () => chunks.join('').replace(/[\r\n]/g, '');
   for (let i = 0; i < 150 && !flat().includes('PASTE-END-MARK'); i++) await sleep(100);
   assert.ok(flat().includes('PASTE-END-MARK'), `대량 붙여넣기 미도달 (${received}자) — termWrite 데드락?`);
+
+  // 입력 소화 통지 — term 2 로 보낸 입력 전량이 termInputAck 로 되돌아와야
+  // 프론트 입력 배압 창이 회복된다 (전부 ASCII 라 length == UTF-16 수)
+  const wantInput = 'cat\r'.length + (('x'.repeat(70) + '\r').repeat(4000) + 'PASTE-END-MARK\r').length;
+  for (let i = 0; i < 100 && (inputAcked.get(2) ?? 0) < wantInput; i++) await sleep(100);
+  assert.equal(inputAcked.get(2) ?? 0, wantInput, 'termInputAck 누계가 전송 입력량과 일치해야 한다');
   send('disposeTerminal', { term: 2 });
 
   console.log('flow check: OK');

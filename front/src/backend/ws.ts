@@ -29,6 +29,11 @@ interface Pending {
 /** VS Code 터미널 flow control — 수신 5k 자마다 ack, 데몬은 미ack 100k 에서 읽기를 멈춘다 */
 const CHAR_COUNT_ACK_SIZE = 5000;
 
+/** 입력 배압 창 — 미소화(termInputAck 미수신) 전송량이 이 값을 넘으면 termWrite 를
+ *  로컬 큐에 대기시킨다. 셸이 입력을 읽지 않는 채 대량 붙여넣기가 반복될 때 데몬 입력
+ *  큐가 무한히 크는 것을 막는다 (일반 붙여넣기 규모는 걸리지 않는 크기) */
+const INPUT_WINDOW_CHARS = 1_000_000;
+
 export class WsBackend implements ThinBackend {
   private ws!: WebSocket;
   private readonly url: string;
@@ -40,13 +45,23 @@ export class WsBackend implements ThinBackend {
   private nextId = 1;
   private nextTerm = 1;
   private pending = new Map<number, Pending>();
-  private termHandlers = new Map<number, (data: string) => void>();
+  private termHandlers = new Map<number, (data: string, done?: () => void) => void>();
   private termExitHandlers = new Map<number, (code: number | null) => void>();
   /** 터미널별 미ack 수신량 — CHAR_COUNT_ACK_SIZE 를 넘으면 termAck 로 비운다 */
   private termRecv = new Map<number, number>();
+  /** 연결 세대 — 성공한 연결(onopen)마다 1 증가. 터미널의 생사 판별 기준 */
+  private connEpoch = 0;
+  /** 터미널별 생성 세대 — createTerminal 이 어느 연결에서 데몬에 전달되(었/는)지.
+   *  끊김 중 생성분은 다음 연결의 큐 flush 로 전달되므로 현재 세대 + 1 로 기록한다 */
+  private termEpoch = new Map<number, number>();
+  /** 터미널별 미소화 전송량 — INPUT_WINDOW_CHARS 초과 시 전송을 멈춘다 */
+  private termSent = new Map<number, number>();
+  /** 창 초과로 대기 중인 입력 — termInputAck 로 창이 열리면 순서대로 전송 */
+  private termInputQueue = new Map<number, string[]>();
+  private inputBlockedHandler: ((term: number, blocked: boolean) => void) | null = null;
   private fsHandler: ((changes: FsChange[], overflow: boolean) => void) | null = null;
   private connHandler: ((connected: boolean) => void) | null = null;
-  private sessionLostHandler: (() => void) | null = null;
+  private sessionLostHandler: ((deadTerms: number[]) => void) | null = null;
   /** 이번 연결이 재연결인가 — attach 응답(id 0)의 resumed 해석에 쓴다 */
   private isReconnect = false;
 
@@ -68,11 +83,21 @@ export class WsBackend implements ThinBackend {
     this.ws.onopen = () => {
       this.opened = true;
       this.isReconnect = this.everOpened;
+      this.connEpoch += 1;
       // 데몬이 attach 에서 배압 카운터를 리셋한다 — 수신 카운터도 0 에서 다시.
       // (끊김 중 큐에 남은 stale ack 는 데몬 쪽에서 0 으로 포화될 뿐 — 무해)
       this.termRecv.clear();
+      // 입력 창도 0 에서 — 소화 통지(termInputAck)는 끊김 중 유실될 수 있다
+      // (stale 통지가 늦게 오면 0 으로 포화 — 무해)
+      this.termSent.clear();
       for (const m of this.queue) this.ws.send(m);
       this.queue.length = 0;
+      // 창 초과로 대기하던 입력 재전송 — 리셋된 카운터로 다시 창 검사를 거친다
+      // (재차 막히면 writeTerm 이 다시 대기시키고 blocked 를 알린다)
+      for (const [term, q] of [...this.termInputQueue]) {
+        this.termInputQueue.delete(term);
+        for (const data of q) this.writeTerm(term, data);
+      }
       // WHY: 재연결 알림은 큐 flush 뒤 — 구독자의 재동기화 요청이 밀린 요청을 앞지르지 않게
       if (this.everOpened) this.connHandler?.(true);
       this.everOpened = true;
@@ -85,16 +110,56 @@ export class WsBackend implements ThinBackend {
         return; // 깨진 프레임 하나가 onmessage 를 터뜨리지 않게
       }
       if (msg.event === 'termData') {
-        // ack 는 핸들러보다 먼저 — 받은 건 받은 것이다. 핸들러(xterm.write)가 던져도
-        // 이 청크 몫이 미ack 로 새서 데몬이 고수위에 영구히 걸리는 일이 없게
-        const n = (this.termRecv.get(msg.term) ?? 0) + msg.data.length;
-        if (n >= CHAR_COUNT_ACK_SIZE) {
-          this.send({ method: 'termAck', params: { term: msg.term, chars: n } });
-          this.termRecv.set(msg.term, 0);
-        } else {
-          this.termRecv.set(msg.term, n);
+        // ack 는 렌더러가 이 청크를 실제로 처리한 뒤(done) — 도착 즉시 ack 하면 xterm
+        // 처리 속도와 무관하게 데몬이 계속 보내, 못 그린 데이터가 xterm 내부 버퍼에
+        // 무한정 쌓인다 (데몬 flow control 이 네트워크 구간만 제한하게 된다)
+        let acked = false;
+        const done = () => {
+          if (acked) return;
+          acked = true;
+          // 정리(dispose·termExit)된 터미널의 늦은 done — 카운터 항목을 되살리지 않는다
+          if (!this.termEpoch.has(msg.term)) return;
+          const n = (this.termRecv.get(msg.term) ?? 0) + msg.data.length;
+          if (n >= CHAR_COUNT_ACK_SIZE) {
+            this.send({ method: 'termAck', params: { term: msg.term, chars: n } });
+            this.termRecv.set(msg.term, 0);
+          } else {
+            this.termRecv.set(msg.term, n);
+          }
+        };
+        const handler = this.termHandlers.get(msg.term);
+        // 구독자 없음(정리 직후 도착한 잔류 청크) — 받은 것으로 친다
+        if (!handler) {
+          done();
+          return;
         }
-        this.termHandlers.get(msg.term)?.(msg.data);
+        try {
+          handler(msg.data, done);
+        } catch (e) {
+          // 핸들러가 던져도 이 청크 몫이 미ack 로 새서 고수위에 영구히 걸리지 않게
+          done();
+          throw e;
+        }
+        return;
+      }
+      if (msg.event === 'termInputAck') {
+        // 정리된 터미널의 늦은 통지 — 카운터 항목을 되살리지 않는다
+        if (!this.termEpoch.has(msg.term)) return;
+        // 데몬 쓰기 스레드가 셸에 실제로 쓴 몫 — 창이 열린 만큼 대기 입력을 이어 보낸다
+        let sent = Math.max(0, (this.termSent.get(msg.term) ?? 0) - msg.chars);
+        const q = this.termInputQueue.get(msg.term);
+        if (q) {
+          while (q.length > 0 && sent < INPUT_WINDOW_CHARS) {
+            const data = q.shift()!;
+            sent += data.length;
+            this.send({ method: 'termWrite', params: { term: msg.term, data } });
+          }
+          if (q.length === 0) {
+            this.termInputQueue.delete(msg.term);
+            this.inputBlockedHandler?.(msg.term, false);
+          }
+        }
+        this.termSent.set(msg.term, sent);
         return;
       }
       if (msg.event === 'fsChanges') {
@@ -108,15 +173,25 @@ export class WsBackend implements ThinBackend {
         this.termHandlers.delete(msg.term);
         this.termExitHandlers.delete(msg.term);
         this.termRecv.delete(msg.term);
+        this.termEpoch.delete(msg.term);
+        this.termSent.delete(msg.term);
+        this.termInputQueue.delete(msg.term);
         // code 부재 = 비정상 종료(spawn 실패 등) — null 로 구분해 전달
         onExit?.(typeof msg.code === 'number' ? msg.code : null);
         return;
       }
       if (msg.event) return;
       // id 0 = 백엔드가 대신 보낸 attach 의 응답. 재연결인데 resumed 가 아니면
-      // 데몬이 세션을 회수한 것 — 이쪽이 들고 있는 터미널은 전부 죽었다
+      // 데몬이 세션을 회수한 것 — 끊김 이전 세대의 터미널만 죽었다.
+      // 끊김 중 만든 터미널(현재 세대)은 큐 flush 로 새 세션에 살아 있으므로 제외
       if (msg.id === 0) {
-        if (this.isReconnect && msg.result?.resumed !== true) this.sessionLostHandler?.();
+        if (this.isReconnect && msg.result?.resumed !== true) {
+          const dead = [...this.termEpoch]
+            .filter(([, epoch]) => epoch < this.connEpoch)
+            .map(([term]) => term);
+          for (const term of dead) this.termEpoch.delete(term);
+          if (dead.length > 0) this.sessionLostHandler?.(dead);
+        }
         return;
       }
       const p = this.pending.get(msg.id);
@@ -147,6 +222,24 @@ export class WsBackend implements ThinBackend {
     const s = JSON.stringify(obj);
     if (this.opened) this.ws.send(s);
     else this.queue.push(s);
+  }
+
+  /** 터미널 입력 전송 — 미소화량이 창을 넘으면 로컬 큐에 대기 (입력 배압의 프론트 반쪽) */
+  private writeTerm(term: number, data: string): void {
+    const q = this.termInputQueue.get(term);
+    // 이미 대기 중이면 뒤에 붙인다 — 순서 보장 (창이 열려도 큐부터 나간다)
+    if (q) {
+      q.push(data);
+      return;
+    }
+    const sent = this.termSent.get(term) ?? 0;
+    if (sent >= INPUT_WINDOW_CHARS) {
+      this.termInputQueue.set(term, [data]);
+      this.inputBlockedHandler?.(term, true);
+      return;
+    }
+    this.termSent.set(term, sent + data.length);
+    this.send({ method: 'termWrite', params: { term, data } });
   }
 
   private call<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
@@ -212,16 +305,24 @@ export class WsBackend implements ThinBackend {
     this.connHandler = cb;
   }
 
-  onSessionLost(cb: () => void): void {
+  onInputBlocked(cb: (term: number, blocked: boolean) => void): void {
+    this.inputBlockedHandler = cb;
+  }
+
+  onSessionLost(cb: (deadTerms: number[]) => void): void {
     this.sessionLostHandler = cb;
   }
 
   createTerminal(cols: number, rows: number): TerminalSession {
     // WHY: 계약이 동기 반환이라 term id 는 클라이언트가 발급하고 생성은 fire-and-forget
     const term = this.nextTerm++;
+    // 끊김 중 생성분은 다음 연결에서 데몬에 전달된다 — 그 세대로 기록해야
+    // 세션 회수 재연결에서 산 터미널로 분류된다
+    this.termEpoch.set(term, this.opened ? this.connEpoch : this.connEpoch + 1);
     this.send({ method: 'createTerminal', params: { term, cols, rows } });
     return {
-      write: (data) => this.send({ method: 'termWrite', params: { term, data } }),
+      id: term,
+      write: (data) => this.writeTerm(term, data),
       onData: (cb) => this.termHandlers.set(term, cb),
       onExit: (cb) => this.termExitHandlers.set(term, cb),
       resize: (c, r) => this.send({ method: 'termResize', params: { term, cols: c, rows: r } }),
@@ -230,6 +331,9 @@ export class WsBackend implements ThinBackend {
         this.termHandlers.delete(term);
         this.termExitHandlers.delete(term);
         this.termRecv.delete(term);
+        this.termEpoch.delete(term);
+        this.termSent.delete(term);
+        this.termInputQueue.delete(term);
       },
     };
   }
