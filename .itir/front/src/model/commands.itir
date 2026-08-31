@@ -15,5 +15,5 @@ export fn installKeybindings(target) {
   role: window keydown 에 chord 상태기 설치
 }
 export fn setupCommands() {
-  role: 내장 커맨드 전부 등록 (저장·분할·뷰 전환·터미널 등)
+  role: 내장 커맨드 전부 등록 (저장·분할·뷰 전환·터미널 등). '폴더 열기'는 Tauri 환경(__TAURI__ 존재)에서만 등록 — native open_folder 를 invoke 할 뿐 전환은 native 가 수행
 }

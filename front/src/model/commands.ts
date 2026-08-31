@@ -154,6 +154,19 @@ export function setupCommands(): void {
     run: () => void reopenClosedEditor(),
   }, 'ctrl+shift+t');
 
+  // Tauri 환경에서만 — dialog·세션 전환은 전부 native(open_folder 커맨드)가 수행하고,
+  // 여기서는 invoke 만 한다 (root 결정권이 native 에 있다). 브라우저에는 이 커맨드가 없다.
+  const tauri = (window as { __TAURI__?: { core: { invoke: (cmd: string) => Promise<void> } } })
+    .__TAURI__;
+  if (tauri) {
+    register({
+      id: 'workbench.action.files.openFolder',
+      title: 'File: Open Folder...',
+      keybinding: 'Ctrl+O',
+      run: () => void tauri.core.invoke('open_folder'),
+    }, 'ctrl+o');
+  }
+
   register({
     id: 'workbench.action.nextEditor',
     title: 'View: Open Next Editor',

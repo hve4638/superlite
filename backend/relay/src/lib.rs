@@ -7,7 +7,9 @@
 //! bin(main.rs)은 env 를 해석해 dist 정적 서빙을 얹은 단독 웹서버로 뜨고,
 //! Tauri 앱(app/)은 front 를 자산으로 번들하므로 dist 없이 in-process 로 serve 를 부른다.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -26,15 +28,36 @@ type DaemonStream = tokio::net::UnixStream;
 #[cfg(windows)]
 type DaemonStream = tokio::net::windows::named_pipe::NamedPipeClient;
 
+/// 세션 id → root 해석기. root 결정권은 native(레지스트리 등록자)에 남는다 —
+/// front 는 session id 만 말하고 임의 경로를 지목할 통로가 없다 (decision/workspace-session-tabs.md).
+#[derive(Clone)]
+pub enum SessionRoots {
+    /// 모든 세션이 root 하나를 쓴다 — bin(기동 인자)·종전 동작
+    Fixed(PathBuf),
+    /// 등록된 세션만 허용 — Tauri 앱이 dialog·드롭·argv 로 얻은 root 를 등록한다
+    Registry(Arc<Mutex<HashMap<String, PathBuf>>>),
+}
+
+impl SessionRoots {
+    fn resolve(&self, session: Option<&str>) -> Option<PathBuf> {
+        match self {
+            SessionRoots::Fixed(root) => Some(root.clone()),
+            SessionRoots::Registry(map) => {
+                map.lock().unwrap().get(session?).cloned()
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 struct App {
-    root: PathBuf,
+    roots: SessionRoots,
     /// 설정 시 /ws 연결 토큰 — 로컬(loopback+Origin 검증)은 무인증이 기본이라 옵션이다
     token: Option<String>,
 }
 
 /// 서버 기동 단일 진입점 — 제어 연결을 spawn 하고 /ws(+옵션 dist) 라우터를 listener 위에 serve.
-pub async fn serve(listener: TcpListener, root: PathBuf, token: Option<String>, dist: Option<String>) {
+pub async fn serve(listener: TcpListener, roots: SessionRoots, token: Option<String>, dist: Option<String>) {
     // 상주 제어 연결 — 데몬 기동 보장 + 백엔드 생존 신호. 이게 있는 한 데몬은 안 죽는다.
     tokio::spawn(control_loop());
 
@@ -42,7 +65,7 @@ pub async fn serve(listener: TcpListener, root: PathBuf, token: Option<String>, 
     if let Some(dist) = &dist {
         app = app.fallback_service(ServeDir::new(dist));
     }
-    let app = app.with_state(App { root, token });
+    let app = app.with_state(App { roots, token });
     axum::serve(listener, app).await.unwrap();
 }
 
@@ -168,11 +191,15 @@ async fn ws_handler(
             return StatusCode::FORBIDDEN.into_response();
         }
     }
-    // 프론트가 만든 세션 id — 데몬이 재접속 시 같은 세션(터미널)을 이어 붙이는 키.
+    // 세션 id — 데몬이 재접속 시 같은 세션(터미널)을 이어 붙이는 키.
     // 없으면(체크 스크립트) 익명 세션 — 연결과 함께 죽는 종전 동작.
     // 빈 문자열은 익명 취급 — ?session= 만 넘긴 클라이언트들이 "" 키 하나를 공유하지 않게
     let session = query.get("session").cloned().filter(|s| !s.is_empty());
-    ws.on_upgrade(move |sock| relay(sock, app.root, session))
+    // Registry 모드는 미등록·부재 세션을 거부한다 — root 는 등록 시점에 native 가 정한 것만
+    let Some(root) = app.roots.resolve(session.as_deref()) else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    ws.on_upgrade(move |sock| relay(sock, root, session))
 }
 
 /// 프론트 WS ↔ 데몬 소켓 1:1 중계. 어느 쪽이 끊겨도 둘 다 정리 —

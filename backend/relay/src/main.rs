@@ -36,5 +36,5 @@ async fn main() {
     let listener = TcpListener::bind(&addr).await.expect("bind 실패 (SUPERLIGHT_HTTP 로 변경)");
     // dist 는 cwd 상대 기본값 — 다른 디렉터리에서 띄우면 404 만 나므로 경로를 같이 찍는다
     eprintln!("superlight-backend: http://{addr} root={} dist={dist} auth={auth}", root.display());
-    superlight_backend::serve(listener, root, token, Some(dist)).await;
+    superlight_backend::serve(listener, superlight_backend::SessionRoots::Fixed(root), token, Some(dist)).await;
 }

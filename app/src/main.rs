@@ -2,12 +2,101 @@
 //! relay(serve)를 loopback 임의 포트로 in-process 기동해 WS endpoint 를 webview 에
 //! 주입한다. 와이어 계약·daemon 분리 수명(tmux 식)은 그대로 — Tauri IPC 전환은 비목표.
 //!
+//! 세션 레지스트리(session id → root)는 여기(native)가 소유한다 — front 는 WS 접속 시
+//! session id 만 말하고, root 는 dialog·드롭·argv 로 native 에 모인 것만 등록된다
+//! (decision/workspace-session-tabs.md).
+//!
 //! 실행: superlight-app [워크스페이스루트]  (기본 cwd)
 
 // 릴리스 Windows 에서 콘솔 창이 같이 뜨지 않게
 #![cfg_attr(all(not(debug_assertions), windows), windows_subsystem = "windows")]
 
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
+use superlight_backend::SessionRoots;
+use tauri::Manager;
+
+struct AppState {
+    ws_url: String,
+    sessions: Arc<Mutex<HashMap<String, PathBuf>>>,
+}
+
+fn rand_hex() -> String {
+    let mut buf = [0u8; 16];
+    getrandom::fill(&mut buf).expect("난수 생성 실패");
+    buf.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// 폴더 선택 dialog → 세션 전환. front 의 '폴더 열기' 커맨드가 invoke 한다.
+/// 취소는 무동작. 성공 시 호출한 창을 닫는다 (기존 세션 교체 — 지금은 활성 세션 1개).
+#[tauri::command]
+async fn open_folder(app: tauri::AppHandle, window: tauri::WebviewWindow) -> Result<(), String> {
+    let Some(dir) = rfd::AsyncFileDialog::new().pick_folder().await else {
+        return Ok(());
+    };
+    // plain: Windows verbatim 루트는 '/' 와이어 경로·자식 cwd 를 깨뜨린다 (common 참조)
+    let root = superlight_common::plain(
+        dir.path().canonicalize().map_err(|e| format!("경로 확인 실패: {e}"))?,
+    );
+    // WHY: webview 창 생성은 메인 스레드(이벤트 루프)에서 — async 커맨드 스레드에서
+    //      build 하면 Windows 에서 창은 뜨되 콘텐츠가 초기화되지 않은 빈 창이 된다 (실측).
+    let handle = app.clone();
+    app.run_on_main_thread(move || {
+        let state = handle.state::<AppState>();
+        if let Err(e) = open_workspace(&handle, &state, root) {
+            eprintln!("superlight-app: 폴더 열기 실패: {e}");
+            return;
+        }
+        // 새 창이 뜬 뒤에 닫는다 — 마지막 창이 닫히면 앱이 종료되므로 순서가 수명이다
+        let _ = window.close();
+        // 교체된 세션은 레지스트리에서 제거 — 레지스트리 = 살아 있는 세션 불변식 유지.
+        // 데몬 쪽 상태(터미널)는 연결 끊김 후 grace 규칙대로 회수된다.
+        if let Some(old) = window.label().strip_prefix("s-") {
+            state.sessions.lock().unwrap().remove(old);
+        }
+    })
+    .map_err(|e| e.to_string())
+}
+
+/// 세션 전환 단일 진입점 — 새 session id 를 발급·등록하고 그 세션의 창을 띄운다.
+/// app-drag-drop 의 폴더 드롭도 이 경로를 쓴다 (이전 창 정리는 호출자 몫).
+fn open_workspace(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    root: PathBuf,
+) -> tauri::Result<()> {
+    let session = rand_hex();
+    state.sessions.lock().unwrap().insert(session.clone(), root);
+    spawn_session_window(app, &state.ws_url, &session)
+}
+
+/// 세션 하나를 렌더링하는 창. label 은 session id 기반 — 창들은 대등하고 메인 창 개념이 없다.
+fn spawn_session_window(
+    app: &tauri::AppHandle,
+    ws_url: &str,
+    session: &str,
+) -> tauri::Result<()> {
+    // 주입 스크립트는 프론트 코드 실행 전에 평가된다 (host.ts 가 두 값을 읽는다)
+    // WHY: 숨김 기동(visible false → load 후 show)은 쓰지 않는다 — WebView2 가 숨김
+    //      상태에서 로딩을 미뤄 오히려 흰 화면이 길어지는 역효과가 실측됐다.
+    //      흰 플래시는 창 배경색 + index.html 인라인 배경으로 막는다.
+    tauri::WebviewWindowBuilder::new(
+        app,
+        format!("s-{session}"),
+        tauri::WebviewUrl::App("index.html".into()),
+    )
+    .title("superlight")
+    .inner_size(1200.0, 800.0)
+    // 첫 페인트 전 흰 플래시 방지 — 테마 배경(--vscode-editor-background)과 일치
+    .background_color(tauri::window::Color(0x1f, 0x1f, 0x1f, 0xff))
+    .initialization_script(&format!(
+        "window.__SUPERLIGHT_WS__ = '{ws_url}'; window.__SUPERLIGHT_SESSION__ = '{session}';"
+    ))
+    .build()?;
+    Ok(())
+}
 
 fn main() {
     let root = std::env::args()
@@ -20,9 +109,7 @@ fn main() {
 
     // 기동마다 새 랜덤 토큰 — 같은 머신의 외부 브라우저·임의 웹페이지가 /ws 에 붙지 못하게.
     // 주입 URL 밖으로는 전달되지 않는다.
-    let mut buf = [0u8; 16];
-    getrandom::fill(&mut buf).expect("난수 생성 실패");
-    let token: String = buf.iter().map(|b| format!("{b:02x}")).collect();
+    let token = rand_hex();
 
     // :0 bind — 포트는 OS 가 고르므로 고정 포트 충돌이 없다. 주입 URL 이 유일한 전달 경로.
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("loopback bind 실패");
@@ -30,9 +117,12 @@ fn main() {
     let port = listener.local_addr().expect("local_addr").port();
     let ws_url = format!("ws://127.0.0.1:{port}/ws?tkn={token}");
 
+    let sessions: Arc<Mutex<HashMap<String, PathBuf>>> = Arc::default();
+
     // relay 는 별도 스레드의 tokio 런타임에서 — Tauri 의 메인 스레드(이벤트 루프)와 분리
     {
         let token = token.clone();
+        let roots = SessionRoots::Registry(sessions.clone());
         std::thread::spawn(move || {
             tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -41,25 +131,18 @@ fn main() {
                 .block_on(async move {
                     let listener =
                         tokio::net::TcpListener::from_std(listener).expect("listener 전환 실패");
-                    superlight_backend::serve(listener, root, Some(token), None).await;
+                    superlight_backend::serve(listener, roots, Some(token), None).await;
                 });
         });
     }
 
     tauri::Builder::default()
+        .manage(AppState { ws_url, sessions })
+        .invoke_handler(tauri::generate_handler![open_folder])
         .setup(move |app| {
-            // 포트가 런타임에 정해지므로 창은 코드로 생성 — initialization_script 는
-            // 프론트 코드 실행 전에 평가된다 (host.ts 가 __SUPERLIGHT_WS__ 를 읽는다)
-            // WHY: 숨김 기동(visible false → load 후 show)은 쓰지 않는다 — WebView2 가 숨김
-            //      상태에서 로딩을 미뤄 오히려 흰 화면이 길어지는 역효과가 실측됐다.
-            //      흰 플래시는 창 배경색 + index.html 인라인 배경으로 막는다.
-            tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
-                .title("superlight")
-                .inner_size(1200.0, 800.0)
-                // 첫 페인트 전 흰 플래시 방지 — 테마 배경(--vscode-editor-background)과 일치
-                .background_color(tauri::window::Color(0x1f, 0x1f, 0x1f, 0xff))
-                .initialization_script(&format!("window.__SUPERLIGHT_WS__ = '{ws_url}';"))
-                .build()?;
+            let state = app.state::<AppState>();
+            // 포트가 런타임에 정해지므로 창은 코드로 생성 — 초기 세션도 같은 전환 경로를 탄다
+            open_workspace(app.handle(), &state, root)?;
             Ok(())
         })
         .run(tauri::generate_context!())
