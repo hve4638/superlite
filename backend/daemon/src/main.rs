@@ -217,7 +217,7 @@ fn attach_session(
         {
             let mut sink = s.sink.lock().unwrap();
             if let SinkState::Detached(buf, _) = &mut *sink {
-                for m in buf.drain(..) {
+                for (_, m) in buf.drain(..) {
                     let _ = tx.send(m);
                 }
             }

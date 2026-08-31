@@ -10,7 +10,7 @@ class Sink {
   role: 터미널 이벤트의 세션 스코프 출구 — Attached(연결 tx) | Detached(버퍼). 리더 스레드는 연결을 모른다
 }
 fn sink_send() {
-  role: sink 상태에 따라 전송 또는 버퍼 적재 — 버퍼는 바이트 상한, 넘치면 오래된 것부터 버림
+  role: sink 상태에 따라 전송 또는 버퍼 적재 — 버퍼는 바이트 상한, 넘치면 termData 만 오래된 것부터 버림. termExit 는 보존한다 (프론트 탭 수명이 termExit 하나에 의존 — 유실되면 유령 탭)
 }
 class Flow {
   role: 터미널별 ack 기반 배압 (VS Code 상수: high 100k / low 5k) — 미ack 이 high 를 넘으면 리더 스레드가 condvar 대기, ack 로 low 이하가 되면 재개. 재접속 시 리셋, kill 시 해제

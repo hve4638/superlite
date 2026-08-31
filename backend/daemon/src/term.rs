@@ -87,34 +87,40 @@ pub(crate) fn reset_flow(terms: &Terms) {
     }
 }
 
-/// 끊김 중 버퍼 상한 — 초과분은 오래된 것부터 버린다 (스크롤백 유실과 동일한 성격).
-/// ponytail: flow control 은 터미널별(~고수위 100k 자 + 청크)이라 다중 터미널이 동시에
-///           밀어 넣으면 도달할 수 있고, 그때 다른 터미널의 termExit 가 밀려날 수 있다 —
-///           프론트 탭 수명이 termExit 에 의존하므로 유실되면 유령 탭이 남는다.
-///           문제되면 이벤트 종류별 보존이나 터미널별 버퍼로.
+/// 끊김 중 버퍼 상한 — 초과분은 termData 만 오래된 것부터 버린다 (스크롤백 유실과 동일한
+/// 성격). termExit 는 보존한다 — 프론트 탭 수명이 termExit 하나에 의존하므로(자가 복구
+/// 경로 없음) 유실되면 유령 탭이 남는다. termExit 는 터미널당 1건·수십 바이트라
+/// 보존분이 상한을 의미 있게 넘길 수 없다.
 const DETACH_BUFFER_MAX: usize = 1 << 20;
 
 /// 터미널 이벤트의 세션 스코프 출구 — 리더 스레드는 연결을 모른다.
 pub(crate) enum SinkState {
     Attached(UnboundedSender<String>),
-    /// (이벤트 버퍼, 총 바이트) — 재접속 시 순서대로 flush
-    Detached(VecDeque<String>, usize),
+    /// (이벤트 버퍼 — (버려도 되는가, 이벤트), 총 바이트) — 재접속 시 순서대로 flush
+    Detached(VecDeque<(bool, String)>, usize),
 }
 
 pub(crate) type Sink = Arc<Mutex<SinkState>>;
 
-pub(crate) fn sink_send(sink: &Sink, msg: String) {
+/// evictable — 버퍼 초과 시 버려도 되는가. termData 만 true (스크롤백 성격),
+/// termExit 는 false 로 보존한다.
+pub(crate) fn sink_send(sink: &Sink, msg: String, evictable: bool) {
     match &mut *sink.lock().unwrap() {
         SinkState::Attached(tx) => {
             let _ = tx.send(msg); // 실패 = 연결 사망 직후 — 곧 Detached 로 바뀐다, 그 사이 분은 유실
         }
         SinkState::Detached(buf, bytes) => {
             *bytes += msg.len();
-            buf.push_back(msg);
-            while *bytes > DETACH_BUFFER_MAX {
-                match buf.pop_front() {
-                    Some(old) => *bytes -= old.len(),
-                    None => break,
+            buf.push_back((evictable, msg));
+            // 앞(오래된 쪽)부터 evictable 만 골라 버린다 — 보존 항목은 자리·순서 유지.
+            // 보존 항목은 소수·소형이라 스캔 비용은 무시할 수준
+            let mut i = 0;
+            while *bytes > DETACH_BUFFER_MAX && i < buf.len() {
+                if buf[i].0 {
+                    *bytes -= buf[i].1.len();
+                    buf.remove(i);
+                } else {
+                    i += 1;
                 }
             }
         }
@@ -143,9 +149,9 @@ pub(crate) fn handle_term(method: &str, p: &Value, terms: &Terms, sink: &Sink, r
             let rows = p["rows"].as_u64().unwrap_or(24) as u16;
             if let Err(e) = spawn_term(id, cols, rows, root, terms.clone(), sink.clone()) {
                 let msg = json!({"event": "termData", "term": id, "data": format!("pty 생성 실패: {e}\r\n")});
-                sink_send(sink, msg.to_string());
+                sink_send(sink, msg.to_string(), true);
                 // code 없는 termExit = 비정상 — 프론트가 탭을 유지해 위 에러 출력을 보여준다
-                sink_send(sink, json!({"event": "termExit", "term": id}).to_string());
+                sink_send(sink, json!({"event": "termExit", "term": id}).to_string(), false);
             }
         }
         "termWrite" => {
@@ -235,7 +241,7 @@ fn spawn_term(
             if !text.is_empty() {
                 // WHY: 배압 단위는 프론트의 data.length(UTF-16)와 같아야 ack 가 상쇄된다
                 let chars = text.encode_utf16().count() as u64;
-                sink_send(&sink, json!({"event": "termData", "term": id, "data": text}).to_string());
+                sink_send(&sink, json!({"event": "termData", "term": id, "data": text}).to_string(), true);
                 // 미ack 이 고수위를 넘으면 여기서 멈춘다 — PTY 커널 버퍼가 차면 셸도 멈춘다
                 flow.add_and_wait(chars);
             }
@@ -253,9 +259,33 @@ fn spawn_term(
         if let Some(c) = code {
             msg["code"] = json!(c);
         }
-        sink_send(&sink, msg.to_string());
+        sink_send(&sink, msg.to_string(), false);
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 버퍼 초과 eviction 이 termData(evictable)만 버리고 termExit(보존)는 순서 그대로
+    /// 남기는지 — 유실되면 프론트에 유령 탭이 남는 회귀를 막는다
+    #[test]
+    fn eviction_keeps_non_evictable() {
+        let sink: Sink = Arc::new(Mutex::new(SinkState::Detached(VecDeque::new(), 0)));
+        sink_send(&sink, "old-data".into(), true);
+        sink_send(&sink, "exit-1".into(), false);
+        let big = "d".repeat(200 * 1024);
+        for _ in 0..6 {
+            sink_send(&sink, big.clone(), true); // 총 1.2MiB — 상한(1MiB)을 넘긴다
+        }
+        let guard = sink.lock().unwrap();
+        let SinkState::Detached(buf, bytes) = &*guard else { panic!("Detached 여야 한다") };
+        assert_eq!(buf.front().unwrap().1, "exit-1", "termExit 는 보존되어야 한다");
+        assert!(buf.iter().all(|(_, m)| m != "old-data"), "가장 오래된 termData 는 버려져야 한다");
+        assert!(*bytes <= DETACH_BUFFER_MAX);
+        assert_eq!(*bytes, buf.iter().map(|(_, m)| m.len()).sum::<usize>(), "바이트 정산 일치");
+    }
 }
 
 /// 유효한 UTF-8 프리픽스와 잘린 꼬리를 분리. 진짜 깨진 바이트면 손실 변환으로 전부 내보낸다.
