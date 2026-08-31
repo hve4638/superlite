@@ -1,4 +1,5 @@
 import { openQuickInput, showViewlet, toggleSideBar, togglePanel, workbench } from './workbench';
+import { backend } from './host';
 import { closeTab, editors, reopenClosedEditor, saveActive, splitActiveEditor, activeGroup } from './editors';
 import { createTerminal } from './terminal';
 import { refreshScm } from './scm';
@@ -164,6 +165,15 @@ export function setupCommands(): void {
       title: 'File: Open Folder...',
       keybinding: 'Ctrl+O',
       run: () => void tauri.core.invoke('open_folder'),
+    }, 'ctrl+o');
+  } else if (backend.browseDir) {
+    // 웹(브라우저) 모드 — OS 다이얼로그가 없어 경로 입력 퀵인풋으로 폴더를 고른다
+    // (VS Code 원격과 같은 방식). 확정은 ?folder= 페이지 이동 — host.openFolderUrl.
+    register({
+      id: 'workbench.action.files.openFolder',
+      title: 'File: Open Folder...',
+      keybinding: 'Ctrl+O',
+      run: () => openQuickInput('folder'),
     }, 'ctrl+o');
   }
 

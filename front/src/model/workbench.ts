@@ -29,7 +29,7 @@ export const workbench = reactive({
 
   quickInput: {
     open: false,
-    mode: 'files' as 'files' | 'commands',
+    mode: 'files' as 'files' | 'commands' | 'folder',
   },
 
   contextMenu: {
@@ -72,7 +72,7 @@ export function togglePanel(): void {
   workbench.panelVisible = !workbench.panelVisible;
 }
 
-export function openQuickInput(mode: 'files' | 'commands'): void {
+export function openQuickInput(mode: 'files' | 'commands' | 'folder'): void {
   workbench.quickInput.open = true;
   workbench.quickInput.mode = mode;
 }

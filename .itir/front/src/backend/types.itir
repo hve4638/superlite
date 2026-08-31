@@ -21,6 +21,9 @@ port ThinBackend {
   fn listFiles() -> Path[] {
     role: Quick Open 용 전체 파일 나열 — dotfile 포함, .gitignore·files/search.exclude 제외
   }
+  fn browseDir(path) -> name[] {
+    role: '폴더 열기' 경로 탐색용 — 임의 절대 경로의 하위 디렉토리 이름 나열 (정렬됨). 옵셔널 — mock 은 가짜 트리 밖 경로가 없어 미구현이고, 존재 자체가 웹 '폴더 열기' 커맨드 등록의 지원 신호다
+  }
   fn search(query, opts) -> FileSearchResult[] {
     role: 내용 전문 검색 (디스크 기준, dirty 버퍼 미반영) — 제외 규칙은 listFiles 와 동일
   }

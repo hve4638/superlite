@@ -188,6 +188,9 @@ export class WsBackend implements ThinBackend {
   listFiles(): Promise<string[]> {
     return this.call('listFiles');
   }
+  browseDir(path: string): Promise<string[]> {
+    return this.call('browseDir', { path });
+  }
   search(query: string, opts?: { caseSensitive?: boolean }): Promise<FileSearchResult[]> {
     return this.call('search', { query, opts: opts ?? {} });
   }

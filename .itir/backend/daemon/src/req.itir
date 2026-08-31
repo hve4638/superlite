@@ -19,6 +19,7 @@ fn safe_join() {
 fn file_path() {
   role: 파일 단건 호출(readFile/stat/writeFile)의 경로 해석 — 절대 경로면 '..' 만 거부하고 그대로, 아니면 safe_join. 워크스페이스 밖 파일 열기(OS 드롭)의 관문
 }
+// browseDir RPC — '폴더 열기' 경로 탐색용 임의 절대 경로의 하위 디렉토리 이름 나열. 절대 경로 허용 근거는 file_path 와 같다 (인증 경계는 relay, 인증 통과자는 터미널로 이미 셸을 가진다)
 fn file_etag() {
   role: (mtime_ms, size) etag — VS Code 동일 구성, stat 스냅샷
 }

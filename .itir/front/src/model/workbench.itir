@@ -19,7 +19,7 @@ export fn togglePanel() {
   role: 하단 패널 접기/펴기
 }
 export fn openQuickInput(mode) {
-  role: Ctrl+P(files) / Ctrl+Shift+P(commands) 열기
+  role: Ctrl+P(files) / Ctrl+Shift+P(commands) / Ctrl+O(folder — 웹 '폴더 열기' 경로 입력) 열기
 }
 export fn closeQuickInput() {
   role: Quick Input 닫기

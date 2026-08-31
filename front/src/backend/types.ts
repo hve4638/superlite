@@ -103,6 +103,11 @@ export interface ThinBackend {
   delete(path: string): Promise<void>;
   /** 워크스페이스 전체 파일 경로 목록 (quick open 용) */
   listFiles(): Promise<string[]>;
+  /**
+   * '폴더 열기' 경로 탐색용 — 임의 절대 경로의 하위 디렉토리 이름 나열 (정렬됨).
+   * 실 백엔드 전용 (mock 은 가짜 트리 밖 경로가 없어 미구현 — 커맨드 등록의 지원 신호로도 쓴다).
+   */
+  browseDir?(path: string): Promise<string[]>;
   /** 단순 부분 문자열 검색. 대소문자 무시 여부는 옵션. */
   search(query: string, opts?: { caseSensitive?: boolean }): Promise<FileSearchResult[]>;
   gitStatus(): Promise<GitStatus>;

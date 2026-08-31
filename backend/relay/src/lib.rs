@@ -195,9 +195,22 @@ async fn ws_handler(
     // 없으면(체크 스크립트) 익명 세션 — 연결과 함께 죽는 종전 동작.
     // 빈 문자열은 익명 취급 — ?session= 만 넘긴 클라이언트들이 "" 키 하나를 공유하지 않게
     let session = query.get("session").cloned().filter(|s| !s.is_empty());
-    // Registry 모드는 미등록·부재 세션을 거부한다 — root 는 등록 시점에 native 가 정한 것만
-    let Some(root) = app.roots.resolve(session.as_deref()) else {
-        return StatusCode::FORBIDDEN.into_response();
+    // 웹 '폴더 열기' — Fixed(bin) 는 ?folder= 절대 경로로 root 를 넘겨받는다 (VS Code web
+    // 의 ?folder= 상당). /ws 인증 통과자는 이미 터미널로 셸을 얻으므로 임의 root 가 권한을
+    // 넓히지 않는다. Registry(Tauri) 는 무시 — root 결정권은 native 에 남는다.
+    let root = match (&app.roots, query.get("folder").filter(|f| !f.is_empty())) {
+        (SessionRoots::Fixed(_), Some(folder)) => {
+            // plain: Windows verbatim 루트는 '/' 와이어 경로·자식 cwd 를 깨뜨린다 (common 참조)
+            match std::path::Path::new(folder).canonicalize() {
+                Ok(p) if p.is_dir() => superlight_common::plain(p),
+                _ => return StatusCode::FORBIDDEN.into_response(),
+            }
+        }
+        // Registry 모드는 미등록·부재 세션을 거부한다 — root 는 등록 시점에 native 가 정한 것만
+        _ => match app.roots.resolve(session.as_deref()) {
+            Some(root) => root,
+            None => return StatusCode::FORBIDDEN.into_response(),
+        },
     };
     ws.on_upgrade(move |sock| relay(sock, root, session))
 }

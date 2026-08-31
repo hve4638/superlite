@@ -187,6 +187,26 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
             }
             Ok(Value::Null)
         }
+        // '폴더 열기' 경로 탐색용 — 루트와 무관한 임의 절대 경로의 하위 디렉토리 이름 나열.
+        // 절대 경로 허용 근거는 file_path 와 같다 — 인증 경계는 relay 고, 인증 통과자는
+        // 이미 createTerminal 로 셸을 가지므로 나열이 권한을 넓히지 않는다.
+        "browseDir" => {
+            let wire = req_path(p)?;
+            let path = Path::new(wire);
+            if !path.is_absolute() || path.components().any(|c| matches!(c, Component::ParentDir)) {
+                return Err(format!("절대 경로 필요: {wire}"));
+            }
+            let mut out: Vec<String> = Vec::new();
+            for ent in std::fs::read_dir(path).map_err(err)? {
+                let ent = ent.map_err(err)?;
+                // metadata: 심링크 디렉토리도 후보다 (readDir 와 같은 이유)
+                if std::fs::metadata(ent.path()).map(|m| m.is_dir()).unwrap_or(false) {
+                    out.push(ent.file_name().to_string_lossy().into_owned());
+                }
+            }
+            out.sort();
+            Ok(json!(out))
+        }
         "listFiles" => {
             // 부팅이 이 호출을 await 하므로 실패 시 앱이 안 뜬다 — exit 1(0건)은 성공이다
             let mut args = vec!["--files"];
