@@ -1,7 +1,13 @@
-role: 앱 기동 — 127.0.0.1:0 bind 로 포트 충돌 원천 차단, 기동마다 새 랜덤 토큰(외부 브라우저의 /ws 접근 차단), 별도 스레드 tokio 런타임에서 relay serve(세션 레지스트리 모드), initialization_script 로 __SUPERLIGHT_WS__·__SUPERLIGHT_SESSION__ 주입. 세션 레지스트리(session id → root)는 여기(native)가 소유한다 — decision/workspace-session-tabs.md. single-instance — 프로세스는 1개, 두 번째 실행은 argv·cwd 를 첫 프로세스에 넘기고 종료한다
+role: 앱 기동 — 127.0.0.1:0 bind 로 포트 충돌 원천 차단, 기동마다 새 랜덤 토큰(외부 브라우저의 /ws 접근 차단), 별도 스레드 tokio 런타임에서 relay serve(세션 레지스트리 모드), initialization_script 로 __SUPERLIGHT_WS__·__SUPERLIGHT_SESSION__ 주입. 세션 레지스트리(session id → root)는 여기(native)가 소유한다 — decision/workspace-session-tabs.md. single-instance — 프로세스는 1개, 두 번째 실행은 argv·cwd 를 첫 프로세스에 넘기고 종료한다. 세션 목록을 state.json(app_data_dir)에 지속해 재실행 시 마지막 워크스페이스를 복원한다 — decision/state-persistence.md
 
 fn main() {
-  role: root 인자 해석(기본 cwd) → listener bind·토큰 생성 → 세션 레지스트리 생성·초기 세션 등록 → relay 스레드 기동 → single-instance 플러그인 등록(두 번째 실행 수신 → open_second_instance) → 초기 세션 창 생성
+  role: listener bind·토큰 생성 → 세션 레지스트리 생성 → relay 스레드 기동 → single-instance 플러그인 등록(두 번째 실행 수신 → open_second_instance) → on_window_event Destroyed 로 창 닫힘 시 레지스트리 정리·저장 → setup 에서 복원 우선순위(명시 argv > 저장된 세션 목록 > cwd)로 초기 세션 창들 생성. 저장 목록의 소실 경로는 건너뛰고 남는 게 없으면 cwd fallback
+}
+fn persist_workspaces() {
+  role: 세션 레지스트리를 state.json 에 저장 — 레지스트리 변경(창 열림·닫힘)마다 호출, 종료 훅에 의존하지 않아 crash 에도 마지막 변경까지 남는다. 빈 목록은 저장하지 않는다(마지막 창 닫힘=종료가 종료 직전 목록을 지우지 않게 — 파일에는 항상 마지막 비어있지 않은 목록이 남는다). tmp→rename 으로 torn write 방지
+}
+fn load_workspaces() {
+  role: 저장된 워크스페이스 목록 읽기 — 파일 없음·파싱 실패·버전 불일치는 빈 목록 취급 (호출자가 cwd 로 fallback)
 }
 fn open_second_instance() {
   role: 두 번째 실행 수신 — 넘어온 argv[1](상대 경로면 그쪽 cwd 기준, 없으면 cwd)로 root 를 정해 open_workspace 로 새 세션 창을 추가한다. 창들은 대등하므로 기존 창은 건드리지 않는다 ("폴더 인자 실행 → 기존 앱에 새 세션" UX, app-installer 의 "CSL로 열기"가 이 경로를 탄다). 경로 오류는 로그만 남기고 무시 — 두 번째 실행의 잘못된 인자가 기존 앱을 죽이면 안 된다
@@ -10,10 +16,10 @@ fn open_folder() {
   role: Tauri command — 폴더 선택 dialog(rfd). 취소면 무동작, 선택하면 switch_session 으로 전환. front 의 '폴더 열기' 커맨드가 invoke 한다
 }
 fn switch_session() {
-  role: 세션 교체 실행부 (메인 스레드 전용) — open_workspace 로 새 세션 창을 띄운 뒤 이전 창 close·레지스트리 제거 (순서가 수명 — 마지막 창이 닫히면 앱 종료). dialog 와 OS 폴더 드롭이 공유한다. 이전 세션의 데몬 상태(터미널)는 grace 규칙대로 회수된다
+  role: 세션 교체 실행부 (메인 스레드 전용) — open_workspace 로 새 세션 창을 띄운 뒤 이전 창 close·레지스트리 제거·저장 (순서가 수명 — 마지막 창이 닫히면 앱 종료). dialog 와 OS 폴더 드롭이 공유한다. 이전 세션의 데몬 상태(터미널)는 grace 규칙대로 회수된다
 }
 fn open_workspace() {
-  role: 세션 전환 단일 진입점 — 새 session id 발급·레지스트리 등록 → 새 세션 창 생성. 호출자(switch_session)가 이전 창 정리를 담당한다
+  role: 세션 전환 단일 진입점 — 새 session id 발급·레지스트리 등록·저장 → 새 세션 창 생성. 호출자(switch_session)가 이전 창 정리를 담당한다
 }
 fn attach_os_drop() {
   role: (Windows 전용) OS 파일/폴더 드롭 수신 — WebView2 WebMessageReceived 에 핸들러 추가 등록 (멀티캐스트라 wry IPC 와 공존, 부속 객체 유무로 우리 메시지를 구분). front 가 postMessageWithAdditionalObjects 로 넘긴 File 객체에서 절대 경로를 읽고 (FileSystemHandle 은 런타임이 null 로 넣어 못 쓴다 — 실측), 종류는 경로를 직접 stat 해 판별한다. 디렉토리면 switch_session 으로 세션 전환, 파일이면 절대 경로 목록을 PostWebMessageAsJson 으로 DOM 에 반환 (루트 상대화·열기 판단은 front 몫). root 결정권은 native 유지 — 경로는 드롭 객체에서만 나오고 front 가 문자열로 지목할 통로는 없다
