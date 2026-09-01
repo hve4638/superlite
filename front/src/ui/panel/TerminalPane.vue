@@ -5,6 +5,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { terminals, createTerminal, setActiveTerminal } from '../../model/terminal';
 import type { TerminalInstance } from '../../model/terminal';
+import { allTerminals } from '../../model/sessions';
 import { isWorkbenchChord } from '../../model/commands';
 import { MONO_FONT_FAMILY, TERMINAL_FONT_SIZE, TERMINAL_LINE_HEIGHT } from '../../theme/fonts';
 
@@ -21,14 +22,20 @@ const bindings = new Map<number, Binding>();
 
 // WHY: MockPty 는 생성 직후 microtask 로 프롬프트를 내보내므로 컴포넌트 mount 를 기다리면
 //      첫 출력이 유실된다. flush:'sync' 모듈 워처로 세션 생성 즉시 onData 를 배선해 버퍼링한다.
+//      대상은 전 세션 합집합(allTerminals) — 세션 탭 전환은 활성 목록만 바꿀 뿐이고, 배경
+//      세션의 xterm 버퍼도 계속 받아야 재활성화 때 스크롤백이 그대로 산다. 바인딩은 소유
+//      세션에서 터미널이 실제로 사라졌을 때만 버린다 (id 는 페이지 전역 유일).
 watch(
-  () => terminals.list.map((t) => t.id),
+  () => allTerminals().map((t) => t.id),
   () => {
-    for (const inst of terminals.list) {
+    const all = allTerminals();
+    for (const inst of all) {
       if (bindings.has(inst.id)) continue;
       const b: Binding = { el: document.createElement('div'), term: null, fit: null, pending: [] };
       b.el.className = 'term-attach';
-      // done — 렌더러 배압 신호. xterm 이 청크 처리를 마치면 호출해 WsBackend 가 ack 한다
+      // done — 렌더러 배압 신호. xterm 이 청크 처리를 마치면 호출해 WsBackend 가 ack 한다.
+      // 열리기 전(pending)의 done 은 호출을 미뤄 ack 를 묶어둔다 — 배경 세션의 폭주 출력은
+      // 데몬 flow control(미ack 고수위)이 막는다
       inst.session.onData((chunk, done) => {
         if (b.term) b.term.write(chunk, done);
         else b.pending.push([chunk, done]);
@@ -36,7 +43,7 @@ watch(
       bindings.set(inst.id, b);
     }
     for (const [id, b] of bindings) {
-      if (terminals.list.some((t) => t.id === id)) continue;
+      if (all.some((t) => t.id === id)) continue;
       b.term?.dispose();
       b.el.remove();
       bindings.delete(id);

@@ -12,6 +12,7 @@ import htmlWorker from 'monaco-editor/languages/features/html/html.worker?worker
 import { editors, languageOf, setApplyExternalEdit, setDisposeModels, updateContent } from '../../model/editors';
 import { backend } from '../../model/host';
 import { scm } from '../../model/scm';
+import { setBeforeSessionSwitch } from '../../model/sessions';
 import { EDITOR_FONT_SIZE, MONO_FONT_FAMILY } from '../../theme/fonts';
 
 self.MonacoEnvironment = {
@@ -170,22 +171,40 @@ setApplyExternalEdit((path, content) => {
   );
 });
 
+// 에디터에 물린 채 dispose 하지 않는다 — monaco 내부의 분리 처리에 기대지 않고 명시적으로 뗀다
+function detachAndDispose(model: monaco.editor.ITextModel): void {
+  if (model.isDisposed()) return;
+  for (const ed of monaco.editor.getEditors()) {
+    if (ed.getModel() === model) ed.setModel(null);
+  }
+  for (const de of monaco.editor.getDiffEditors()) {
+    const m = de.getModel();
+    if (m && (m.original === model || m.modified === model)) de.setModel(null);
+  }
+  model.dispose();
+}
+
 // rename/delete 반영 — path(하위 포함)의 모델을 캐시와 monaco 레지스트리에서 제거한다.
 // 남기면 재생성·재열기 때 옛 내용의 좀비 모델이 잡힌다. 새 모델은 doc 스냅샷에서 만들어진다.
 setDisposeModels((path) => {
   for (const [p, model] of [...models]) {
     if (p !== path && !p.startsWith(`${path}/`)) continue;
     models.delete(p);
-    if (model.isDisposed()) continue;
-    // 에디터에 물린 채 dispose 하지 않는다 — monaco 내부의 분리 처리에 기대지 않고 명시적으로 뗀다
-    for (const ed of monaco.editor.getEditors()) {
-      if (ed.getModel() === model) ed.setModel(null);
-    }
-    for (const de of monaco.editor.getDiffEditors()) {
-      const m = de.getModel();
-      if (m && (m.original === model || m.modified === model)) de.setModel(null);
-    }
-    model.dispose();
+    detachAndDispose(model);
+  }
+});
+
+// 세션(탭) 전환 — 모델 캐시를 통째로 버린다. 모델은 path 키·전역 URI 라 세션 간에
+// 같은 경로가 충돌한다. 새 세션의 모델은 그 세션의 doc 스냅샷에서 다시 만들어진다
+// (내용·dirty 는 model 계층이 보존 — monaco undo 이력만 전환마다 잃는다. ponytail).
+setBeforeSessionSwitch(() => {
+  for (const [p, model] of [...models]) {
+    models.delete(p);
+    detachAndDispose(model);
+  }
+  for (const [p, { model }] of [...originals]) {
+    originals.delete(p);
+    detachAndDispose(model);
   }
 });
 

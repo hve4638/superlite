@@ -10,11 +10,13 @@ export interface TerminalInstance {
   session: TerminalSession;
 }
 
+// WHY: 페이지 전역 카운터 — 터미널 id 가 세션을 넘어 유일해야 TerminalPane 의 xterm
+//      바인딩 맵(id 키, 세션 전환에도 살아남는다)이 세션 간에 충돌하지 않는다
+let nextId = 1;
+
 /** 세션별 터미널 모듈 — 목록·배압 상태와 backend 이벤트 구독이 세션에 묶인다 */
 export function createTerminals(backend: ThinBackend, workbenchM: ReturnType<typeof createWorkbench>) {
   const { workbench, togglePanel } = workbenchM;
-
-  let nextId = 1;
 
   const terminals = reactive({
     // WHY: session 객체는 반응성이 필요 없고 xterm 이 직접 잡는 외부 핸들이라

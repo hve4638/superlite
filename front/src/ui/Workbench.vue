@@ -1,7 +1,14 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted } from 'vue';
 import { workbench } from '../model/workbench';
-import { editors } from '../model/editors';
+import {
+  editors,
+  baseName,
+  confirmCloseSave,
+  confirmCloseDiscard,
+  confirmCloseCancel,
+} from '../model/editors';
+import { sessions } from '../model/sessions';
 import TitleBar from './TitleBar.vue';
 import ActivityBar from './ActivityBar.vue';
 import SideBar from './SideBar.vue';
@@ -11,6 +18,7 @@ import PanelArea from './panel/PanelArea.vue';
 import QuickInput from './QuickInput.vue';
 import ContextMenu from './ContextMenu.vue';
 import Sash from './widgets/Sash.vue';
+import ConfirmDialog from './widgets/ConfirmDialog.vue';
 import ConflictToast from './widgets/ConflictToast.vue';
 import NotificationToasts from './widgets/NotificationToasts.vue';
 
@@ -52,7 +60,10 @@ onBeforeUnmount(() => window.removeEventListener('resize', onWindowResize));
 <template>
   <div class="workbench">
     <TitleBar />
-    <div class="workbench-middle">
+    <!-- WHY: 세션(탭) 전환마다 본문을 통째로 재마운트한다 — monaco 에디터·트리 스크롤 같은
+         컴포넌트 국소 명령형 상태가 세션을 넘어 새지 않게. 모델 상태는 세션 컨텍스트에
+         남아 있으므로 재마운트가 곧 복원이다 (xterm 은 바인딩 맵이 살아 재부착) -->
+    <div :key="sessions.activeId" class="workbench-middle">
       <ActivityBar />
       <div v-if="workbench.sideBarVisible" class="sidebar-slot">
         <SideBar />
@@ -85,6 +96,17 @@ onBeforeUnmount(() => window.removeEventListener('resize', onWindowResize));
     <StatusBar />
     <QuickInput v-if="workbench.quickInput.open" />
     <ContextMenu v-if="workbench.contextMenu.open" />
+    <!-- dirty 문서의 마지막 탭 닫기 확인 (VS Code Save/Don't Save/Cancel) -->
+    <ConfirmDialog
+      v-if="editors.closeConfirm"
+      :message="`Do you want to save the changes you made to '${baseName(editors.closeConfirm.path)}'?`"
+      detail="Your changes will be lost if you don't save them."
+      confirm-label="Save"
+      secondary-label="Don't Save"
+      @confirm="confirmCloseSave()"
+      @secondary="confirmCloseDiscard()"
+      @cancel="confirmCloseCancel()"
+    />
     <!-- VS Code 처럼 토스트는 우하단 한 스택 — 새 알림이 아래, 충돌 토스트가 있으면 맨 아래 -->
     <div class="toast-stack">
       <NotificationToasts />

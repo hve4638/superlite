@@ -7,7 +7,7 @@
 //! 이후 요청은 그 root 를 쓴다. 와이어 계약 확정은 보류 중 (_docs/decisions.md).
 //!
 //! 수명(tmux 방식): 백엔드가 접속 실패 시 이 바이너리를 spawn 한다. 연결 0 인 상태가
-//! grace(기본 60초) 지속되면 소켓을 지우고 스스로 종료한다.
+//! grace(기본 3초) 지속되면 소켓을 지우고 스스로 종료한다.
 //!
 //! 세션 지속: attach 의 session id(프론트 페이지 수명 단위)로 터미널이 연결보다 오래 산다.
 //! 끊김 중 터미널 출력은 세션 sink 에 버퍼링, 재접속 시 flush. detach 상태로 세션 grace
@@ -113,9 +113,9 @@ async fn main() {
     let grace: u64 = std::env::var("SUPERLIGHT_GRACE_SECS")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(60);
+        .unwrap_or(3);
     // 연결 0 이 grace 만큼 지속되면 자진 종료 (백엔드 전멸 = 쓰는 사람 없음).
-    // 단 detach 세션이 남아 있으면 버틴다 — 세션 grace(재접속 약속)가 유휴 종료 60초에
+    // 단 detach 세션이 남아 있으면 버틴다 — 세션 grace(재접속 약속)가 유휴 종료에
     // 조용히 잘리지 않게. reaper 가 세션을 회수하고 나서야 유휴 카운트가 시작된다.
     // ponytail: 종료 직전 새 접속이 오는 race 는 백엔드의 접속 실패 → spawn 재시도가 흡수.
     //           handle_conn 이 panic 해도 detach 전환·연결 카운터 감소는 drop guard

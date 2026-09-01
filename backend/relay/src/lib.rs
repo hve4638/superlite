@@ -109,12 +109,12 @@ fn spawn_daemon() -> Result<(), String> {
     // 로그는 상속 — 개발 중 백엔드 터미널에서 같이 보인다.
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
-    // CREATE_NEW_PROCESS_GROUP(0x200) — 콘솔 Ctrl+C 이벤트 전파 차단.
-    // CREATE_NO_WINDOW(0x0800_0000) — GUI 앱(Tauri)에서 spawn 시 daemon 콘솔 창이 뜨지
-    // 않게. 새 콘솔 할당만 막으므로, 개발 중 콘솔 백엔드에서 spawn 하면 상속된 stdio
-    // 핸들로 로그는 여전히 그 터미널에 보인다.
+    // CREATE_NEW_CONSOLE(0x10) — daemon 이 자기 콘솔 창을 갖고 뜬다 (사용자 결정:
+    // daemon 생존·로그가 창으로 보인다 — 창이 있다 = 데몬이 살아 있다). 콘솔이 분리되므로
+    // 백엔드 터미널의 Ctrl+C 도 전파되지 않는다 — CREATE_NEW_PROCESS_GROUP 은
+    // NEW_CONSOLE 과 함께 주면 무시되는 플래그라 뺐다.
     #[cfg(windows)]
-    std::os::windows::process::CommandExt::creation_flags(&mut cmd, 0x0000_0200 | 0x0800_0000);
+    std::os::windows::process::CommandExt::creation_flags(&mut cmd, 0x0000_0010);
     let mut child = cmd.spawn().map_err(|e| format!("데몬 spawn 실패 {}: {e}", bin.display()))?;
     // 좀비 방지 — 이미 데몬이 있어 즉시 물러난 자식도 회수해야 한다
     std::thread::spawn(move || {

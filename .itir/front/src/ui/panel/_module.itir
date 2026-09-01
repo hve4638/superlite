@@ -1,4 +1,5 @@
 import { terminals, createTerminal, disposeTerminal, setActiveTerminal } from '../../model/terminal'
+import { allTerminals } from '../../model/sessions'
 import { isWorkbenchChord } from '../../model/commands'
 import { togglePanel } from '../../model/workbench'
 import { MONO_FONT_FAMILY, TERMINAL_FONT_SIZE, TERMINAL_LINE_HEIGHT } from '../../theme/fonts'

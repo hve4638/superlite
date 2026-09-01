@@ -3,8 +3,9 @@
 // ponytail: 범용 다이얼로그 서비스 없음 — 쓰는 곳이 삭제 확인뿐이라 props 로 충분.
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 
-defineProps<{ message: string; detail: string; confirmLabel: string }>();
-const emit = defineEmits<{ confirm: []; cancel: [] }>();
+// secondaryLabel 이 있으면 3버튼 (Save / Don't Save / Cancel 류 — 에디터 닫기 확인)
+defineProps<{ message: string; detail: string; confirmLabel: string; secondaryLabel?: string }>();
+const emit = defineEmits<{ confirm: []; secondary: []; cancel: [] }>();
 
 const confirmBtn = ref<HTMLButtonElement | null>(null);
 
@@ -40,6 +41,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown, true));
       <div class="dialog-actions">
         <button ref="confirmBtn" class="dialog-button primary" @click="emit('confirm')">
           {{ confirmLabel }}
+        </button>
+        <button v-if="secondaryLabel" class="dialog-button" @click="emit('secondary')">
+          {{ secondaryLabel }}
         </button>
         <button class="dialog-button" @click="emit('cancel')">Cancel</button>
       </div>

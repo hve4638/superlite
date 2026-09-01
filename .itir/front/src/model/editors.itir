@@ -38,8 +38,17 @@ export fn setActiveTab(groupId, tabId) {
 export fn pinTab(groupId, tabId) {
   role: preview 탭 고정 — 탭 더블클릭 (VS Code 동일)
 }
-export fn closeTab(groupId, tabId) {
-  role: 탭 닫기 — 빈 분할 그룹은 접고 이웃으로 포커스. 닫힌 탭은 복원 이력에 쌓인다
+export fn closeTab(groupId, tabId, force) {
+  role: 탭 닫기 — 빈 분할 그룹은 접고 이웃으로 포커스. 닫힌 탭은 복원 이력에 쌓인다. dirty 문서의 마지막 참조 탭(같은 path 의 diff 탭 포함해 하나뿐)이면 곧장 닫지 않고 closeConfirm 을 세워 Save/Don't Save/Cancel 대화상자에 위임한다 (VS Code 동일 — 조용한 닫기는 버퍼가 몰래 살아남는 혼동을 낳는다). force 는 확인 생략 — confirm 처리부·삭제(closePathTabs)용
+}
+export fn confirmCloseSave() {
+  role: 닫기 확인 Save — 저장(saveDoc) 성공 시에만 닫는다. 실패·충돌은 탭 유지 (충돌은 saveConflict 토스트가 이어받는다)
+}
+export fn confirmCloseDiscard() {
+  role: 닫기 확인 Don't Save — 버퍼(docs)·orphan 표시·monaco 모델을 버려 다음 열기가 디스크를 읽게 하고 닫는다
+}
+export fn confirmCloseCancel() {
+  role: 닫기 확인 Cancel — 대화상자만 닫고 탭·버퍼 유지
 }
 export fn reopenClosedEditor() {
   role: 마지막으로 닫은 탭 복원 (Ctrl+Shift+T) — 활성 그룹에 고정 탭으로 연다
@@ -73,7 +82,7 @@ export fn reloadDocFromDisk(path, content, etag) {
   depends: { updateContent }
 }
 export fn saveActive() {
-  role: 활성 문서 저장 — etag 낙관적 검사, conflict 면 saveConflict 슬롯에 걸고 토스트에 위임. 그 외 실패는 notify
+  role: 활성 문서 저장 — 실체는 saveDoc(경로 단위, 닫기 확인 Save 와 공유): etag 낙관적 검사, conflict 면 saveConflict 슬롯에 걸고 토스트에 위임. 그 외 실패는 notify
 }
 export fn overwriteConflict() {
   role: 충돌 토스트 Overwrite — etag 없이 재기록해 디스크를 내 버퍼로 덮는다. 실패 시 토스트 유지

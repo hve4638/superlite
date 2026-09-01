@@ -1,53 +1,44 @@
-role: 앱 기동 — 127.0.0.1:0 bind 로 포트 충돌 원천 차단, 기동마다 새 랜덤 토큰(외부 브라우저의 /ws 접근 차단), 별도 스레드 tokio 런타임에서 relay serve(세션 레지스트리 모드), initialization_script 로 __SUPERLIGHT_WS__·__SUPERLIGHT_SESSION__ 주입. 세션 레지스트리(session id → root, 순서 = 탭 순서)는 여기(native)가 소유한다 — decision/workspace-session-tabs.md. 세션 탭 = 창 show/hide — 세션마다 창이 살아 있고 전환은 대상 창을 같은 자리에 보이고 현재 창을 숨기는 것 (보이는 세션 창 1개가 tear-off 전까지의 불변식, front 상태가 전환에도 온전히 사는 것이 근거). single-instance — 프로세스는 1개, 두 번째 실행은 argv·cwd 를 첫 프로세스에 넘기고 종료한다. 세션 목록을 state.json(app_data_dir)에 탭 순서 그대로 지속해 재실행 시 마지막 워크스페이스들을 복원한다 — decision/state-persistence.md
+role: 앱 기동 — 127.0.0.1:0 bind 로 포트 충돌 원천 차단, 기동마다 새 랜덤 토큰(외부 브라우저의 /ws 접근 차단), 별도 스레드 tokio 런타임에서 relay serve(세션 레지스트리 모드), initialization_script 로 __SUPERLIGHT_WS__·__SUPERLIGHT_SESSIONS__(부팅 세션 목록) 주입. 세션 레지스트리(session id → root, 순서 = 탭 순서)는 여기(native)가 소유한다 — decision/workspace-session-tabs.md. 창은 하나 — 세션 탭 전환은 front 가 페이지 안에서 세션 컨텍스트를 교체하는 것이고 (웹과 동일 동작), native 의 몫은 레지스트리(추가·제거·지속 저장)와 sessions-changed 방송뿐이며 어느 탭이 활성인지 모른다. single-instance — 프로세스는 1개, 두 번째 실행은 argv·cwd 를 첫 프로세스에 넘기고 종료한다. 세션 목록을 state.json(app_data_dir)에 탭 순서 그대로 지속해 재실행 시 마지막 워크스페이스들을 복원한다 — decision/state-persistence.md
 
 fn main() {
-  role: listener bind·토큰 생성 → 세션 레지스트리 생성 → relay 스레드 기동 → single-instance 플러그인 등록(두 번째 실행 수신 → open_second_instance) → 커맨드 등록(open_folder·open_folder_path·list_sessions·activate_session·close_session) → on_window_event 배선: 보이는 세션 창의 X = 앱 전체 종료(배경 탭만 남는 유령 프로세스 방지, quitting 표시로 종료 중 Destroyed 정리가 저장 상태를 갉지 않게), Destroyed = 레지스트리 정리·저장(비정상 소멸의 유령 탭 안전망 — 탭 전환·닫기 경유는 이미 제거돼 no-op) → setup 에서 복원 우선순위(명시 argv > 저장된 세션 목록 > cwd)로 초기 세션 창들 생성. 저장 목록의 소실 경로는 건너뛰고 남는 게 없으면 cwd fallback
+  role: listener bind·토큰 생성 → 세션 레지스트리 생성 → relay 스레드 기동 → single-instance 플러그인 등록(두 번째 실행 수신 → open_second_instance) → 커맨드 등록(open_folder·open_folder_path·list_sessions·close_session·move_session) → setup 에서 복원 우선순위(명시 argv > 저장된 세션 목록 > cwd)로 초기 세션 등록·저장 후 유일한 창("main") 생성 — 주입 목록이 완전하도록 등록이 창 생성보다 앞선다. 저장 목록의 소실 경로는 건너뛰고 남는 게 없으면 cwd fallback. 창 X = 앱 종료 (기본 동작 — 창 하나가 곧 앱 수명)
 }
 fn persist_workspaces() {
-  role: 세션 레지스트리를 state.json 에 저장 — 레지스트리 변경(탭 열림·닫힘·교체)마다 호출, 저장 순서 = 레지스트리 순서 = 탭 순서. 종료 훅에 의존하지 않아 crash 에도 마지막 변경까지 남는다. 빈 목록은 저장하지 않는다(마지막 창 닫힘=종료가 종료 직전 목록을 지우지 않게 — 파일에는 항상 마지막 비어있지 않은 목록이 남는다). tmp→rename 으로 torn write 방지
+  role: 세션 레지스트리를 state.json 에 저장 — 레지스트리 변경(탭 열림·닫힘)마다 호출, 저장 순서 = 레지스트리 순서 = 탭 순서. 종료 훅에 의존하지 않아 crash 에도 마지막 변경까지 남는다. 빈 목록은 저장하지 않는다(마지막 탭 닫힘=종료가 종료 직전 목록을 지우지 않게 — 파일에는 항상 마지막 비어있지 않은 목록이 남는다). tmp→rename 으로 torn write 방지
 }
 fn load_workspaces() {
   role: 저장된 워크스페이스 목록 읽기 — 파일 없음·파싱 실패·버전 불일치는 빈 목록 취급 (호출자가 cwd 로 fallback)
 }
 fn open_second_instance() {
-  role: 두 번째 실행 수신 — 넘어온 argv[1](상대 경로면 그쪽 cwd 기준, 없으면 cwd)로 root 를 정해 open_workspace 로 새 세션 탭을 추가한다 ("폴더 인자 실행 → 기존 앱에 새 세션" UX, app-installer 의 "CSL로 열기"가 이 경로를 탄다). 경로 오류는 로그만 남기고 무시 — 두 번째 실행의 잘못된 인자가 기존 앱을 죽이면 안 된다
+  role: 두 번째 실행 수신 — 넘어온 argv[1](상대 경로면 그쪽 cwd 기준, 없으면 cwd)로 root 를 정해 open_workspace 로 새 세션 탭을 추가하고 창을 앞으로 가져온다 ("폴더 인자 실행 → 기존 앱에 새 세션" UX, app-installer 의 "CSL로 열기"가 이 경로를 탄다). 경로 오류는 로그만 남기고 무시 — 두 번째 실행의 잘못된 인자가 기존 앱을 죽이면 안 된다
 }
 fn open_folder() {
   role: Tauri command — 폴더 선택 dialog(rfd). 취소면 무동작, 선택하면 open_workspace 로 새 세션 탭 추가 (폴더 열기 = 새 세션 열기, 교체 아님). front 의 'Open Folder (OS Dialog)' 커맨드(Ctrl+Shift+O)와 탭 + 버튼이 invoke 한다
 }
 fn open_folder_path() {
-  role: Tauri command — front 폴더 퀵인풋(Ctrl+O)이 확정한 절대 경로로 새 세션 탭 추가. canonicalize·디렉토리 검증 후 open_workspace (open_folder 와 같은 의미론 — 교체는 OS 드롭뿐). front 의 경로 지목 통로를 여는 결정 개정은 ws docs/decision/web-folder-open.md — webview 는 이미 /ws 로 셸을 가지므로 권한 확대가 아니고, 검증·세션 등록은 여전히 native 소유다
+  role: Tauri command — front 폴더 퀵인풋(Ctrl+O)이 확정한 절대 경로로 새 세션 탭 추가. canonicalize·디렉토리 검증 후 open_workspace. front 의 경로 지목 통로를 여는 결정 개정은 ws docs/decision/web-folder-open.md — webview 는 이미 /ws 로 셸을 가지므로 권한 확대가 아니고, 검증·세션 등록은 여전히 native 소유다
 }
 fn list_sessions() {
-  role: Tauri command — 세션 탭 목록(id·이름·root) 응답. front 탭 스트립의 초기 로드, 이후 갱신은 sessions-changed 이벤트
-}
-fn activate_session() {
-  role: Tauri command (sync = 메인 스레드) — 탭 전환. 대상 세션 창을 호출 창 자리에 보이고(show_in_place) 호출 창을 숨긴다
+  role: Tauri command — 세션 탭 목록(id·이름·root) 응답. front 세션 관리자의 초기 동기화, 이후 갱신은 sessions-changed 이벤트
 }
 fn close_session() {
-  role: Tauri command (sync = 메인 스레드) — 탭 닫기 = 세션 종료(kill 의미). 레지스트리 제거·저장으로 재-attach 차단, 창 close 로 WS 끊김 → 데몬 detach → 세션 grace 후 터미널 회수 (즉시 kill 와이어는 없다 — grace 지연 회수 수용). 활성 탭이면 이웃 탭을 먼저 보이고, 마지막 탭이면 마지막 창이 닫혀 앱 종료 (기존 수명 규칙). 숨긴 뒤 close — 보이는 창 close 는 X 경로(전체 종료)로 해석되기 때문
+  role: Tauri command — 탭 닫기 = 세션 종료(kill 의미). 레지스트리 제거·저장·방송으로 재-attach 차단, front 가 그 세션의 WS 연결을 끊으면 데몬 detach → 세션 grace 후 터미널 회수 (즉시 kill 와이어는 없다 — grace 지연 회수 수용). 마지막 탭을 닫으면 앱 종료 (창 하나 = 앱 수명)
 }
-fn switch_session() {
-  role: 세션 교체 실행부 (메인 스레드 전용) — OS 폴더 드롭 경로. 드롭은 "이 창에서 이 폴더를 열라"는 의도라 탭 추가가 아니라 호출 창의 레지스트리 슬롯 교체다 (탭 위치 보존, spawn 실패 시 슬롯 원복). 새 세션 창을 띄운 뒤 이전 창 숨김·close·저장 (순서가 수명 — 마지막 창이 닫히면 앱 종료). 이전 세션의 데몬 상태(터미널)는 grace 규칙대로 회수된다
+fn move_session() {
+  role: Tauri command — 세션 탭 드래그 순서 이동. 순서의 단일 출처는 레지스트리이므로 재배열(move_entry)도 native 가 하고, 저장·방송으로 front 가 따라온다 (복원 순서 = 탭 순서 유지)
+}
+fn move_entry() {
+  role: 재배열 본체 — to 는 표시 목록 기준 삽입 인덱스 (이동 중 탭 포함, 제거 후 보정). 없는 id 는 무동작
 }
 fn open_workspace() {
-  role: 새 세션 열기 단일 진입점 — 새 session id 발급·레지스트리 push·저장 → 새 세션 창을 활성 탭으로 생성(보이던 창 기하 승계), 나머지 세션 창은 숨겨 배경 탭으로. dialog·퀵인풋·두 번째 실행·초기 기동(복원 루프)이 공유한다
+  role: 새 세션 등록 단일 진입점 — 새 session id 발급·레지스트리 push·저장·방송. front 가 sessions-changed 를 받아 새 id 로 WS 연결을 열고 그 탭을 활성으로 만든다. dialog·퀵인풋·OS 드롭·두 번째 실행이 공유한다. 같은 워크스페이스가 이미 열려 있으면 새 탭 대신 session-focus 이벤트로 그 탭에 포커스만 옮긴다 — 정체성은 지금은 canonicalize 된 로컬 경로, ssh 등 원격이 붙으면 (origin, path) 쌍으로 확장 (같은 경로라도 origin 이 다르면 별개)
 }
 fn session_infos() {
-  role: 레지스트리 → 탭 표시용 사영 (이름 = root basename)
+  role: 레지스트리 → 탭 표시용 사영 (이름 = root basename) — 부팅 주입·list_sessions·이벤트 payload 공용
 }
 fn emit_sessions() {
-  role: 레지스트리 변경을 모든 세션 창에 sessions-changed 로 방송
-}
-fn visible_session_window() {
-  role: 지금 보이는 세션 창 조회 — "보이는 세션 창 1개" 불변식의 조회면
-}
-fn show_in_place() {
-  role: 탭 전환의 실체 — from 창의 기하(위치·크기·최대화)를 to 창에 입혀 같은 자리에서 보이게 한다
+  role: 레지스트리 변경을 sessions-changed 로 방송 — front 세션 관리자가 reconcile 한다
 }
 fn attach_os_drop() {
-  role: (Windows 전용) OS 파일/폴더 드롭 수신 — WebView2 WebMessageReceived 에 핸들러 추가 등록 (멀티캐스트라 wry IPC 와 공존, 부속 객체 유무로 우리 메시지를 구분). front 가 postMessageWithAdditionalObjects 로 넘긴 File 객체에서 절대 경로를 읽고 (FileSystemHandle 은 런타임이 null 로 넣어 못 쓴다 — 실측), 종류는 경로를 직접 stat 해 판별한다. 디렉토리면 switch_session 으로 세션 전환, 파일이면 절대 경로 목록을 PostWebMessageAsJson 으로 DOM 에 반환 (루트 상대화·열기 판단은 front 몫). 경로는 드롭 객체에서 나온다 — front 의 문자열 경로 지목은 open_folder_path 통로로만 (web-folder-open.md 개정)
-}
-fn spawn_session_window() {
-  role: 세션 하나를 렌더링하는 창 생성 — 창 label 은 session id 기반(메인 창 개념 없음), initialization_script 는 프론트 코드 실행 전에 평가돼야 하므로 여기서 WS endpoint 와 session id 를 주입. like 창이 있으면 그 기하(위치·크기·최대화)를 승계해 새 탭이 같은 자리에서 뜬다. decorations 없음 — 창 제어(닫기·최소화·최대화·드래그)는 front TitleBar 가 가진다. 숨김 기동 금지 — WebView2 가 숨김 중 로딩을 미뤄 역효과, 흰 플래시는 창 배경색+인라인 배경으로 방지. Tauri drag-drop 핸들러 비활성 — 켜져 있으면 WebView2 가 HTML5 DnD 이벤트를 가로채 내부 DnD(pane 분할·탭·탐색기 드래그)가 Windows 에서 죽는다
+  role: (Windows 전용) OS 파일/폴더 드롭 수신 — WebView2 WebMessageReceived 에 핸들러 추가 등록 (멀티캐스트라 wry IPC 와 공존, 부속 객체 유무로 우리 메시지를 구분). front 가 postMessageWithAdditionalObjects 로 넘긴 File 객체에서 절대 경로를 읽고 (FileSystemHandle 은 런타임이 null 로 넣어 못 쓴다 — 실측), 종류는 경로를 직접 stat 해 판별한다. 디렉토리면 open_workspace 로 새 세션 탭 (창이 하나가 되면서 "이 창의 세션 교체" 근거가 사라져 폴더 열기 계열과 의미 통일), 파일이면 절대 경로 목록을 PostWebMessageAsJson 으로 DOM 에 반환 (루트 상대화·열기 판단은 front 몫). 경로는 드롭 객체에서 나온다 — front 의 문자열 경로 지목은 open_folder_path 통로로만 (web-folder-open.md 개정)
 }

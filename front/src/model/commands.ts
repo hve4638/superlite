@@ -3,6 +3,7 @@ import { backend } from './host';
 import { closeTab, editors, reopenClosedEditor, saveActive, splitActiveEditor, activeGroup } from './editors';
 import { createTerminal } from './terminal';
 import { refreshScm } from './scm';
+import { cycleSession, sessionsEnabled } from './sessions';
 
 export interface Command {
   id: string;
@@ -177,12 +178,24 @@ export function setupCommands(): void {
     }, 'ctrl+shift+o');
   }
 
+  // 키 배정(사용자 확정): Ctrl+Tab = 워크스페이스 안 에디터 탭 넘기기, Ctrl+Shift+Tab =
+  // 세션 탭 순환. 브라우저에서는 둘 다 예약키라 앱 전용이고 (Ctrl+PageUp/Down 이 겸용 대안),
+  // Ctrl+Alt+Tab 은 Windows OS 태스크 전환기가 가로채 기각 (실기 확인).
+  if (sessionsEnabled()) {
+    register({
+      id: 'workbench.action.nextSessionTab',
+      title: 'View: Switch to Next Session Tab',
+      keybinding: 'Ctrl+Shift+Tab',
+      run: () => cycleSession(1),
+    }, 'ctrl+shift+tab');
+  }
+
   register({
     id: 'workbench.action.nextEditor',
     title: 'View: Open Next Editor',
-    keybinding: 'Ctrl+PageDown',
+    keybinding: 'Ctrl+Tab',
     run: () => cycleTab(1),
-  }, 'ctrl+pagedown');
+  }, 'ctrl+tab', 'ctrl+pagedown');
 
   register({
     id: 'workbench.action.previousEditor',

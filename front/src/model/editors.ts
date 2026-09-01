@@ -78,9 +78,18 @@ export function setDisposeModels(fn: (path: string) => void): void {
   disposeModels = fn;
 }
 
-/** 세션별 에디터 모듈 — 탭·그룹·문서 상태와 열기/저장/충돌 처리가 팩토리 안에 산다 */
-export function createEditors(backend: ThinBackend) {
+/** 세션별 에디터 모듈 — 탭·그룹·문서 상태와 열기/저장/충돌 처리가 팩토리 안에 산다.
+ *  isActive: 이 세션이 활성인가 — monaco 훅은 활성 세션에서만 발화한다 (모델 캐시가
+ *  활성 세션 소유라, 배경 세션의 재로드가 같은 경로의 활성 모델을 덮으면 안 된다.
+ *  배경 세션의 모델은 재활성화 때 doc 스냅샷에서 다시 만들어진다) */
+export function createEditors(backend: ThinBackend, isActive: () => boolean = () => true) {
   let nextGroupId = 1;
+  const applyExternalEditHook = (path: string, content: string) => {
+    if (isActive()) applyExternalEdit?.(path, content);
+  };
+  const disposeModelsHook = (path: string) => {
+    if (isActive()) disposeModels?.(path);
+  };
 
   const editors = reactive({
     groups: [{ id: 0, tabs: [], activeTabId: null }] as EditorGroup[],
@@ -100,6 +109,9 @@ export function createEditors(backend: ThinBackend) {
     orphaned: new Set<string>(),
     /** 닫은 탭 복원 이력 (최근이 뒤) — Ctrl+Shift+T 가 pop 한다 */
     recentlyClosed: [] as { kind: Tab['kind']; path: string }[],
+    /** 닫기 확인 대기 — dirty 문서의 마지막 탭을 닫을 때 Save/Don't Save/Cancel 대화상자
+     *  (VS Code 동일 — 조용히 닫으면 버퍼가 몰래 살아남아 "닫았는데 편집이 남는" 혼동을 낳는다) */
+    closeConfirm: null as { groupId: number; tabId: string; path: string } | null,
     /** 에디터 포커스 요청 — MonacoHost 가 소비. 트리 단일 클릭(preview)은 세우지 않아
      *  포커스가 트리에 남는다 (VS Code 동일 — Delete 가 파일 삭제로 이어져야 한다) */
     pendingFocus: false,
@@ -300,12 +312,50 @@ export function createEditors(backend: ThinBackend) {
     }
   }
 
-  function closeTab(groupId: number, tabId: string): void {
+  /** force: 확인 대화상자를 거치지 않는 닫기 — confirm 처리부·삭제(closePathTabs)가 쓴다 */
+  function closeTab(groupId: number, tabId: string, force = false): void {
+    if (!force) {
+      const target = editors.groups.find((g) => g.id === groupId)?.tabs.find((t) => t.id === tabId);
+      if (!target) return;
+      const doc = editors.docs.get(target.path);
+      // 같은 문서를 보는 다른 탭(diff 포함)이 남으면 버퍼는 계속 보이는 중 — 확인 불요
+      const refs = editors.groups.reduce(
+        (n, g) => n + g.tabs.filter((t) => t.path === target.path).length,
+        0,
+      );
+      if (doc && doc.content !== doc.savedContent && refs === 1) {
+        editors.closeConfirm = { groupId, tabId, path: target.path };
+        return;
+      }
+    }
     const tab = takeTab(groupId, tabId);
     if (!tab) return;
     editors.recentlyClosed.push({ kind: tab.kind, path: tab.path });
     if (editors.recentlyClosed.length > RECENTLY_CLOSED_CAP) editors.recentlyClosed.shift();
     collapseIfEmpty(groupId);
+  }
+
+  /** 닫기 확인 Save — 저장 성공 시에만 닫는다 (실패·충돌은 탭 유지, 충돌은 토스트가 이어받는다) */
+  async function confirmCloseSave(): Promise<void> {
+    const c = editors.closeConfirm;
+    if (!c) return;
+    editors.closeConfirm = null;
+    if (await saveDoc(c.path)) closeTab(c.groupId, c.tabId, true);
+  }
+
+  /** 닫기 확인 Don't Save — 버퍼·monaco 모델을 버려 다음 열기가 디스크를 읽게 한다 */
+  function confirmCloseDiscard(): void {
+    const c = editors.closeConfirm;
+    if (!c) return;
+    editors.closeConfirm = null;
+    editors.docs.delete(c.path);
+    editors.orphaned.delete(c.path);
+    disposeModelsHook(c.path);
+    closeTab(c.groupId, c.tabId, true);
+  }
+
+  function confirmCloseCancel(): void {
+    editors.closeConfirm = null;
   }
 
   /** 마지막으로 닫은 탭 복원 (Ctrl+Shift+T) — 활성 그룹에 고정 탭으로 연다.
@@ -410,7 +460,7 @@ export function createEditors(backend: ThinBackend) {
       editors.docs.delete(path);
       editors.docs.set(np, doc);
     }
-    disposeModels?.(from);
+    disposeModelsHook(from);
     for (const g of editors.groups) {
       for (const t of g.tabs) {
         const np = mapPath(t.path);
@@ -444,13 +494,14 @@ export function createEditors(backend: ThinBackend) {
     const match = (p: string) => p === path || p.startsWith(`${path}/`);
     for (const g of [...editors.groups]) {
       for (const t of [...g.tabs]) {
-        if (match(t.path)) closeTab(g.id, t.id);
+        // force — 삭제는 이미 confirm 을 거쳤다 (dirty 경고는 삭제 confirm 이 겸한다)
+        if (match(t.path)) closeTab(g.id, t.id, true);
       }
     }
     for (const p of [...editors.docs.keys()]) {
       if (match(p)) editors.docs.delete(p);
     }
-    disposeModels?.(path);
+    disposeModelsHook(path);
     if (editors.saveConflict !== null && match(editors.saveConflict)) editors.saveConflict = null;
     for (const p of [...editors.orphaned]) if (match(p)) editors.orphaned.delete(p);
   }
@@ -466,7 +517,7 @@ export function createEditors(backend: ThinBackend) {
     doc.etag = etag;
     if (doc.savedContent === content) return;
     doc.savedContent = content;
-    applyExternalEdit?.(path, content);
+    applyExternalEditHook(path, content);
     // 모델 편집이 change 리스너로 이미 갱신했어도 무해(같은 값) — 모델이 없던 경우를 커버한다
     updateContent(path, content);
   }
@@ -479,35 +530,41 @@ export function createEditors(backend: ThinBackend) {
     return false;
   }
 
-  async function saveActive(): Promise<void> {
-    // diff 탭의 modified 쪽 편집도 같은 문서이므로 kind 와 무관하게 저장한다
-    const tab = activeTab();
-    if (!tab) return;
-    const doc = editors.docs.get(tab.path);
-    if (!doc || doc.content === doc.savedContent) return;
+  /** 문서 저장의 실체 — 활성 탭 저장(saveActive)과 닫기 확인 Save 가 공유한다.
+   *  @returns 저장 완료 여부 — 실패·충돌·경합(rename)은 false */
+  async function saveDoc(path: string): Promise<boolean> {
+    const doc = editors.docs.get(path);
+    if (!doc || doc.content === doc.savedContent) return true;
     // WHY: await 중 타이핑되면 doc.content 가 앞서간다 — 실제 쓴 내용만 saved 로 표시해야
     //      "저장됨으로 보이는 미저장 편집" 이 안 생긴다
     const content = doc.content;
-    const path = tab.path;
     let r: WriteResult;
     try {
       r = await backend.writeFile(path, content, doc.etag);
     } catch (e) {
       notify('error', `Failed to save '${baseName(path)}': ${errText(e)}`);
-      return;
+      return false;
     }
-    // WHY: 왕복 중 rename 되면(remapPaths 가 tab.path 를 바꾼다) 이 결과는 옛 경로 것이다 —
+    // WHY: 왕복 중 rename 되면(remapPaths 가 docs 키를 옮긴다) 이 결과는 옛 경로 것이다 —
     //      saved 로 표시하면 새 경로의 더티를 잃는다. 버리면 다음 저장이 새 경로로 다시 쓴다.
-    if (tab.path !== path) return;
+    if (editors.docs.get(path) !== doc) return false;
     if (r.conflict) {
       editors.saveConflict = path;
-      return;
+      return false;
     }
     doc.etag = r.etag;
     doc.savedContent = content;
     updateContent(path, doc.content);
     // orphan 저장 = 부활 (데몬 writeFile 은 대상 부재 시 그냥 쓴다) — 표시 즉시 해제
     editors.orphaned.delete(path);
+    return true;
+  }
+
+  async function saveActive(): Promise<void> {
+    // diff 탭의 modified 쪽 편집도 같은 문서이므로 kind 와 무관하게 저장한다
+    const tab = activeTab();
+    if (!tab) return;
+    await saveDoc(tab.path);
   }
 
   /** 충돌 토스트의 Overwrite — etag 없이 다시 써서 디스크를 내 버퍼로 덮는다 */
@@ -546,7 +603,7 @@ export function createEditors(backend: ThinBackend) {
       const { content, etag } = await backend.readFile(path);
       doc.etag = etag;
       doc.savedContent = content;
-      applyExternalEdit?.(path, content);
+      applyExternalEditHook(path, content);
       updateContent(path, content);
       editors.saveConflict = null;
       editors.orphaned.delete(path); // 읽혔다 = 디스크에 있다
@@ -570,7 +627,8 @@ export function createEditors(backend: ThinBackend) {
 
   return {
     editors, activeGroup, activeTab, openFile, openFileAt, openDiff, setActiveTab, pinTab,
-    openFileSplit, closeTab, reopenClosedEditor, moveTabToGroup, moveTabSplit,
+    openFileSplit, closeTab, confirmCloseSave, confirmCloseDiscard, confirmCloseCancel,
+    reopenClosedEditor, moveTabToGroup, moveTabSplit,
     splitActiveEditor, updateContent, setOrphaned, remapPaths, closePathTabs,
     reloadDocFromDisk, hasDirtyDocs, saveActive, overwriteConflict, revertConflict, indentOf,
   };
@@ -629,8 +687,11 @@ export const setActiveTab = (groupId: number, tabId: string): void =>
 export const pinTab = (groupId: number, tabId: string): void => ctx().editors.pinTab(groupId, tabId);
 export const openFileSplit = (path: string, refGroupId: number, side: SplitSide): Promise<void> =>
   ctx().editors.openFileSplit(path, refGroupId, side);
-export const closeTab = (groupId: number, tabId: string): void =>
-  ctx().editors.closeTab(groupId, tabId);
+export const closeTab = (groupId: number, tabId: string, force = false): void =>
+  ctx().editors.closeTab(groupId, tabId, force);
+export const confirmCloseSave = (): Promise<void> => ctx().editors.confirmCloseSave();
+export const confirmCloseDiscard = (): void => ctx().editors.confirmCloseDiscard();
+export const confirmCloseCancel = (): void => ctx().editors.confirmCloseCancel();
 export const reopenClosedEditor = (): Promise<void> => ctx().editors.reopenClosedEditor();
 export const moveTabToGroup = (fromGroupId: number, tabId: string, toGroupId: number, index?: number): void =>
   ctx().editors.moveTabToGroup(fromGroupId, tabId, toGroupId, index);
