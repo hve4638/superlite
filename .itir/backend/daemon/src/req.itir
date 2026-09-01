@@ -1,10 +1,12 @@
 // crate::err(main.rs) 참조 — crate:: 는 crate 루트(main.rs 디렉토리) 좌표 '.' 로 정규화된다
 import { err, wire_rel } from '.'
 
-role: RPC 요청 처리 — fs 읽기/쓰기(etag 낙관적 충돌 검사)·stat(내용 없는 경량 etag)·생성/이름변경/삭제, rg 검색, git 상태·커밋. 경로는 safe_join 관문 — 단 파일 단건(readFile/stat/writeFile)은 file_path 를 거쳐 절대 경로도 허용한다 (워크스페이스 밖 파일 열기, VS Code 파리티). excludes 는 VS Code 기본값 하드코딩 (설정 시스템 없음)
+role: RPC 요청 처리 — fs 읽기/쓰기(etag 낙관적 충돌 검사)·stat(내용 없는 경량 etag)·생성/이름변경/삭제, rg 검색, git 상태·커밋. readFile 의 크기 초과·이진(비 UTF-8)은 에러가 아니라 구조화된 unopenable 응답 — 프론트가 탭을 열고 안내 화면을 띄운다. 경로는 safe_join 관문 — 단 파일 단건(readFile/stat/writeFile)은 file_path 를 거쳐 절대 경로도 허용한다 (워크스페이스 밖 파일 열기, VS Code 파리티). excludes 는 VS Code 기본값 하드코딩 (설정 시스템 없음)
 
 // 쓰기 계열 RPC(write/create/rename/delete)의 직렬화 락 — etag 검사-쓰기 원자성의 근거
 val WRITE_LOCK
+// readFile 기본 크기 상한(50MB, VS Code 텍스트 편집기 상한과 동일) — 초과는 unopenable(large) 반환, 검사는 읽기 전(stat)이라 대용량을 나르지 않는다
+val READ_MAX_BYTES
 // 트리(readDir)에서 숨기는 basename — VS Code files.exclude 기본값 (.git·.svn·.hg·.DS_Store·Thumbs.db). node_modules 는 트리에 보인다
 val FILES_EXCLUDED
 // 검색·listFiles 의 rg 공통 인자 — --hidden + files.exclude·search.exclude(node_modules 등) 글롭. ignore 파일은 워크스페이스 안의 것만 (VS Code 기본: useIgnoreFiles=true, parent/global=false)

@@ -57,6 +57,9 @@ function consumeReveal(ed: monaco.editor.IStandaloneCodeEditor, path: string) {
 async function sync() {
   const tab = active.value;
   if (!tab) return;
+  // 열 수 없는 문서(크기 초과·이진)는 모델을 만들지 않는다 — 안내 화면(EditorGroupView)이
+  // 편집기를 가리고 있고, diff 쪽은 이진의 gitOriginalContent 요청 자체를 피해야 한다
+  if (editors.docs.get(tab.path)?.unopenable !== undefined) return;
   if (tab.kind === 'file') {
     const ed = ensureCodeEditor();
     const model = modelFor(tab.path);
@@ -95,6 +98,12 @@ onMounted(() => {
   // HEAD 가 움직이면(앱 밖 커밋 포함) 열려 있는 diff 탭의 original 도 갈아끼운다 —
   // 탭 재활성화를 기다리지 않는다. 파일 탭이면 sync 는 모델 동일성 검사로 no-op
   watch(() => scm.head, () => void sync(), { flush: 'post' });
+  // 열린 채 외부 변경으로 열 수 있게 된 파일(이진→텍스트 등) — 탭 전환 없이 모델을 세워야 한다
+  watch(
+    () => !!(active.value && editors.docs.get(active.value.path)?.unopenable),
+    () => void sync(),
+    { flush: 'post' },
+  );
   watch(
     () => editors.pendingReveal,
     (req) => {

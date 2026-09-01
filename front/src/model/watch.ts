@@ -66,13 +66,13 @@ export function createWatch(
           continue;
         }
         const issuedSaved = doc.savedContent;
-        swallow(backend.readFile(path).then(({ content, etag }) => {
+        swallow(backend.readFile(path).then((r) => {
           // 읽혔다 = 디스크에 있다 (삭제 이벤트가 가짜였거나 재생성됨 — VS Code 의 재검증과 동일)
           setOrphaned(path, false);
           // WHY: 왕복 중 저장이 끝났으면 이 스냅샷이 더 낡다 — 적용하면 방금 저장을 되돌리고
           //      etag 도 되감겨 다음 저장이 스퓨리어스 충돌을 낸다
           if (editors.docs.get(path)?.savedContent !== issuedSaved) return;
-          reloadDocFromDisk(path, content, etag);
+          reloadDocFromDisk(path, r);
         }).catch(() => {
           // 끊김 중 reject(진행 중 요청 일괄 실패)는 삭제가 아니다 — onclose 가 connHandler(false)
           // 를 동기 선행하므로 이 catch 시점에는 connection.ok 가 이미 false 다. 재검증은

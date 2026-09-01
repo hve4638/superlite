@@ -25,6 +25,10 @@ fn file_etag(meta: &std::fs::Metadata) -> String {
 // ponytail: 전역 쓰기 락 + 락 안 블로킹 fs 호출 — 병목이 실측되면 경로별 락 + spawn_blocking.
 static WRITE_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
+/// readFile 의 기본 크기 상한 — VS Code 의 텍스트 편집기 상한(50MB)과 동일. 초과는 에러가
+/// 아니라 unopenable(large) 반환이다 — 프론트가 탭을 열고 실측 크기와 함께 안내를 띄운다.
+const READ_MAX_BYTES: u64 = 50 * 1024 * 1024;
+
 /// 트리(readDir)에서 숨기는 basename — VS Code files.exclude 기본값.
 /// node_modules 는 VS Code 기본과 동일하게 트리에 보인다.
 /// ponytail: 설정 시스템이 없어 하드코딩 — 사용자 설정이 생기면 여기로 합류.
@@ -82,15 +86,23 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
             //      최신 내용을 조용히 덮는다. stat 먼저면 최악이 스퓨리어스 충돌(내용 비교
             //      탈출구가 거른다). 데몬 자신의 쓰기와는 락으로 안 겹친다.
             let meta = std::fs::metadata(&path).map_err(err)?;
-            // 크기 상한이 있는 호출(undo 캡처 등)은 읽기 전에 거른다 — 대용량을 읽어
-            // 나른 뒤 버리는 낭비 방지
-            if let Some(max) = p["maxBytes"].as_u64() {
-                if meta.len() > max {
-                    return Err(format!("maxBytes 초과: {} > {max}", meta.len()));
-                }
+            // 크기 초과·이진(비 UTF-8)은 에러가 아니라 구조화된 사유다 — 실존하는 파일이므로
+            // 탭은 열려야 하고, 사유·크기는 안내 화면 문구가 된다. 상한 검사는 읽기 전 —
+            // 대용량을 읽어 나른 뒤 버리는 낭비 방지 (maxBytes 는 undo 캡처 등 호출측 상한)
+            let max = p["maxBytes"].as_u64().unwrap_or(READ_MAX_BYTES);
+            if meta.len() > max {
+                return Ok(json!({
+                    "unopenable": {"kind": "large", "size": meta.len()},
+                    "etag": file_etag(&meta),
+                }));
             }
-            let content = std::fs::read_to_string(&path).map_err(err)?;
-            Ok(json!({"content": content, "etag": file_etag(&meta)}))
+            match String::from_utf8(std::fs::read(&path).map_err(err)?) {
+                Ok(content) => Ok(json!({"content": content, "etag": file_etag(&meta)})),
+                Err(_) => Ok(json!({
+                    "unopenable": {"kind": "binary"},
+                    "etag": file_etag(&meta),
+                })),
+            }
         }
         "stat" => {
             let path = file_path(root, req_path(p)?)?;

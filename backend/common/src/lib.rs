@@ -16,7 +16,9 @@ pub fn socket_path() -> PathBuf {
 /// 제 주소에서 기존 백엔드를 계속 섬기다 수명 규칙대로 자진 종료).
 /// 2: browseDir 추가 — 구버전 상주 데몬이 unknown method 를 돌려줘 웹 폴더 열기 자동완성이
 ///    조용히 빈 결과("No matching results")로 빠졌다.
-const WIRE_VERSION: u32 = 2;
+/// 3: readFile 이 크기 초과·이진(비 UTF-8)을 에러 대신 구조화된 unopenable 로 반환 —
+///    구버전 프론트는 content 없는 성공 응답을 텍스트로 오해하므로 의미 변경이다.
+const WIRE_VERSION: u32 = 3;
 
 /// 0700 전용 디렉터리를 만들어 그 안에 소켓을 둔다.
 #[cfg(unix)]

@@ -56,11 +56,15 @@ export interface FsChange {
   kind: 'create' | 'change' | 'delete';
 }
 
-export interface FileContent {
-  content: string;
-  /** (mtime,size) 기반 불투명 토큰 — writeFile 낙관적 충돌 검사용. 내용 해시가 아니다. */
-  etag: string;
-}
+/** 텍스트 편집기에 표시할 수 없는 사유 — 파일은 실존하므로 탭은 열리고 안내 화면이 뜬다.
+ *  large 는 크기 상한 초과(size 는 실측 바이트 — 안내 문구에 표시), binary 는 이진이거나
+ *  UTF-8 이 아닌 인코딩. */
+export type Unopenable = { kind: 'large'; size: number } | { kind: 'binary' };
+
+/** unopenable 이면 content 는 없다 — etag 는 양쪽 다 온다 (orphan 재검증·재로드용). */
+export type FileContent =
+  | { content: string; etag: string; unopenable?: undefined }
+  | { content?: undefined; etag: string; unopenable: Unopenable };
 
 export interface FileStat {
   /** readFile 의 etag 와 같은 (mtime,size) 기반 불투명 토큰 */
@@ -91,7 +95,9 @@ export interface ThinBackend {
   workspace(): Promise<WorkspaceInfo>;
   /** path 디렉토리의 직계 엔트리. 정렬은 호출자 책임. */
   readDir(path: string): Promise<DirEntry[]>;
-  /** maxBytes 를 주면 초과 파일(바이트 기준)은 읽지 않고 reject — undo 캡처 등 상한이 필요한 호출용 */
+  /** 크기 초과(maxBytes 또는 백엔드 기본 상한)·이진/미지원 인코딩은 reject 가 아니라
+   *  unopenable 로 온다 — 실존하지 않는 경로 등 실제 실패만 reject 다. maxBytes 는
+   *  undo 캡처 등 호출측 상한 (초과 파일을 읽어 나르지 않는다). */
   readFile(path: string, opts?: { maxBytes?: number }): Promise<FileContent>;
   /** 내용 없이 실존·변경만 확인하는 경량 검사 — 정규 파일 전용(디렉토리는 reject). orphan 재검증용 */
   stat(path: string): Promise<FileStat>;

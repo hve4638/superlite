@@ -176,10 +176,11 @@ export class MockBackend implements ThinBackend {
   readFile(path: string, opts?: { maxBytes?: number }): Promise<FileContent> {
     const content = FILES[path];
     if (content === undefined) return Promise.reject(new Error(`ENOENT: ${path}`));
+    const etag = String(ETAGS.get(path) ?? 0);
     if (opts?.maxBytes !== undefined && content.length > opts.maxBytes) {
-      return Promise.reject(new Error(`maxBytes 초과: ${path}`));
+      return delay({ unopenable: { kind: 'large', size: content.length }, etag });
     }
-    return delay({ content, etag: String(ETAGS.get(path) ?? 0) });
+    return delay({ content, etag });
   }
 
   stat(path: string): Promise<FileStat> {

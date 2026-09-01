@@ -10,7 +10,7 @@ port ThinBackend {
     role: 디렉토리 1층 나열 (트리 lazy 로드 단위). files.exclude 기본값(.git 등 VCS 메타)은 숨긴다 — node_modules 는 보인다
   }
   fn readFile(path, maxBytes?) -> FileContent {
-    role: 파일 내용 + 그 시점 디스크 etag. maxBytes 상한 초과는 읽지 않고 에러 (undo 캡처용). 루트 상대 외에 절대 경로도 허용 — 워크스페이스 밖 파일 열기 (OS 드롭, VS Code 파리티)
+    role: 파일 내용 + 그 시점 디스크 etag. 크기 초과(maxBytes 또는 데몬 기본 상한 50MB)·이진/비 UTF-8 은 에러가 아니라 unopenable(사유 kind·실측 size)로 반환 — 탭은 열리고 편집기 자리에 안내 화면이 뜬다 (etag 는 이때도 온다 — orphan 재검증·재로드용). 실존하지 않는 경로 등 실제 실패만 에러. maxBytes 는 undo 캡처 등 호출측 상한 (초과 파일을 읽어 나르지 않는다). 루트 상대 외에 절대 경로도 허용 — 워크스페이스 밖 파일 열기 (OS 드롭, VS Code 파리티)
   }
   fn stat(path) -> FileStat {
     role: 내용 없이 실존·변경만 확인하는 경량 etag 스냅샷 — 정규 파일 전용(디렉토리는 에러). orphan 재검증용. readFile 과 같이 절대 경로 허용
@@ -74,6 +74,7 @@ export type GitChange
 export type GitStatus
 export type FsChange
 export type FileContent
+export type Unopenable
 export type FileStat
 export type WriteResult
 export type TerminalSession

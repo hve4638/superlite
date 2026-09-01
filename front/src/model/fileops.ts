@@ -82,11 +82,12 @@ export function createFileops(
     let captured: string | null = null;
     if (kind === 'file') {
       try {
-        // maxBytes: 상한 초과 파일을 읽어 나른 뒤 버리는 낭비 방지 — 백엔드가 stat 로 거른다
-        const { content } = await backend.readFile(path, { maxBytes: UNDO_CAPTURE_MAX });
-        captured = content;
+        // maxBytes: 상한 초과 파일을 읽어 나른 뒤 버리는 낭비 방지 — 백엔드가 stat 로 거른다.
+        // 대용량·바이너리는 unopenable 로 온다 — 캡처(undo)만 포기하고 삭제는 진행한다
+        const r = await backend.readFile(path, { maxBytes: UNDO_CAPTURE_MAX });
+        if (r.content !== undefined) captured = r.content;
       } catch {
-        /* 캡처 실패(바이너리·대용량) — undo 만 포기 */
+        /* 캡처 실패(읽기 에러) — undo 만 포기 */
       }
     }
     // try 는 delete RPC 만 감싼다 — 성공한 삭제의 후처리(리프레시) 실패가

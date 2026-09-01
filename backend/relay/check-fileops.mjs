@@ -74,8 +74,9 @@ try {
   assert.ok(!existsSync(join(wsRoot, 'a/b/new.txt')), 'rename 원본 소멸');
   assert.strictEqual(readFileSync(join(wsRoot, 'a/b/renamed.txt'), 'utf8'), 'keep me\n', 'rename 내용 유지');
 
-  // readFile maxBytes: 초과 파일은 읽지 않고 에러 (undo 캡처 상한)
-  await assert.rejects(call('readFile', { path: 'a/b/renamed.txt', maxBytes: 4 }), 'maxBytes 초과 → 에러');
+  // readFile maxBytes: 초과 파일은 읽지 않고 unopenable(large) — 에러가 아니다 (undo 캡처 상한)
+  const rBig = await call('readFile', { path: 'a/b/renamed.txt', maxBytes: 4 });
+  assert.strictEqual(rBig.unopenable?.kind, 'large', 'maxBytes 초과 → unopenable large');
   const rOk = await call('readFile', { path: 'a/b/renamed.txt', maxBytes: 1000 });
   assert.strictEqual(rOk.content, 'keep me\n', 'maxBytes 이내 → 정상');
 

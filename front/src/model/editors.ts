@@ -1,5 +1,5 @@
 import { reactive } from '@vue/reactivity';
-import type { ThinBackend, WriteResult } from '../backend/types';
+import type { FileContent, ThinBackend, Unopenable, WriteResult } from '../backend/types';
 import { ctx, viewOf } from './ctx';
 import { errText, notify } from './notifications';
 
@@ -50,6 +50,9 @@ interface Doc {
   savedContent: string;
   /** savedContent 가 읽힌/쓰인 시점의 디스크 etag — 저장 시 낙관적 충돌 검사에 쓴다 */
   etag: string;
+  /** 열 수 없는 사유(크기 초과·이진) — 있으면 편집기 대신 안내 화면이 뜨고 content 는 '' 다.
+   *  '' === '' 라 dirty 가 될 수 없어 저장 경로는 자연히 막힌다 */
+  unopenable?: Unopenable;
 }
 
 const RECENTLY_CLOSED_CAP = 20;
@@ -129,8 +132,10 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
   async function ensureDoc(path: string): Promise<Doc> {
     let doc = editors.docs.get(path);
     if (!doc) {
-      const { content, etag } = await backend.readFile(path);
-      doc = { content, savedContent: content, etag };
+      const r = await backend.readFile(path);
+      doc = r.unopenable !== undefined
+        ? { content: '', savedContent: '', etag: r.etag, unopenable: r.unopenable }
+        : { content: r.content, savedContent: r.content, etag: r.etag };
       editors.docs.set(path, doc);
     }
     return doc;
@@ -510,11 +515,15 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
    * 외부(디스크) 변경 반영. 깨끗한 문서만 조용히 재로드한다 — dirty 는 안 건드리고
    * 충돌은 저장 시점 검사로 일원화한다 (VS Code 동일).
    */
-  function reloadDocFromDisk(path: string, content: string, etag: string): void {
+  function reloadDocFromDisk(path: string, r: FileContent): void {
     const doc = editors.docs.get(path);
     if (!doc || doc.content !== doc.savedContent) return;
     // 내용이 같아도(touch, 같은 내용 재저장) etag 는 갱신 — 다음 저장의 스퓨리어스 충돌 방지
-    doc.etag = etag;
+    doc.etag = r.etag;
+    // 외부 변경으로 열 수 없게(텍스트→이진·크기 초과) 되거나 반대로 돌아올 수 있다 —
+    // 사유를 최신화하고, unopenable 쪽 내용은 '' 로 수렴시킨다 (안내 화면이 대신 뜬다)
+    doc.unopenable = r.unopenable;
+    const content = r.unopenable !== undefined ? '' : r.content;
     if (doc.savedContent === content) return;
     doc.savedContent = content;
     applyExternalEditHook(path, content);
@@ -600,7 +609,14 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
       return;
     }
     try {
-      const { content, etag } = await backend.readFile(path);
+      const r = await backend.readFile(path);
+      if (r.unopenable !== undefined) {
+        // 디스크가 이진·크기 초과로 바뀐 경우 — 텍스트로 되돌릴 내용이 없다.
+        // 토스트는 남긴다 — Overwrite 로 내 버퍼를 살리는 길이 남는다
+        notify('error', `Failed to revert '${baseName(path)}': file is binary or too large`);
+        return;
+      }
+      const { content, etag } = r;
       doc.etag = etag;
       doc.savedContent = content;
       applyExternalEditHook(path, content);
@@ -703,8 +719,8 @@ export const updateContent = (path: string, content: string): void =>
 export const setOrphaned = (path: string, on: boolean): void => ctx().editors.setOrphaned(path, on);
 export const remapPaths = (from: string, to: string): void => ctx().editors.remapPaths(from, to);
 export const closePathTabs = (path: string): void => ctx().editors.closePathTabs(path);
-export const reloadDocFromDisk = (path: string, content: string, etag: string): void =>
-  ctx().editors.reloadDocFromDisk(path, content, etag);
+export const reloadDocFromDisk = (path: string, r: FileContent): void =>
+  ctx().editors.reloadDocFromDisk(path, r);
 export const hasDirtyDocs = (): boolean => ctx().editors.hasDirtyDocs();
 export const saveActive = (): Promise<void> => ctx().editors.saveActive();
 export const overwriteConflict = (): Promise<void> => ctx().editors.overwriteConflict();

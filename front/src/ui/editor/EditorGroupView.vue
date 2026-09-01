@@ -56,6 +56,16 @@ const crumbs = computed(() =>
   active.value && active.value.kind === 'file' ? active.value.path.split('/') : [],
 );
 
+// 활성 탭 문서의 열 수 없음 사유 — 있으면 monaco 대신 안내 화면 (diff 탭도 같은 문서라 동일)
+const unopenable = computed(() =>
+  active.value ? editors.docs.get(active.value.path)?.unopenable ?? null : null,
+);
+
+/** 안내 문구용 크기 표기 — 상한이 수십 MB 라 MB 고정으로 충분하다 */
+function fmtMB(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(2)}MB`;
+}
+
 function focusGroup() {
   editors.activeGroupId = props.group.id;
 }
@@ -82,7 +92,18 @@ const SHORTCUTS = [
       </div>
     </template>
     <div class="editor-body">
-      <MonacoHost v-if="group.tabs.length" :group="group" />
+      <!-- 열 수 없는 파일(크기 초과·이진) 안내 — 탭·breadcrumbs 는 그대로, 편집기만 대체 -->
+      <div v-if="unopenable" class="unopenable">
+        <p v-if="unopenable.kind === 'large'">
+          The file is not displayed in the text editor because it is too large
+          ({{ fmtMB(unopenable.size) }}).
+        </p>
+        <p v-else>
+          The file is not displayed in the text editor because it is either binary or
+          uses an unsupported text encoding.
+        </p>
+      </div>
+      <MonacoHost v-if="group.tabs.length" v-show="!unopenable" :group="group" />
       <div v-else class="watermark">
         <div class="watermark-grid">
           <template v-for="s in SHORTCUTS" :key="s.label">
@@ -191,6 +212,17 @@ const SHORTCUTS = [
   display: flex;
   align-items: center;
   justify-content: center;
+}
+/* VS Code binary/large 안내 근사 — 중앙 정렬 텍스트 한 줄 */
+.unopenable {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 20px;
+  text-align: center;
+  color: var(--vscode-editor-foreground);
+  font-size: 13px;
 }
 /* VS Code watermark: 라벨 오른쪽 정렬 / 키 왼쪽 정렬 2열 */
 .watermark-grid {
