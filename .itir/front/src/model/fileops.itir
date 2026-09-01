@@ -19,6 +19,9 @@ export fn createFile(path) {
 export fn createDir(path) {
   role: 디렉토리 생성 후 부모 리프레시. undo = delete
 }
+export fn saveClipboardImage(dir, blob) {
+  role: 클립보드 이미지를 dir 에 clipboard_<타임스탬프>.<확장자> 로 저장 (base64 와이어) — 저장된 경로 반환, 실패는 notify 후 null. undo = delete
+}
 export fn renameEntry(from, to) {
   role: 이름 변경 + 열린 문서/탭 경로 재매핑 (etag 유지). undo = 역방향 rename
 }

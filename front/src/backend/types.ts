@@ -101,8 +101,12 @@ export interface ThinBackend {
   readFile(path: string, opts?: { maxBytes?: number }): Promise<FileContent>;
   /** 내용 없이 실존·변경만 확인하는 경량 검사 — 정규 파일 전용(디렉토리는 reject). orphan 재검증용 */
   stat(path: string): Promise<FileStat>;
-  /** etag 를 주면 낙관적 충돌 검사 — 불일치(+내용 상이) 시 쓰지 않고 conflict. 생략 시 무조건 쓴다. */
-  writeFile(path: string, content: string, etag?: string): Promise<WriteResult>;
+  /**
+   * etag 를 주면 낙관적 충돌 검사 — 불일치(+내용 상이) 시 쓰지 않고 conflict. 생략 시 무조건 쓴다.
+   * encoding: 'base64' 면 content 를 이진으로 디코드해 쓴다 (클립보드 이미지 저장 등) —
+   * JSON 텍스트 와이어의 이진 통로. 생략 시 UTF-8 텍스트 그대로.
+   */
+  writeFile(path: string, content: string, etag?: string, encoding?: 'base64'): Promise<WriteResult>;
   /** 빈 파일 배타적 생성 — 중간 디렉토리 자동 생성, 이미 존재하면 reject (기존 내용 보호) */
   createFile(path: string): Promise<void>;
   /** 디렉토리 배타적 생성 — 중간 디렉토리 자동, 이미 존재하면 reject (undo 의 "내가 만든 것" 전제 보호) */

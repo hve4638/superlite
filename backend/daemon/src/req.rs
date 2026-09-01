@@ -118,6 +118,18 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
         "writeFile" => {
             // WHY: content 누락을 "" 로 해석하면 깨진 요청이 파일을 비운다 — 명시적 에러
             let content = p["content"].as_str().ok_or("content 필요")?;
+            // encoding=base64 는 이진 쓰기 (클립보드 이미지 저장 등) — 부재 시 UTF-8 텍스트 그대로
+            let bytes: std::borrow::Cow<[u8]> = match p["encoding"].as_str() {
+                Some("base64") => {
+                    use base64::Engine as _;
+                    base64::engine::general_purpose::STANDARD
+                        .decode(content)
+                        .map_err(err)?
+                        .into()
+                }
+                Some(other) => return Err(format!("지원하지 않는 encoding: {other}")),
+                None => content.as_bytes().into(),
+            };
             let path = file_path(root, req_path(p)?)?;
             let _g = WRITE_LOCK.lock().await;
             // 낙관적 충돌 검사 (VS Code FILE_MODIFIED_SINCE 상당). etag 없으면 무조건 쓴다
@@ -128,7 +140,7 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
                     // read 실패(EISDIR 등)는 충돌로 위장하지 않고 에러로 낸다.
                     Ok(meta) => {
                         if file_etag(&meta) != expected
-                            && std::fs::read(&path).map_err(err)? != content.as_bytes()
+                            && std::fs::read(&path).map_err(err)? != *bytes
                         {
                             return Ok(json!({"conflict": true}));
                         }
@@ -137,7 +149,7 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
                     Err(e) => return Err(err(e)), // 권한 등 — "없음" 으로 오독하면 검사가 무단 통과
                 }
             }
-            std::fs::write(&path, content).map_err(err)?;
+            std::fs::write(&path, &bytes).map_err(err)?;
             Ok(json!({"etag": file_etag(&std::fs::metadata(&path).map_err(err)?)}))
         }
         "createFile" => {

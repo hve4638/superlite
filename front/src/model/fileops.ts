@@ -15,6 +15,26 @@ const UNDO_CAPTURE_MAX = 5 * 1024 * 1024;
 
 const swallow = (p: Promise<unknown>): void => void p.catch(() => {});
 
+/** clipboard_ 파일명의 타임스탬프 — 참고 구현(save-clipboard)의 yyyyMMdd_HHmmss_fff */
+function timestampName(): string {
+  const d = new Date();
+  const n = (v: number, w = 2): string => String(v).padStart(w, '0');
+  return `${d.getFullYear()}${n(d.getMonth() + 1)}${n(d.getDate())}_${n(d.getHours())}${n(d.getMinutes())}${n(d.getSeconds())}_${n(d.getMilliseconds(), 3)}`;
+}
+
+/** MIME 서브타입 → 확장자. 클립보드 이미지는 사실상 항상 image/png 다 — jpeg 만 관례로 축약 */
+const extOf = (mime: string): string => mime.replace(/^image\//, '').replace('jpeg', 'jpg');
+
+/** Blob → base64 (data URL 의 페이로드 부분) — writeFile 의 base64 와이어용 */
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve((r.result as string).slice((r.result as string).indexOf(',') + 1));
+    r.onerror = () => reject(r.error ?? new Error('failed to read blob'));
+    r.readAsDataURL(blob);
+  });
+}
+
 /** 세션별 파일 조작 모듈 — undo 스택이 세션에 묶인다 */
 export function createFileops(
   backend: ThinBackend,
@@ -69,6 +89,25 @@ export function createFileops(
     await backend.createDir(path);
     undoStack.push(() => rawDelete(path));
     await refreshAfter([path]);
+  }
+
+  /**
+   * 클립보드 이미지를 dir 에 파일로 저장 (탐색기 붙여넣기). 저장된 경로 반환, 실패는
+   * notify 후 null. 파일명은 참고 구현(save-clipboard)의 clipboard_<타임스탬프> 규칙 —
+   * 밀리초 단위라 충돌은 사실상 없어 중복 검사를 두지 않는다.
+   */
+  async function saveClipboardImage(dir: string, blob: Blob): Promise<string | null> {
+    const name = `clipboard_${timestampName()}.${extOf(blob.type)}`;
+    const path = dir === '' ? name : `${dir}/${name}`;
+    try {
+      await backend.writeFile(path, await blobToBase64(blob), undefined, 'base64');
+    } catch (e) {
+      notify('error', `Failed to save clipboard image: ${errText(e)}`);
+      return null;
+    }
+    undoStack.push(() => rawDelete(path));
+    await refreshAfter([path]);
+    return path;
   }
 
   async function renameEntry(from: string, to: string): Promise<void> {
@@ -126,13 +165,15 @@ export function createFileops(
     }
   }
 
-  return { createFile, createDir, renameEntry, deleteEntry, undoFileOp };
+  return { createFile, createDir, saveClipboardImage, renameEntry, deleteEntry, undoFileOp };
 }
 
 // ---- 활성 세션 전달 shim
 
 export const createFile = (path: string): Promise<void> => ctx().fileops.createFile(path);
 export const createDir = (path: string): Promise<void> => ctx().fileops.createDir(path);
+export const saveClipboardImage = (dir: string, blob: Blob): Promise<string | null> =>
+  ctx().fileops.saveClipboardImage(dir, blob);
 export const renameEntry = (from: string, to: string): Promise<void> =>
   ctx().fileops.renameEntry(from, to);
 export const deleteEntry = (path: string, kind: 'file' | 'directory'): Promise<void> =>

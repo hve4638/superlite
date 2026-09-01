@@ -3704,6 +3704,7 @@ version = "0.1.0"
 name = "superlight-daemon"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "notify",
  "portable-pty",
  "serde_json",

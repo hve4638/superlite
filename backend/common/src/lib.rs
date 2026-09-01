@@ -18,7 +18,9 @@ pub fn socket_path() -> PathBuf {
 ///    조용히 빈 결과("No matching results")로 빠졌다.
 /// 3: readFile 이 크기 초과·이진(비 UTF-8)을 에러 대신 구조화된 unopenable 로 반환 —
 ///    구버전 프론트는 content 없는 성공 응답을 텍스트로 오해하므로 의미 변경이다.
-const WIRE_VERSION: u32 = 3;
+/// 4: writeFile 에 encoding='base64' 추가 — 구버전 데몬은 미지 파라미터를 무시하고 base64
+///    문자열을 텍스트로 그대로 써서 이미지 저장이 조용히 깨진다.
+const WIRE_VERSION: u32 = 4;
 
 /// 0700 전용 디렉터리를 만들어 그 안에 소켓을 둔다.
 #[cfg(unix)]

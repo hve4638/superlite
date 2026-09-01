@@ -275,9 +275,9 @@ export class WsBackend implements ThinBackend {
   stat(path: string): Promise<FileStat> {
     return this.call('stat', { path });
   }
-  writeFile(path: string, content: string, etag?: string): Promise<WriteResult> {
-    // etag 가 undefined 면 JSON.stringify 가 키를 떨군다 — 데몬은 부재로 본다
-    return this.call('writeFile', { path, content, etag });
+  writeFile(path: string, content: string, etag?: string, encoding?: 'base64'): Promise<WriteResult> {
+    // etag/encoding 이 undefined 면 JSON.stringify 가 키를 떨군다 — 데몬은 부재로 본다
+    return this.call('writeFile', { path, content, etag, encoding });
   }
   createFile(path: string): Promise<void> {
     return this.call('createFile', { path });

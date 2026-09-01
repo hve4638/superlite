@@ -2,7 +2,7 @@
 //   cargo run -p superlight-backend   (데몬은 자동 기동)
 //   node backend/check.mjs
 import assert from 'node:assert';
-import { rmSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 
 const deadline = setTimeout(() => {
   console.error('check timeout (15s) — 데몬이 응답하지 않는다');
@@ -85,6 +85,22 @@ assert.ok(
 );
 
 await assert.rejects(call('writeFile', { path: 'front/.check-tmp' }), /content/, 'writeFile no content');
+
+// base64 이진 쓰기 (클립보드 이미지 저장 와이어) — 디코드된 바이트가 그대로 디스크에 남아야 한다
+const pngMagic = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff];
+await call('writeFile', {
+  path: 'front/.check-tmp-bin',
+  content: Buffer.from(pngMagic).toString('base64'),
+  encoding: 'base64',
+});
+const bin = readFileSync(new URL('../../front/.check-tmp-bin', import.meta.url));
+rmSync(new URL('../../front/.check-tmp-bin', import.meta.url));
+assert.deepStrictEqual([...bin], pngMagic, 'writeFile base64 bytes');
+await assert.rejects(
+  call('writeFile', { path: 'front/.check-tmp', content: 'x', encoding: 'hex' }),
+  /encoding/,
+  'writeFile unknown encoding',
+);
 
 send('createTerminal', { term: 1, cols: 80, rows: 24 });
 await sleep(700);

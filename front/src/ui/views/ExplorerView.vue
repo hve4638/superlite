@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { collapseAll, files, parentOf, refreshTree, visibleNodes, toggleDir, type TreeNode } from '../../model/files';
 import { editors, openFile } from '../../model/editors';
-import { createDir, createFile, deleteEntry, renameEntry, undoFileOp } from '../../model/fileops';
+import { createDir, createFile, deleteEntry, renameEntry, saveClipboardImage, undoFileOp } from '../../model/fileops';
 import { decorationFor } from '../../model/scm';
 import { workbench, openContextMenu, type ContextMenuItem } from '../../model/workbench';
 import { endEditorDrag, startFileDrag } from '../editor/tabDnd';
@@ -212,6 +212,40 @@ function onTreeKeydown(e: KeyboardEvent): void {
   }
 }
 
+const treeEl = ref<HTMLElement | null>(null);
+
+/**
+ * 트리 포커스 한정 붙여넣기 — 클립보드 이미지를 선택 위치에 파일로 저장 (텍스트 등은 무시).
+ * WHY: 터미널과 같은 방침으로 navigator.clipboard.read()(권한 프롬프트) 대신 네이티브
+ *      paste 이벤트를 쓴다. tabindex div 는 편집 가능 요소가 아니라 paste 가 요소로
+ *      배달되지 않으므로 window 에서 받아 activeElement 로 판정한다.
+ */
+function onPaste(e: ClipboardEvent): void {
+  if (editing.value || confirming.value) return; // 인라인 입력·다이얼로그의 붙여넣기는 건드리지 않는다
+  const tree = treeEl.value;
+  if (!tree || !(document.activeElement && tree.contains(document.activeElement))) return;
+  const item = [...(e.clipboardData?.items ?? [])].find(
+    (i) => i.kind === 'file' && i.type.startsWith('image/'),
+  );
+  const blob = item?.getAsFile();
+  if (!blob) return;
+  e.preventDefault();
+  void pasteImage(blob);
+}
+
+async function pasteImage(blob: Blob): Promise<void> {
+  // 대상 디렉토리는 새 파일 생성과 같은 규칙 — 선택이 폴더면 그 안, 파일이면 부모, 없으면 루트
+  const sel = files.selectedPath !== null
+    ? visibleNodes().find((n) => n.path === files.selectedPath) ?? null
+    : null;
+  const dir = sel === null ? '' : sel.kind === 'directory' ? sel.path : parentOf(sel.path);
+  const saved = await saveClipboardImage(dir, blob); // 실패는 model 이 notify 한다
+  if (saved !== null) files.selectedPath = saved;
+}
+
+onMounted(() => window.addEventListener('paste', onPaste));
+onBeforeUnmount(() => window.removeEventListener('paste', onPaste));
+
 function decoColor(node: TreeNode): string | undefined {
   const deco = decorationFor(node.path, node.kind === 'directory');
   return deco ? `var(${deco.color})` : undefined;
@@ -232,6 +266,7 @@ function decoColor(node: TreeNode): string | undefined {
         </div>
       </div>
       <div
+        ref="treeEl"
         class="tree"
         tabindex="0"
         @keydown="onTreeKeydown"

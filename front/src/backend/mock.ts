@@ -188,7 +188,8 @@ export class MockBackend implements ThinBackend {
     return delay({ etag: String(ETAGS.get(path) ?? 0) });
   }
 
-  // ponytail: mock 엔 외부 쓰기 주체가 없어 충돌이 생길 수 없다 — 검사 생략, etag 만 굴린다
+  // ponytail: mock 엔 외부 쓰기 주체가 없어 충돌이 생길 수 없다 — 검사 생략, etag 만 굴린다.
+  // encoding(base64)도 무시하고 그대로 저장 — mock 파일 맵은 문자열뿐이고 읽는 쪽도 에디터뿐이다
   writeFile(path: string, content: string): Promise<WriteResult> {
     FILES[path] = content;
     const v = (ETAGS.get(path) ?? 0) + 1;

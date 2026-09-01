@@ -1,5 +1,5 @@
 import { files, visibleNodes, toggleDir, parentOf, refreshTree, collapseAll } from '../../model/files'
-import { createFile, createDir, renameEntry, deleteEntry, undoFileOp } from '../../model/fileops'
+import { createFile, createDir, renameEntry, deleteEntry, undoFileOp, saveClipboardImage } from '../../model/fileops'
 import { editors, openFile, openFileAt } from '../../model/editors'
 import { scm, decorationFor, openChange, commit } from '../../model/scm'
 import { search, setQuery, toggleCase, toggleFileCollapsed, matchCount } from '../../model/search'
