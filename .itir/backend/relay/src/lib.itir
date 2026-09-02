@@ -16,7 +16,10 @@ fn token_eq() {
   role: 상수시간 토큰 비교 — 이른 반환 없이 XOR 누적
 }
 fn relay() {
-  role: WebSocket ↔ 데몬 IPC 양방향 중계 — 라인 프레이밍만 알고 내용은 불투명 (데몬이 유일한 해석자). 첫 줄 attach 에 해석된 root 와 (있으면) session id 를 실어 보낸다
+  role: WebSocket ↔ 데몬 IPC 양방향 중계 — 프레이밍만 알고 내용은 불투명 (데몬이 유일한 해석자). 데몬발은 JSON 줄('{' 시작)→WS Text, 0x00 매직+4B BE 길이 프레임(와이어 v6)→WS Binary 재프레이밍. 방향별 전용 태스크 — 바이너리 프레임 읽기(read_frame)가 다중 await 라 select 취소에 안전하지 않아 단일 select 루프를 못 쓴다, 한쪽 종료 시 반대쪽 abort. 첫 줄 attach 에 해석된 root 와 (있으면) session id 를 실어 보낸다
+}
+fn read_frame() {
+  role: 데몬 IPC 의 다음 프레임 — 첫 바이트로 JSON 줄/바이너리 payload 구분, 길이 상한(PAYLOAD_MAX) 초과·비 UTF-8 줄은 프레임 오염으로 연결 종료. 순차 읽기 전용 (select 안 사용 금지)
 }
 fn daemon_conn() {
   role: 데몬 소켓 접속, 없으면 spawn 후 재시도

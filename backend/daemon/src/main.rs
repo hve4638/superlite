@@ -284,17 +284,49 @@ impl Drop for ConnCleanup {
     }
 }
 
+/// 바이너리 payload 프레임 (와이어 v6) — IPC: 0x00 매직 + 4B BE payload 길이 + payload.
+/// payload 는 relay 가 WS 바이너리 프레임으로 그대로 나르는 단위: 4B BE 헤더 길이 +
+/// 헤더 JSON(id·result 메타·payload 명세) + 본문 바이트. JSON 줄은 '{' 로 시작하므로
+/// 0x00 첫 바이트로 무모호하게 구분된다.
+fn payload_frame(header: &serde_json::Value, body: &[u8]) -> Vec<u8> {
+    let h = header.to_string().into_bytes();
+    let payload_len = 4 + h.len() + body.len();
+    let mut out = Vec::with_capacity(5 + payload_len);
+    out.push(0x00);
+    out.extend_from_slice(&(payload_len as u32).to_be_bytes());
+    out.extend_from_slice(&(h.len() as u32).to_be_bytes());
+    out.extend_from_slice(&h);
+    out.extend_from_slice(body);
+    out
+}
+
 async fn handle_conn(
     stream: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static,
     sessions: Sessions,
 ) {
     let (read_half, mut write_half) = tokio::io::split(stream);
-    // WHY: 응답·터미널 이벤트가 여러 태스크/스레드에서 나오므로 단일 writer 태스크로 직렬화
+    // WHY: 응답·터미널 이벤트가 여러 태스크/스레드에서 나오므로 단일 writer 태스크로 직렬화.
+    //      바이너리 payload(와이어 v6)는 별도 채널 — 기존 String 채널의 26개 송신처를
+    //      건드리지 않는다. 응답은 id 로 대응되므로 두 채널 간 순서 보장은 계약이 아니다
+    //      (handle_req 가 이미 태스크 병렬이라 종전에도 응답 순서는 비결정적).
     let (tx, mut rx) = unbounded_channel::<String>();
+    let (btx, mut brx) = unbounded_channel::<Vec<u8>>();
     tokio::spawn(async move {
-        while let Some(mut s) = rx.recv().await {
-            s.push('\n'); // serde_json 직렬화엔 생 개행이 없다 — 개행 = 프레임 경계
-            if write_half.write_all(s.as_bytes()).await.is_err() {
+        loop {
+            let ok = tokio::select! {
+                s = rx.recv() => match s {
+                    Some(mut s) => {
+                        s.push('\n'); // serde_json 직렬화엔 생 개행이 없다 — 개행 = 프레임 경계
+                        write_half.write_all(s.as_bytes()).await.is_ok()
+                    }
+                    None => break,
+                },
+                b = brx.recv() => match b {
+                    Some(b) => write_half.write_all(&b).await.is_ok(),
+                    None => break,
+                },
+            };
+            if !ok {
                 break;
             }
         }
@@ -366,6 +398,33 @@ async fn handle_conn(
             "createTerminal" | "termWrite" | "termResize" | "termAck" | "disposeTerminal" => {
                 let Some(s) = &cleanup.session else { continue };
                 term::handle_term(&method, &req["params"], &s.terms, &s.sink, &s.root);
+            }
+            // readFile 은 대형 응답이 바이너리 payload 프레임을 탄다 (와이어 v6) — 반환형이
+            // 달라 일반 경로와 분리 라우팅
+            "readFile" => {
+                let (id, params) = (req["id"].clone(), req["params"].clone());
+                let Some(root) = cleanup.session.as_ref().map(|s| s.root.clone()) else {
+                    if !id.is_null() {
+                        let _ = tx.send(json!({"id": id, "error": "attach 전 요청"}).to_string());
+                    }
+                    continue;
+                };
+                let (tx, btx) = (tx.clone(), btx.clone());
+                tokio::spawn(async move {
+                    match req::read_file(&params, &root).await {
+                        Ok(req::ReadOut::Json(v)) => {
+                            let _ = tx.send(json!({"id": id, "result": v}).to_string());
+                        }
+                        Ok(req::ReadOut::Payload { mut meta, body, enc, typ }) => {
+                            meta["payload"] = json!({"enc": enc, "type": typ});
+                            let header = json!({"id": id, "result": meta});
+                            let _ = btx.send(payload_frame(&header, &body));
+                        }
+                        Err(e) => {
+                            let _ = tx.send(json!({"id": id, "error": e}).to_string());
+                        }
+                    }
+                });
             }
             _ => {
                 let (id, params) = (req["id"].clone(), req["params"].clone());

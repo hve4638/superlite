@@ -16,7 +16,7 @@ fn reap_sessions() {
   role: detach 후 grace 를 넘긴 세션 회수 — 터미널 kill 후 맵에서 제거
 }
 fn handle_conn() {
-  role: 연결 수명 — 라인 프레이밍 요청 디스패치(단일 writer 태스크로 응답 직렬화) + attach 1회 규칙. attach 에 session id 가 있으면 세션 재사용(터미널 생존·버퍼 flush), 없으면 연결과 함께 죽는 익명 세션. attach 응답의 resumed 가 세션 회수 여부를 프론트에 알린다. 종료 뒷정리(detach 전환·익명 세션 터미널 kill)와 연결 카운터 감소는 drop guard — panic 에도 보장돼 유휴 종료가 막히지 않는다
+  role: 연결 수명 — 라인 프레이밍 요청 디스패치(단일 writer 태스크로 응답 직렬화 — 텍스트 줄·바이너리 payload 이중 채널 select, 응답은 id 대응이라 채널 간 순서는 계약이 아니다) + attach 1회 규칙. readFile 은 반환형(ReadOut)이 달라 일반 경로와 분리 라우팅 — Payload 는 payload_frame(0x00 매직+4B BE 길이, 와이어 v6)으로 바이너리 채널에 싣는다. attach 에 session id 가 있으면 세션 재사용(터미널 생존·버퍼 flush), 없으면 연결과 함께 죽는 익명 세션. attach 응답의 resumed 가 세션 회수 여부를 프론트에 알린다. 종료 뒷정리(detach 전환·익명 세션 터미널 kill)와 연결 카운터 감소는 drop guard — panic 에도 보장돼 유휴 종료가 막히지 않는다
 }
 fn err() {
   role: Display → String 에러 축약 (크레이트 공용)

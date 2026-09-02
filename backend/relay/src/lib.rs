@@ -233,14 +233,57 @@ async fn ws_handler(
     ws.on_upgrade(move |sock| relay(sock, root, session))
 }
 
+/// payload 프레임의 상한 — READ_MAX_BYTES(50MB)보다 넉넉한 방어선. 초과는 프레임
+/// 오염(동기화 깨짐)으로 보고 연결을 닫는다.
+const PAYLOAD_MAX: u32 = 64 * 1024 * 1024;
+
+/// 데몬 IPC 의 다음 프레임 — JSON 줄(Line) 또는 0x00 매직 + 4B BE 길이의 바이너리
+/// payload(Bin, 와이어 v6). 첫 바이트로 구분한다 (JSON 줄은 항상 '{').
+enum DaemonFrame {
+    Line(String),
+    Bin(Vec<u8>),
+}
+
+/// 순차 읽기 전용 — select 안에서 쓰면 취소 시 부분 읽기가 유실돼 프레임 동기가 깨진다.
+/// (전용 태스크에서만 호출할 것)
+async fn read_frame(
+    r: &mut BufReader<tokio::io::ReadHalf<DaemonStream>>,
+) -> std::io::Result<Option<DaemonFrame>> {
+    use tokio::io::AsyncReadExt;
+    let mut first = [0u8; 1];
+    if r.read_exact(&mut first).await.is_err() {
+        return Ok(None); // EOF — 데몬 연결 종료
+    }
+    if first[0] == 0x00 {
+        let len = r.read_u32().await?;
+        if len > PAYLOAD_MAX {
+            return Err(std::io::Error::other("payload 길이 초과 — 프레임 오염"));
+        }
+        let mut buf = vec![0u8; len as usize];
+        r.read_exact(&mut buf).await?;
+        return Ok(Some(DaemonFrame::Bin(buf)));
+    }
+    let mut line = vec![first[0]];
+    r.read_until(b'\n', &mut line).await?;
+    if line.last() == Some(&b'\n') {
+        line.pop();
+    }
+    match String::from_utf8(line) {
+        Ok(s) => Ok(Some(DaemonFrame::Line(s))),
+        Err(_) => Err(std::io::Error::other("비 UTF-8 줄 — 프레임 오염")),
+    }
+}
+
 /// 프론트 WS ↔ 데몬 소켓 1:1 중계. 어느 쪽이 끊겨도 둘 다 정리 —
 /// 데몬 쪽 연결 drop 이 그 연결의 터미널을 정리한다.
-async fn relay(mut ws: WebSocket, root: PathBuf, session: Option<String>) {
+/// 방향별 전용 태스크 — 바이너리 프레임 읽기(read_frame)는 다중 await 라 select 취소에
+/// 안전하지 않아, 종전의 단일 select 루프 구조를 쓸 수 없다.
+async fn relay(ws: WebSocket, root: PathBuf, session: Option<String>) {
+    use futures_util::{SinkExt, StreamExt};
     let Ok(stream) = daemon_conn(false).await else {
         return; // ws 는 drop 으로 닫힌다 — 프론트 onclose 가 진행 중 요청을 실패 처리
     };
     let (read_half, mut write_half) = tokio::io::split(stream);
-    let mut lines = BufReader::new(read_half).lines();
     // 첫 줄은 attach. 응답(id 0)이 프론트로 중계돼도 무시된다 — 프론트 id 는 1부터.
     let mut attach = json!({"id": 0, "method": "attach", "params": {"root": root.to_string_lossy()}});
     if let Some(s) = session {
@@ -249,36 +292,59 @@ async fn relay(mut ws: WebSocket, root: PathBuf, session: Option<String>) {
     if write_line(&mut write_half, &attach.to_string()).await.is_err() {
         return;
     }
-    let mut ping = tokio::time::interval(Duration::from_secs(30));
-    ping.tick().await; // interval 의 첫 즉시 틱 소비
-    loop {
-        tokio::select! {
-            msg = ws.recv() => match msg {
-                Some(Ok(Message::Text(t))) => {
-                    // 생 개행이 든 프레임은 데몬 쪽에서 N개 요청으로 쪼개진다(1:1 불변식
-                    // 파괴 — JSON.stringify 출력엔 있을 수 없다). 프로토콜 위반 → 연결 종료
-                    if t.as_str().contains('\n')
-                        || write_line(&mut write_half, t.as_str()).await.is_err()
-                    {
+    let (mut ws_tx, mut ws_rx) = ws.split();
+
+    // 데몬 → 프론트: 순차 프레임 읽기 → WS 재프레이밍 (Line→Text, Bin→Binary)
+    let mut down = tokio::spawn(async move {
+        let mut reader = BufReader::new(read_half);
+        loop {
+            match read_frame(&mut reader).await {
+                Ok(Some(DaemonFrame::Line(l))) => {
+                    if ws_tx.send(Message::Text(l.into())).await.is_err() {
                         break;
                     }
                 }
-                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
-                Some(Ok(_)) => {} // binary/ping/pong 프레임은 프로토콜에 없다
-            },
-            line = lines.next_line() => match line {
-                Ok(Some(l)) => {
-                    if ws.send(Message::Text(l.into())).await.is_err() {
+                Ok(Some(DaemonFrame::Bin(b))) => {
+                    if ws_tx.send(Message::Binary(b.into())).await.is_err() {
                         break;
                     }
                 }
                 _ => break,
-            },
-            _ = ping.tick() => {
-                if write_line(&mut write_half, r#"{"method":"ping"}"#).await.is_err() {
-                    break;
+            }
+        }
+    });
+
+    // 프론트 → 데몬 + 30초 ping (둘 다 취소 안전한 await 만 쓴다)
+    let mut up = tokio::spawn(async move {
+        let mut ping = tokio::time::interval(Duration::from_secs(30));
+        ping.tick().await; // interval 의 첫 즉시 틱 소비
+        loop {
+            tokio::select! {
+                msg = ws_rx.next() => match msg {
+                    Some(Ok(Message::Text(t))) => {
+                        // 생 개행이 든 프레임은 데몬 쪽에서 N개 요청으로 쪼개진다(1:1 불변식
+                        // 파괴 — JSON.stringify 출력엔 있을 수 없다). 프로토콜 위반 → 연결 종료
+                        if t.as_str().contains('\n')
+                            || write_line(&mut write_half, t.as_str()).await.is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                    Some(Ok(_)) => {} // 프론트발 binary/ping/pong 프레임은 프로토콜에 없다
+                },
+                _ = ping.tick() => {
+                    if write_line(&mut write_half, r#"{"method":"ping"}"#).await.is_err() {
+                        break;
+                    }
                 }
             }
         }
+    });
+
+    // 한쪽이 끝나면 반대쪽도 중단 — 남은 태스크가 죽은 소켓을 영원히 기다리지 않게
+    tokio::select! {
+        _ = &mut down => up.abort(),
+        _ = &mut up => down.abort(),
     }
 }

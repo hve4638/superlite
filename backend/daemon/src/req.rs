@@ -54,6 +54,83 @@ const RG_EXCLUDE_ARGS: [&str; 20] = [
     "-g", "!**/*.code-search",
 ];
 
+/// readFile 응답 — 소형은 종전 JSON, 대형은 바이너리 payload 프레임 (와이어 v6).
+/// meta 는 content 를 제외한 result 필드(etag 등)이고, main.rs 가 payload 명세와 합쳐
+/// 헤더를 만든다. enc/typ 는 프론트의 복원 절차 지시: enc=deflate-raw 면 해제 후,
+/// typ=text 면 UTF-8 디코드, typ=base64 면 base64 재인코딩(종전 계약 유지).
+pub(crate) enum ReadOut {
+    Json(Value),
+    Payload { meta: Value, body: Vec<u8>, enc: &'static str, typ: &'static str },
+}
+
+/// payload 프레임 최소 크기 — 미만은 JSON 경로 유지 (소형 응답까지 이원화하지 않는다).
+/// 압축·프레이밍 이득이 고정 비용을 넘는 지점의 보수적 근사.
+const PAYLOAD_MIN_BYTES: usize = 4096;
+
+pub(crate) async fn read_file(p: &Value, root: &Path) -> Result<ReadOut, String> {
+    let path = file_path(root, req_path(p)?)?;
+    let _g = WRITE_LOCK.lock().await;
+    // WHY: stat 이 read 뒤면 etag 가 내용보다 새것일 수 있다 — 그 etag 로 저장하면
+    //      최신 내용을 조용히 덮는다. stat 먼저면 최악이 스퓨리어스 충돌(내용 비교
+    //      탈출구가 거른다). 데몬 자신의 쓰기와는 락으로 안 겹친다.
+    let meta = std::fs::metadata(&path).map_err(err)?;
+    // 크기 초과·이진(비 UTF-8)은 에러가 아니라 구조화된 사유다 — 실존하는 파일이므로
+    // 탭은 열려야 하고, 사유·크기는 안내 화면 문구가 된다. 상한 검사는 읽기 전 —
+    // 대용량을 읽어 나른 뒤 버리는 낭비 방지 (maxBytes 는 undo 캡처 등 호출측 상한)
+    let max = p["maxBytes"].as_u64().unwrap_or(READ_MAX_BYTES);
+    if meta.len() > max {
+        return Ok(ReadOut::Json(json!({
+            "unopenable": {"kind": "large", "size": meta.len()},
+            "etag": file_etag(&meta),
+        })));
+    }
+    // encoding=base64 는 이진 읽기 (이미지 뷰어 등) — 대형은 base64 부풀림(1.33x) 없이
+    // 원본 바이트를 payload 로 나른다 (프론트가 base64 로 복원해 종전 계약 유지)
+    match p["encoding"].as_str() {
+        Some("base64") => {
+            let bytes = std::fs::read(&path).map_err(err)?;
+            if bytes.len() >= PAYLOAD_MIN_BYTES {
+                return Ok(ReadOut::Payload {
+                    meta: json!({"etag": file_etag(&meta)}),
+                    body: bytes,
+                    enc: "raw",
+                    typ: "base64",
+                });
+            }
+            use base64::Engine as _;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+            return Ok(ReadOut::Json(json!({"content": b64, "etag": file_etag(&meta)})));
+        }
+        Some(other) => return Err(format!("지원하지 않는 encoding: {other}")),
+        None => {}
+    }
+    match String::from_utf8(std::fs::read(&path).map_err(err)?) {
+        Ok(content) => {
+            if content.len() >= PAYLOAD_MIN_BYTES {
+                // deflate-raw: 브라우저 DecompressionStream('deflate-raw') 대응 (zlib 헤더 없음)
+                use std::io::Write as _;
+                let mut enc = flate2::write::DeflateEncoder::new(
+                    Vec::new(),
+                    flate2::Compression::default(),
+                );
+                enc.write_all(content.as_bytes()).map_err(err)?;
+                let body = enc.finish().map_err(err)?;
+                return Ok(ReadOut::Payload {
+                    meta: json!({"etag": file_etag(&meta)}),
+                    body,
+                    enc: "deflate-raw",
+                    typ: "text",
+                });
+            }
+            Ok(ReadOut::Json(json!({"content": content, "etag": file_etag(&meta)})))
+        }
+        Err(_) => Ok(ReadOut::Json(json!({
+            "unopenable": {"kind": "binary"},
+            "etag": file_etag(&meta),
+        }))),
+    }
+}
+
 pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<Value, String> {
     match method {
         "workspace" => Ok(json!({
@@ -79,43 +156,8 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
             }
             Ok(Value::Array(out))
         }
-        "readFile" => {
-            let path = file_path(root, req_path(p)?)?;
-            let _g = WRITE_LOCK.lock().await;
-            // WHY: stat 이 read 뒤면 etag 가 내용보다 새것일 수 있다 — 그 etag 로 저장하면
-            //      최신 내용을 조용히 덮는다. stat 먼저면 최악이 스퓨리어스 충돌(내용 비교
-            //      탈출구가 거른다). 데몬 자신의 쓰기와는 락으로 안 겹친다.
-            let meta = std::fs::metadata(&path).map_err(err)?;
-            // 크기 초과·이진(비 UTF-8)은 에러가 아니라 구조화된 사유다 — 실존하는 파일이므로
-            // 탭은 열려야 하고, 사유·크기는 안내 화면 문구가 된다. 상한 검사는 읽기 전 —
-            // 대용량을 읽어 나른 뒤 버리는 낭비 방지 (maxBytes 는 undo 캡처 등 호출측 상한)
-            let max = p["maxBytes"].as_u64().unwrap_or(READ_MAX_BYTES);
-            if meta.len() > max {
-                return Ok(json!({
-                    "unopenable": {"kind": "large", "size": meta.len()},
-                    "etag": file_etag(&meta),
-                }));
-            }
-            // encoding=base64 는 이진 읽기 (이미지 뷰어 등) — UTF-8 검증 없이 바이트를
-            // base64 로 나른다 (writeFile 의 이진 통로와 대칭). 크기 상한은 위에서 동일 적용
-            match p["encoding"].as_str() {
-                Some("base64") => {
-                    use base64::Engine as _;
-                    let b64 = base64::engine::general_purpose::STANDARD
-                        .encode(std::fs::read(&path).map_err(err)?);
-                    return Ok(json!({"content": b64, "etag": file_etag(&meta)}));
-                }
-                Some(other) => return Err(format!("지원하지 않는 encoding: {other}")),
-                None => {}
-            }
-            match String::from_utf8(std::fs::read(&path).map_err(err)?) {
-                Ok(content) => Ok(json!({"content": content, "etag": file_etag(&meta)})),
-                Err(_) => Ok(json!({
-                    "unopenable": {"kind": "binary"},
-                    "etag": file_etag(&meta),
-                })),
-            }
-        }
+        // readFile 은 main.rs 가 read_file 로 직접 라우팅한다 — 대형 응답이 JSON 이 아니라
+        // 바이너리 payload 프레임을 타야 해서 반환형(ReadOut)이 다르다
         "stat" => {
             let path = file_path(root, req_path(p)?)?;
             // WHY: readFile 과 같은 락 — orphan 재검증의 응답 순서가 쓰기와의 직렬화에 기댄다

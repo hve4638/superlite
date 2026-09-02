@@ -1,4 +1,4 @@
-role: ThinBackend 계약 — 와이어 프로토콜(백엔드 /ws JSON-RPC)의 TS 사영. 와이어 쪽 대응은 daemon/src 참조
+role: ThinBackend 계약 — 와이어 프로토콜(백엔드 /ws JSON-RPC, v6 부터 대형 readFile 응답은 바이너리 payload 프레임 — 계약 표면(content=string)은 불변, 복원은 ws.ts 몫)의 TS 사영. 와이어 쪽 대응은 daemon/src 참조
 
 port ThinBackend {
   role: 워크스페이스 파일·검색·git·터미널 접근 계약. 구현체 선택은 model/host 조립 지점 한 곳

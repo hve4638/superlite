@@ -26,6 +26,23 @@ interface Pending {
   reject: (e: Error) => void;
 }
 
+/** deflate-raw 해제 — 데몬이 압축한 대형 텍스트 payload 용 (브라우저 내장, 워커 불필요) */
+async function inflateRaw(b: Uint8Array): Promise<Uint8Array> {
+  const stream = new Blob([b as BlobPart]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+/** bytes → base64 — 이미지 payload 의 종전 계약(content=base64 문자열) 복원.
+ *  btoa 는 문자열 인자라 청크로 나눈다 (fromCharCode 의 인자 개수 한계 회피) */
+function bytesToBase64(bytes: Uint8Array): string {
+  let bin = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(bin);
+}
+
 /** VS Code 터미널 flow control — 수신 5k 자마다 ack, 데몬은 미ack 100k 에서 읽기를 멈춘다 */
 const CHAR_COUNT_ACK_SIZE = 5000;
 
@@ -83,6 +100,8 @@ export class WsBackend implements ThinBackend {
   private connect(): void {
     if (this.disposed) return; // dispose 후 도착한 재시도 타이머
     this.ws = new WebSocket(this.url);
+    // 대형 payload 바이너리 프레임 (와이어 v6) — 기본 Blob 은 비동기 읽기가 한 겹 더 든다
+    this.ws.binaryType = 'arraybuffer';
     this.ws.onopen = () => {
       this.opened = true;
       this.isReconnect = this.everOpened;
@@ -106,6 +125,10 @@ export class WsBackend implements ThinBackend {
       this.everOpened = true;
     };
     this.ws.onmessage = (ev) => {
+      if (ev.data instanceof ArrayBuffer) {
+        void this.handleBinary(ev.data);
+        return;
+      }
       let msg;
       try {
         msg = JSON.parse(String(ev.data));
@@ -231,6 +254,39 @@ export class WsBackend implements ThinBackend {
       // ponytail: 고정 1초 재시도, 무한 — 백오프·포기는 필요해지면
       setTimeout(() => this.connect(), 1000);
     };
+  }
+
+  /**
+   * 바이너리 payload 프레임 (와이어 v6): 4B BE 헤더 길이 + 헤더 JSON + 본문 바이트.
+   * 헤더는 content 없는 응답 봉투(id·result 메타·payload 명세)이고, 본문을 명세대로
+   * 복원해 content 로 합친 뒤 일반 응답과 동일하게 resolve 한다 — 호출측(ThinBackend
+   * 표면)은 전송 표현을 모른다. 대형 응답만 이 통로를 타므로 배압 계약과 무관하다.
+   */
+  private async handleBinary(buf: ArrayBuffer): Promise<void> {
+    let id: number | undefined;
+    try {
+      const hlen = new DataView(buf).getUint32(0);
+      const header = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, hlen)));
+      id = header.id;
+      const body = new Uint8Array(buf, 4 + hlen);
+      const spec = header.result?.payload ?? {};
+      const bytes = spec.enc === 'deflate-raw' ? await inflateRaw(body) : body;
+      const result = header.result ?? {};
+      delete result.payload;
+      result.content = spec.type === 'base64' ? bytesToBase64(bytes) : new TextDecoder().decode(bytes);
+      const p = typeof id === 'number' ? this.pending.get(id) : undefined;
+      if (!p || typeof id !== 'number') return;
+      this.pending.delete(id);
+      p.resolve(result);
+    } catch (e) {
+      // 해석 실패 — 해당 요청만 실패시킨다 (id 를 못 읽었으면 타임아웃 없이 pending 에
+      // 남지만, 연결 종료 시 일괄 reject 되는 기존 안전망을 따른다)
+      const p = typeof id === 'number' ? this.pending.get(id) : undefined;
+      if (p && typeof id === 'number') {
+        this.pending.delete(id);
+        p.reject(new Error(`payload 프레임 해석 실패: ${e instanceof Error ? e.message : e}`));
+      }
+    }
   }
 
   /** 세션 탭 닫기 등 의도적 종료 — 재연결을 멈추고 연결·대기 요청을 정리한다 */

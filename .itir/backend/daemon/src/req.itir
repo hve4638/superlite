@@ -1,7 +1,7 @@
 // crate::err(main.rs) 참조 — crate:: 는 crate 루트(main.rs 디렉토리) 좌표 '.' 로 정규화된다
 import { err, wire_rel } from '.'
 
-role: RPC 요청 처리 — fs 읽기/쓰기(etag 낙관적 충돌 검사, readFile/writeFile 은 encoding=base64 이진 읽기/쓰기 겸용 — base64 읽기는 UTF-8 검증을 건너뛰고 크기 상한만 공유)·stat(내용 없는 경량 etag)·생성/이름변경/삭제, rg 검색, git 상태·커밋. readFile 의 크기 초과·이진(비 UTF-8)은 에러가 아니라 구조화된 unopenable 응답 — 프론트가 탭을 열고 안내 화면을 띄운다. 경로는 safe_join 관문 — 단 파일 단건(readFile/stat/writeFile)은 file_path 를 거쳐 절대 경로도 허용한다 (워크스페이스 밖 파일 열기, VS Code 파리티). excludes 는 VS Code 기본값 하드코딩 (설정 시스템 없음)
+role: RPC 요청 처리 — fs 읽기/쓰기(etag 낙관적 충돌 검사, readFile/writeFile 은 encoding=base64 이진 읽기/쓰기 겸용 — base64 읽기는 UTF-8 검증을 건너뛰고 크기 상한만 공유)·stat(내용 없는 경량 etag)·생성/이름변경/삭제, rg 검색, git 상태·커밋. readFile 의 크기 초과·이진(비 UTF-8)은 에러가 아니라 구조화된 unopenable 응답 — 프론트가 탭을 열고 안내 화면을 띄운다. readFile 대형 응답(4KB 이상)은 JSON 이 아니라 바이너리 payload(ReadOut::Payload, 와이어 v6)로 나간다 — 텍스트는 deflate-raw 압축, base64 요청분은 부풀림 없는 원본 바이트 (프레임 조립은 main.rs). 경로는 safe_join 관문 — 단 파일 단건(readFile/stat/writeFile)은 file_path 를 거쳐 절대 경로도 허용한다 (워크스페이스 밖 파일 열기, VS Code 파리티). excludes 는 VS Code 기본값 하드코딩 (설정 시스템 없음)
 
 // 쓰기 계열 RPC(write/create/rename/delete)의 직렬화 락 — etag 검사-쓰기 원자성의 근거
 val WRITE_LOCK
@@ -13,7 +13,10 @@ val FILES_EXCLUDED
 val RG_EXCLUDE_ARGS
 
 fn handle_req() {
-  role: 메서드 디스패치 — 요청은 태스크로 병렬, 쓰기 경합은 WRITE_LOCK 직렬화
+  role: 메서드 디스패치 — 요청은 태스크로 병렬, 쓰기 경합은 WRITE_LOCK 직렬화. readFile 은 여기 없다 — 반환형이 달라 main.rs 가 read_file 로 직접 라우팅
+}
+fn read_file() {
+  role: readFile 전용 처리 — 소형은 ReadOut::Json(종전 응답), 4KB 이상은 ReadOut::Payload(텍스트 deflate-raw / base64 요청분 raw 바이트 + etag 메타). unopenable·에러 경로는 JSON 그대로
 }
 fn safe_join() {
   role: 루트 이탈 방지 — 렉시컬 검사 + 심링크 해소 실경로 확인, 트리·조작 계열 RPC 경로의 관문
