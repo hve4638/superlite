@@ -5,6 +5,7 @@ import { editors, moveTabSplit, moveTabToGroup, openFile, openFileSplit } from '
 import { editorDrag, endEditorDrag } from './tabDnd';
 import TabBar from './TabBar.vue';
 import MonacoHost from './MonacoHost.vue';
+import ImageView from './ImageView.vue';
 import FileIcon from '../widgets/FileIcon.vue';
 
 const props = defineProps<{ group: EditorGroup }>();
@@ -61,6 +62,14 @@ const unopenable = computed(() =>
   active.value ? editors.docs.get(active.value.path)?.unopenable ?? null : null,
 );
 
+// 활성 탭 문서의 이미지 데이터 — 있으면 monaco 대신 이미지 뷰어 (unopenable 과 같은 자리.
+// diff 탭도 워킹트리 이미지를 그대로 보여준다 — 이미지 diff 는 범위 밖)
+const image = computed(() => {
+  const t = active.value;
+  const data = t ? editors.docs.get(t.path)?.image : undefined;
+  return t && data !== undefined ? { path: t.path, data } : null;
+});
+
 /** 안내 문구용 크기 표기 — 상한이 수십 MB 라 MB 고정으로 충분하다 */
 function fmtMB(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)}MB`;
@@ -92,8 +101,10 @@ const SHORTCUTS = [
       </div>
     </template>
     <div class="editor-body">
+      <!-- 이미지 파일 — 편집기 자리에 뷰어. 탭·breadcrumbs 는 그대로 (unopenable 과 동일 배치) -->
+      <ImageView v-if="image" :path="image.path" :data="image.data" />
       <!-- 열 수 없는 파일(크기 초과·이진) 안내 — 탭·breadcrumbs 는 그대로, 편집기만 대체 -->
-      <div v-if="unopenable" class="unopenable">
+      <div v-else-if="unopenable" class="unopenable">
         <p v-if="unopenable.kind === 'large'">
           The file is not displayed in the text editor because it is too large
           ({{ fmtMB(unopenable.size) }}).
@@ -103,7 +114,7 @@ const SHORTCUTS = [
           uses an unsupported text encoding.
         </p>
       </div>
-      <MonacoHost v-if="group.tabs.length" v-show="!unopenable" :group="group" />
+      <MonacoHost v-if="group.tabs.length" v-show="!unopenable && !image" :group="group" />
       <div v-else class="watermark">
         <div class="watermark-grid">
           <template v-for="s in SHORTCUTS" :key="s.label">

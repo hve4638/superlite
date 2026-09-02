@@ -97,8 +97,10 @@ export interface ThinBackend {
   readDir(path: string): Promise<DirEntry[]>;
   /** 크기 초과(maxBytes 또는 백엔드 기본 상한)·이진/미지원 인코딩은 reject 가 아니라
    *  unopenable 로 온다 — 실존하지 않는 경로 등 실제 실패만 reject 다. maxBytes 는
-   *  undo 캡처 등 호출측 상한 (초과 파일을 읽어 나르지 않는다). */
-  readFile(path: string, opts?: { maxBytes?: number }): Promise<FileContent>;
+   *  undo 캡처 등 호출측 상한 (초과 파일을 읽어 나르지 않는다).
+   *  encoding: 'base64' 면 UTF-8 검증 없이 바이트를 base64 content 로 나른다 (이미지 뷰어 등 —
+   *  writeFile 이진 통로와 대칭). binary unopenable 은 안 생기고 크기 상한(large)만 남는다. */
+  readFile(path: string, opts?: { maxBytes?: number; encoding?: 'base64' }): Promise<FileContent>;
   /** 내용 없이 실존·변경만 확인하는 경량 검사 — 정규 파일 전용(디렉토리는 reject). orphan 재검증용 */
   stat(path: string): Promise<FileStat>;
   /**

@@ -57,9 +57,11 @@ function consumeReveal(ed: monaco.editor.IStandaloneCodeEditor, path: string) {
 async function sync() {
   const tab = active.value;
   if (!tab) return;
-  // 열 수 없는 문서(크기 초과·이진)는 모델을 만들지 않는다 — 안내 화면(EditorGroupView)이
-  // 편집기를 가리고 있고, diff 쪽은 이진의 gitOriginalContent 요청 자체를 피해야 한다
-  if (editors.docs.get(tab.path)?.unopenable !== undefined) return;
+  // 열 수 없는 문서(크기 초과·이진)·이미지 문서는 모델을 만들지 않는다 — 안내 화면·이미지
+  // 뷰어(EditorGroupView)가 편집기를 가리고 있고, diff 쪽은 이진의 gitOriginalContent 요청
+  // 자체를 피해야 한다
+  const doc = editors.docs.get(tab.path);
+  if (doc?.unopenable !== undefined || doc?.image !== undefined) return;
   if (tab.kind === 'file') {
     const ed = ensureCodeEditor();
     const model = modelFor(tab.path);

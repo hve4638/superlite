@@ -96,6 +96,18 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
                     "etag": file_etag(&meta),
                 }));
             }
+            // encoding=base64 는 이진 읽기 (이미지 뷰어 등) — UTF-8 검증 없이 바이트를
+            // base64 로 나른다 (writeFile 의 이진 통로와 대칭). 크기 상한은 위에서 동일 적용
+            match p["encoding"].as_str() {
+                Some("base64") => {
+                    use base64::Engine as _;
+                    let b64 = base64::engine::general_purpose::STANDARD
+                        .encode(std::fs::read(&path).map_err(err)?);
+                    return Ok(json!({"content": b64, "etag": file_etag(&meta)}));
+                }
+                Some(other) => return Err(format!("지원하지 않는 encoding: {other}")),
+                None => {}
+            }
             match String::from_utf8(std::fs::read(&path).map_err(err)?) {
                 Ok(content) => Ok(json!({"content": content, "etag": file_etag(&meta)})),
                 Err(_) => Ok(json!({

@@ -53,12 +53,36 @@ interface Doc {
   /** 열 수 없는 사유(크기 초과·이진) — 있으면 편집기 대신 안내 화면이 뜨고 content 는 '' 다.
    *  '' === '' 라 dirty 가 될 수 없어 저장 경로는 자연히 막힌다 */
   unopenable?: Unopenable;
+  /** 이미지 문서의 base64 데이터 — 있으면 편집기 대신 이미지 뷰어가 뜬다.
+   *  content 는 unopenable 과 같은 '' 고정이라 dirty·저장 경로가 자연히 막힌다 */
+  image?: string;
 }
 
 const RECENTLY_CLOSED_CAP = 20;
 
 export function baseName(path: string): string {
   return path.slice(path.lastIndexOf('/') + 1);
+}
+
+/** 이미지 뷰어로 여는 확장자 → MIME — VS Code 내장 Media Preview 의 이미지 세트와 동일 */
+const IMAGE_MIMES: Record<string, string> = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
+  webp: 'image/webp', bmp: 'image/bmp', ico: 'image/x-icon', avif: 'image/avif',
+};
+
+/** 이미지 확장자면 MIME, 아니면 null — 순수 함수, 세션 무관 (svg 는 VS Code 기본대로 텍스트) */
+export function imageMime(path: string): string | null {
+  const name = baseName(path);
+  const dot = name.lastIndexOf('.');
+  // dot<=0 제외 — 확장자 없는 파일·dotfile(.png 같은 이름)은 이미지가 아니다
+  if (dot <= 0) return null;
+  return IMAGE_MIMES[name.slice(dot + 1).toLowerCase()] ?? null;
+}
+
+/** base64 길이에서 원본 바이트 수 복원 — 패딩 보정 (와이어가 크기를 따로 나르지 않는다) */
+export function base64Bytes(b64: string): number {
+  const pad = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0;
+  return (b64.length / 4) * 3 - pad;
 }
 
 /**
@@ -102,6 +126,11 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     docs: new Map<string, Doc>(),
     /** 커서 위치 (statusbar 표시용, 1-based) */
     cursor: { line: 1, col: 1 },
+    /** 이미지 뷰어 상태 (path 키) — ImageView 가 세우고 statusbar 가 활성 탭 경로로 읽는다.
+     *  배율(zoom)은 'fit'(영역 맞춤, 초기값) 또는 원본 대비 배율 숫자(1 = 100%, 휠 줌).
+     *  뷰 상태지만 문서(docs)처럼 경로 단위 공유 — 같은 이미지를 보는 그룹들이 함께
+     *  움직인다. 해상도(w·h)는 이미지 로드 시점에 채워진다 */
+    imageView: new Map<string, { w: number; h: number; zoom: 'fit' | number }>(),
     /** 열림 직후 특정 라인으로 스크롤할 요청 (검색 결과 클릭 등). MonacoHost 가 소비 후 null 로 되돌린다. */
     pendingReveal: null as { path: string; line: number } | null,
     /** 저장 충돌(디스크가 더 새것) 중인 파일 path — 토스트가 Overwrite/Revert 를 띄운다.
@@ -132,10 +161,15 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
   async function ensureDoc(path: string): Promise<Doc> {
     let doc = editors.docs.get(path);
     if (!doc) {
-      const r = await backend.readFile(path);
+      // 이미지 확장자는 base64 로 읽는다 — 이진 판별(binary unopenable)을 타지 않고
+      // 크기 상한(large)만 공유한다
+      const image = imageMime(path) !== null;
+      const r = await backend.readFile(path, image ? { encoding: 'base64' } : undefined);
       doc = r.unopenable !== undefined
         ? { content: '', savedContent: '', etag: r.etag, unopenable: r.unopenable }
-        : { content: r.content, savedContent: r.content, etag: r.etag };
+        : image
+          ? { content: '', savedContent: '', etag: r.etag, image: r.content }
+          : { content: r.content, savedContent: r.content, etag: r.etag };
       editors.docs.set(path, doc);
     }
     return doc;
@@ -465,6 +499,12 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
       editors.docs.delete(path);
       editors.docs.set(np, doc);
     }
+    for (const [path, iv] of [...editors.imageView]) {
+      const np = mapPath(path);
+      if (np === null) continue;
+      editors.imageView.delete(path);
+      editors.imageView.set(np, iv);
+    }
     disposeModelsHook(from);
     for (const g of editors.groups) {
       for (const t of g.tabs) {
@@ -506,6 +546,9 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     for (const p of [...editors.docs.keys()]) {
       if (match(p)) editors.docs.delete(p);
     }
+    for (const p of [...editors.imageView.keys()]) {
+      if (match(p)) editors.imageView.delete(p);
+    }
     disposeModelsHook(path);
     if (editors.saveConflict !== null && match(editors.saveConflict)) editors.saveConflict = null;
     for (const p of [...editors.orphaned]) if (match(p)) editors.orphaned.delete(p);
@@ -523,6 +566,12 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     // 외부 변경으로 열 수 없게(텍스트→이진·크기 초과) 되거나 반대로 돌아올 수 있다 —
     // 사유를 최신화하고, unopenable 쪽 내용은 '' 로 수렴시킨다 (안내 화면이 대신 뜬다)
     doc.unopenable = r.unopenable;
+    // 이미지 문서 — content 는 '' 고정이라 base64 만 갱신하면 뷰어가 반응한다
+    // (watch 가 이미지 경로를 encoding=base64 로 읽어 왔다는 전제. large 전이 시 비운다)
+    if (imageMime(path) !== null) {
+      doc.image = r.unopenable !== undefined ? undefined : r.content;
+      return;
+    }
     const content = r.unopenable !== undefined ? '' : r.content;
     if (doc.savedContent === content) return;
     doc.savedContent = content;

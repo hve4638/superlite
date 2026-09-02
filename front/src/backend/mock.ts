@@ -173,12 +173,17 @@ export class MockBackend implements ThinBackend {
     return delay([...seen.values()]);
   }
 
-  readFile(path: string, opts?: { maxBytes?: number }): Promise<FileContent> {
+  readFile(path: string, opts?: { maxBytes?: number; encoding?: 'base64' }): Promise<FileContent> {
     const content = FILES[path];
     if (content === undefined) return Promise.reject(new Error(`ENOENT: ${path}`));
     const etag = String(ETAGS.get(path) ?? 0);
     if (opts?.maxBytes !== undefined && content.length > opts.maxBytes) {
       return delay({ unopenable: { kind: 'large', size: content.length }, etag });
+    }
+    // mock 트리엔 이미지가 없다 — 계약 대칭으로 텍스트를 base64 인코딩만 해서 돌려준다
+    if (opts?.encoding === 'base64') {
+      const b64 = btoa(String.fromCharCode(...new TextEncoder().encode(content)));
+      return delay({ content: b64, etag });
     }
     return delay({ content, etag });
   }

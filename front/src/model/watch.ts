@@ -8,7 +8,7 @@
 import { reactive } from '@vue/reactivity';
 import type { FsChange, ThinBackend } from '../backend/types';
 import { ctx, viewOf } from './ctx';
-import type { createEditors } from './editors';
+import { type createEditors, imageMime } from './editors';
 import { type createFiles, parentOf } from './files';
 import type { createScm } from './scm';
 import type { createSearch } from './search';
@@ -66,7 +66,9 @@ export function createWatch(
           continue;
         }
         const issuedSaved = doc.savedContent;
-        swallow(backend.readFile(path).then((r) => {
+        // 이미지 문서는 base64 로 재로드 — 텍스트로 읽으면 binary unopenable 로 오판된다
+        const opts = imageMime(path) !== null ? { encoding: 'base64' as const } : undefined;
+        swallow(backend.readFile(path, opts).then((r) => {
           // 읽혔다 = 디스크에 있다 (삭제 이벤트가 가짜였거나 재생성됨 — VS Code 의 재검증과 동일)
           setOrphaned(path, false);
           // WHY: 왕복 중 저장이 끝났으면 이 스냅샷이 더 낡다 — 적용하면 방금 저장을 되돌리고

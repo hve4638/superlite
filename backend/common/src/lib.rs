@@ -20,7 +20,10 @@ pub fn socket_path() -> PathBuf {
 ///    구버전 프론트는 content 없는 성공 응답을 텍스트로 오해하므로 의미 변경이다.
 /// 4: writeFile 에 encoding='base64' 추가 — 구버전 데몬은 미지 파라미터를 무시하고 base64
 ///    문자열을 텍스트로 그대로 써서 이미지 저장이 조용히 깨진다.
-const WIRE_VERSION: u32 = 4;
+/// 5: readFile 에 encoding='base64' 추가 (writeFile 과 대칭) — 구버전 데몬은 미지 파라미터를
+///    무시하고 UTF-8 검증으로 이진을 unopenable 로 돌려줘 이미지 뷰어가 조용히 안내 화면으로
+///    빠진다.
+const WIRE_VERSION: u32 = 5;
 
 /// 0700 전용 디렉터리를 만들어 그 안에 소켓을 둔다.
 #[cfg(unix)]

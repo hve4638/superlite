@@ -1,12 +1,28 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { activeTab, editors, indentOf, languageLabel } from '../model/editors';
+import { activeTab, base64Bytes, editors, indentOf, languageLabel } from '../model/editors';
 import { scm } from '../model/scm';
 import { connection } from '../model/watch';
 
 // diff 탭도 path 를 가지므로 kind 무관하게 파일 정보를 표시한다 (VS Code 동일)
 const fileTab = computed(() => activeTab());
 const branchLabel = computed(() => (scm.dirty ? `${scm.branch}*` : scm.branch));
+
+// 이미지 탭이면 텍스트 항목(Ln/Col·Spaces·인코딩·언어) 대신 해상도·크기·배율을 표시한다
+// (VS Code 이미지 프리뷰 동일 — 해상도는 로드 전이면 아직 없다)
+const image = computed(() => {
+  const t = fileTab.value;
+  const data = t ? editors.docs.get(t.path)?.image : undefined;
+  if (!t || data === undefined) return null;
+  return { view: editors.imageView.get(t.path), size: base64Bytes(data) };
+});
+
+/** 파일 크기 표기 — VS Code 상태바와 같은 단위 자동 선택 */
+function fmtSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(2)}KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)}MB`;
+}
 </script>
 
 <template>
@@ -33,7 +49,20 @@ const branchLabel = computed(() => (scm.dirty ? `${scm.branch}*` : scm.branch));
       </div>
     </div>
     <div class="statusbar-right">
-      <template v-if="fileTab">
+      <template v-if="fileTab && image">
+        <div v-if="image.view" class="statusbar-item">
+          <span>{{ image.view.w }}x{{ image.view.h }}</span>
+        </div>
+        <div class="statusbar-item"><span>{{ fmtSize(image.size) }}</span></div>
+        <div class="statusbar-item">
+          <span>{{
+            image.view === undefined || image.view.zoom === 'fit'
+              ? 'Fit'
+              : `${Math.round(image.view.zoom * 100)}%`
+          }}</span>
+        </div>
+      </template>
+      <template v-else-if="fileTab">
         <div class="statusbar-item">
           <span>Ln {{ editors.cursor.line }}, Col {{ editors.cursor.col }}</span>
         </div>

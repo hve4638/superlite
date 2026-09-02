@@ -1,6 +1,6 @@
 import { ctx, viewOf } from './ctx'
 import { FsChange, ThinBackend } from '../backend/types'
-import { createEditors } from './editors'
+import { createEditors, imageMime } from './editors'
 import { createFiles, parentOf } from './files'
 import { createScm } from './scm'
 import { createSearch } from './search'

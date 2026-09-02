@@ -94,12 +94,21 @@ await call('writeFile', {
   encoding: 'base64',
 });
 const bin = readFileSync(new URL('../../front/.check-tmp-bin', import.meta.url));
-rmSync(new URL('../../front/.check-tmp-bin', import.meta.url));
+// base64 이진 읽기 (이미지 뷰어 와이어) — 이진 판별을 타지 않고 바이트가 base64 로 그대로 와야 한다
+const rb = await call('readFile', { path: 'front/.check-tmp-bin', encoding: 'base64' });
+rmSync(new URL('../../front/.check-tmp-bin', import.meta.url)); // assert 실패해도 잔여물 없게 먼저 삭제
 assert.deepStrictEqual([...bin], pngMagic, 'writeFile base64 bytes');
+assert.deepStrictEqual([...Buffer.from(rb.content, 'base64')], pngMagic, 'readFile base64 bytes');
+assert.match(rb.etag, /^\d+-\d+$/, 'readFile base64 etag');
 await assert.rejects(
   call('writeFile', { path: 'front/.check-tmp', content: 'x', encoding: 'hex' }),
   /encoding/,
   'writeFile unknown encoding',
+);
+await assert.rejects(
+  call('readFile', { path: 'front/package.json', encoding: 'hex' }),
+  /encoding/,
+  'readFile unknown encoding',
 );
 
 send('createTerminal', { term: 1, cols: 80, rows: 24 });

@@ -269,8 +269,8 @@ export class WsBackend implements ThinBackend {
   readDir(path: string): Promise<DirEntry[]> {
     return this.call('readDir', { path });
   }
-  readFile(path: string, opts?: { maxBytes?: number }): Promise<FileContent> {
-    return this.call('readFile', { path, maxBytes: opts?.maxBytes });
+  readFile(path: string, opts?: { maxBytes?: number; encoding?: 'base64' }): Promise<FileContent> {
+    return this.call('readFile', { path, maxBytes: opts?.maxBytes, encoding: opts?.encoding });
   }
   stat(path: string): Promise<FileStat> {
     return this.call('stat', { path });
