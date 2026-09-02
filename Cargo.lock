@@ -3690,6 +3690,7 @@ name = "superlight-backend"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "futures-util",
  "serde_json",
  "superlight-common",
  "tokio",
@@ -3705,6 +3706,7 @@ name = "superlight-daemon"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "flate2",
  "notify",
  "portable-pty",
  "serde_json",
