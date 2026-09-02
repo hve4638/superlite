@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { editors, openDiff, openFile } from '../../model/editors';
+import { activeSessionEmpty } from '../../model/sessions';
 import EditorLayoutNode from './EditorLayoutNode.vue';
+import StartPage from '../StartPage.vue';
 
 // DEV 전용 테스트 훅 — playwright 검증 스크립트가 파일을 열 수 있게 한다
 if (import.meta.env.DEV) {
@@ -10,7 +12,9 @@ if (import.meta.env.DEV) {
 
 <template>
   <div class="editor-area">
-    <EditorLayoutNode :node="editors.layout" class="root" />
+    <!-- 빈 세션(루트 없음)은 에디터 대신 시작 페이지 — 열 파일 자체가 없다 -->
+    <StartPage v-if="activeSessionEmpty()" />
+    <EditorLayoutNode v-else :node="editors.layout" class="root" />
   </div>
 </template>
 

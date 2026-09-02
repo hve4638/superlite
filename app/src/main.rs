@@ -8,30 +8,31 @@
 //!
 //! 창은 하나다 — 세션 탭 전환은 front 가 페이지 안에서 세션 컨텍스트(연결·모델)를
 //! 교체하는 것이고 (웹과 동일 동작), native 는 창을 옮기지 않는다. native 의 몫은
-//! 레지스트리(추가·제거·지속 저장)와 그 변경 방송(sessions-changed)뿐이며, 어느 탭이
-//! 활성인지는 모른다.
+//! 레지스트리(추가·제거)와 그 변경 방송(sessions-changed)뿐이며, 어느 탭이 활성인지는
+//! 모른다.
 //!
-//! 세션 목록은 state.json(app_data_dir)에 지속되어 재실행 시 마지막 워크스페이스들이
-//! 탭 순서 그대로 복원된다 — 스키마·쓰기 규칙은 decision/state-persistence.md.
+//! 시작은 항상 빈 세션(시작 페이지)이다 — 마지막 워크스페이스 복원·지속 저장은 하지
+//! 않는다 (2026-09-02 사용자 결정, ticket app-empty-session). 명시 argv 로 준 폴더만 연다.
 //!
-//! 실행: superlight-app [워크스페이스루트]  (인자 없으면 저장된 세션 복원, 없으면 cwd)
+//! 실행: superlight-app [워크스페이스루트]  (인자 없으면 빈 세션으로 시작)
 
 // 릴리스 Windows 에서 콘솔 창이 같이 뜨지 않게
 #![cfg_attr(all(not(debug_assertions), windows), windows_subsystem = "windows")]
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use superlight_backend::SessionRoots;
 use tauri::{Emitter, Manager};
 
-/// 세션 레지스트리 — 순서가 곧 탭 순서 (relay 의 SessionRoots::Registry 와 공유)
-type Sessions = Arc<Mutex<Vec<(String, PathBuf)>>>;
+/// 세션 레지스트리 — 순서가 곧 탭 순서 (relay 의 SessionRoots::Registry 와 공유).
+/// root None = 루트 없는 빈 세션 (시작 페이지 탭, ticket app-empty-session) —
+/// 백엔드 연결 없이 front 에만 그려지고, 폴더를 열면 그 자리가 교체된다
+type Sessions = Arc<Mutex<Vec<(String, Option<PathBuf>)>>>;
 
 struct AppState {
     ws_url: String,
     sessions: Sessions,
-    state_file: PathBuf,
 }
 
 /// 세션 탭 표시용 사영 — 부팅 주입(__SUPERLIGHT_SESSIONS__)·list_sessions 응답·
@@ -40,7 +41,8 @@ struct AppState {
 struct SessionInfo {
     id: String,
     name: String,
-    root: String,
+    /// null = 루트 없는 빈 세션 — 표시 라벨·시작 페이지 여부는 front 가 이걸로 판단한다
+    root: Option<String>,
 }
 
 fn session_infos(sessions: &Sessions) -> Vec<SessionInfo> {
@@ -51,10 +53,14 @@ fn session_infos(sessions: &Sessions) -> Vec<SessionInfo> {
         .map(|(id, root)| SessionInfo {
             id: id.clone(),
             name: root
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| root.to_string_lossy().into_owned()),
-            root: root.to_string_lossy().into_owned(),
+                .as_deref()
+                .map(|r| {
+                    r.file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| r.to_string_lossy().into_owned())
+                })
+                .unwrap_or_default(),
+            root: root.as_deref().map(|r| r.to_string_lossy().into_owned()),
         })
         .collect()
 }
@@ -64,96 +70,63 @@ fn emit_sessions(app: &tauri::AppHandle, sessions: &Sessions) {
     let _ = app.emit("sessions-changed", session_infos(sessions));
 }
 
-/// 디스크에 남기는 상태 — 스키마·규칙은 docs/decision/state-persistence.md.
-/// 저장 단위는 세션 목록이다 (단일 세션은 원소 1개인 특수형).
-/// 엔트리가 객체인 것은 추후 front 세션 상태 참조가 붙을 자리라서다.
-#[derive(serde::Serialize, serde::Deserialize)]
-struct PersistedState {
-    version: u32,
-    workspaces: Vec<WorkspaceEntry>,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct WorkspaceEntry {
-    root: PathBuf,
-}
-
-/// 세션 레지스트리를 state.json 에 저장 — 레지스트리 변경(탭 열림·닫힘)마다 호출한다.
-/// 저장 순서 = 레지스트리 순서 = 탭 순서 (복원 시 그대로 재현된다).
-/// 종료 훅에 의존하지 않으므로 crash 에도 마지막 변경까지 남는다.
-/// WHY: 빈 목록은 저장하지 않는다 — 마지막 탭 닫힘(=종료)이 종료 직전 목록을 지우면
-///      다음 기동에 복원할 것이 사라진다. 그래서 파일에는 항상 마지막 비어있지 않은
-///      목록이 남고, 그것이 복원 대상이다.
-fn persist_workspaces(state: &AppState) {
-    let workspaces: Vec<WorkspaceEntry> = state
-        .sessions
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|(_, root)| WorkspaceEntry { root: root.clone() })
-        .collect();
-    if workspaces.is_empty() {
-        return;
-    }
-    let json = serde_json::to_string(&PersistedState { version: 1, workspaces })
-        .expect("상태 직렬화는 실패할 수 없다");
-    // tmp 에 쓴 뒤 rename — torn write 로 파일이 깨지지 않게
-    let tmp = state.state_file.with_extension("json.tmp");
-    if let Err(e) =
-        std::fs::write(&tmp, json).and_then(|()| std::fs::rename(&tmp, &state.state_file))
-    {
-        eprintln!("superlight-app: 상태 저장 실패: {e}");
-    }
-}
-
-/// 저장된 워크스페이스 목록을 읽는다. 파일 없음·파싱 실패·버전 불일치는 빈 목록으로
-/// 취급한다 — 호출자(setup)가 cwd 로 fallback 한다.
-fn load_workspaces(state_file: &Path) -> Vec<PathBuf> {
-    let Ok(text) = std::fs::read_to_string(state_file) else {
-        return Vec::new();
-    };
-    match serde_json::from_str::<PersistedState>(&text) {
-        Ok(s) if s.version == 1 => s.workspaces.into_iter().map(|w| w.root).collect(),
-        _ => Vec::new(),
-    }
-}
-
 fn rand_hex() -> String {
     let mut buf = [0u8; 16];
     getrandom::fill(&mut buf).expect("난수 생성 실패");
     buf.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// 새 세션 등록 단일 진입점 — 새 session id 를 발급해 레지스트리에 붙이고 저장·방송한다.
+/// 'Open Folder' 경로 퀵인풋의 시작 경로 — 열린 워크스페이스가 없을 때(빈 세션) 쓴다.
+/// front 가 navigator 로 OS 를 추측하면 웹(리눅스 서버)에서 틀리므로, 데몬과 같은
+/// 머신인 native 가 정한다. Windows 는 시스템 드라이브 루트(예: `C:/`), 그 외는 `/`.
+fn default_open_root() -> String {
+    #[cfg(windows)]
+    {
+        let drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
+        format!("{}/", drive.trim_end_matches(['/', '\\']))
+    }
+    #[cfg(not(windows))]
+    {
+        "/".to_string()
+    }
+}
+
+/// 새 세션 등록 단일 진입점 — 새 session id 를 발급해 레지스트리에 붙이고 방송한다.
 /// front 는 sessions-changed 를 받아 새 id 로 WS 연결을 열고 그 탭을 활성으로 만든다.
 /// dialog·퀵인풋·OS 드롭·두 번째 실행이 공유한다.
 ///
+/// replace 는 빈 세션 탭 id (시작 페이지에서 열기) — 그 엔트리가 아직 root 없는
+/// 채로 있으면 push 대신 그 자리를 교체해 탭 위치를 보존한다. id 는 새로 발급 —
+/// front reconcile 이 제거+추가로 자연히 따라온다.
+///
 /// 같은 워크스페이스가 이미 열려 있으면 새 탭 대신 그 탭으로 포커스만 옮긴다
-/// (session-focus 이벤트 — front 가 활성 탭을 바꾼다). 워크스페이스 정체성은 지금은
-/// canonicalize 된 로컬 경로가 전부지만, ssh 등 원격 세션이 붙으면 (origin, path) 쌍이
-/// 되어야 한다 — 같은 경로라도 origin 이 다르면 별개 세션이다.
-fn open_workspace(app: &tauri::AppHandle, state: &AppState, root: PathBuf) {
-    let existing = state
-        .sessions
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|(_, r)| r == &root)
-        .map(|(id, _)| id.clone());
-    if let Some(id) = existing {
-        let _ = app.emit("session-focus", id);
-        return;
+/// (session-focus 이벤트 — front 가 활성 탭을 바꾼다. 빈 탭은 그대로 남는다).
+/// 워크스페이스 정체성은 지금은 canonicalize 된 로컬 경로가 전부지만, ssh 등 원격
+/// 세션이 붙으면 (origin, path) 쌍이 되어야 한다 — 같은 경로라도 origin 이 다르면
+/// 별개 세션이다.
+fn open_workspace(app: &tauri::AppHandle, state: &AppState, root: PathBuf, replace: Option<&str>) {
+    {
+        let mut list = state.sessions.lock().unwrap();
+        if let Some((id, _)) = list.iter().find(|(_, r)| r.as_ref() == Some(&root)) {
+            let id = id.clone();
+            drop(list);
+            let _ = app.emit("session-focus", id);
+            return;
+        }
+        let session = rand_hex();
+        // 교체 대상은 여전히 루트가 없어야 한다 — 경합(그 사이 다른 열기로 교체됨)이면 push
+        match replace.and_then(|rid| list.iter().position(|(id, r)| id == rid && r.is_none())) {
+            Some(i) => list[i] = (session, Some(root)),
+            None => list.push((session, Some(root))),
+        }
     }
-    let session = rand_hex();
-    state.sessions.lock().unwrap().push((session, root));
-    persist_workspaces(state);
     emit_sessions(app, &state.sessions);
 }
 
-/// 폴더 선택 dialog → 새 세션 탭 추가. front 의 '폴더 열기' 커맨드와 탭 + 버튼이 invoke 한다.
-/// 취소는 무동작. 폴더 열기 = 새 세션 열기 (decision/workspace-session-tabs.md — 교체 아님).
+/// 폴더 선택 dialog → 새 세션 탭 추가. front 의 '폴더 열기' 커맨드·시작 페이지·
+/// + 드롭다운이 invoke 한다. 취소는 무동작. replace 는 빈 세션 탭 id (open_workspace 참조).
 #[tauri::command]
-async fn open_folder(app: tauri::AppHandle) -> Result<(), String> {
+async fn open_folder(app: tauri::AppHandle, replace: Option<String>) -> Result<(), String> {
     let Some(dir) = rfd::AsyncFileDialog::new().pick_folder().await else {
         return Ok(());
     };
@@ -162,7 +135,7 @@ async fn open_folder(app: tauri::AppHandle) -> Result<(), String> {
         dir.path().canonicalize().map_err(|e| format!("경로 확인 실패: {e}"))?,
     );
     let state = app.state::<AppState>();
-    open_workspace(&app, &state, root);
+    open_workspace(&app, &state, root, replace.as_deref());
     Ok(())
 }
 
@@ -170,7 +143,7 @@ async fn open_folder(app: tauri::AppHandle) -> Result<(), String> {
 /// 근거는 ws docs/decision/web-folder-open.md 개정 — webview 는 이미 /ws 로 셸을
 /// 가지므로 권한 확대가 아니고, 검증·세션 등록은 여전히 여기(native)가 소유한다.
 #[tauri::command]
-fn open_folder_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
+fn open_folder_path(app: tauri::AppHandle, path: String, replace: Option<String>) -> Result<(), String> {
     // plain: Windows verbatim 루트는 '/' 와이어 경로·자식 cwd 를 깨뜨린다 (common 참조)
     let root = superlight_common::plain(
         std::path::Path::new(&path)
@@ -181,13 +154,22 @@ fn open_folder_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
         return Err(format!("디렉토리가 아니다: {}", root.display()));
     }
     let state = app.state::<AppState>();
-    open_workspace(&app, &state, root);
+    open_workspace(&app, &state, root, replace.as_deref());
     Ok(())
+}
+
+/// 루트 없는 빈 세션 탭 추가 (탭 + 버튼) — 중복 검사 없음, 빈 탭은 여러 개 공존
+/// 가능하다 (VS Code 빈 창과 동일).
+#[tauri::command]
+fn open_empty_session(app: tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    state.sessions.lock().unwrap().push((rand_hex(), None));
+    emit_sessions(&app, &state.sessions);
 }
 
 /// 순서 이동의 재배열 본체 — to 는 표시 목록 기준 삽입 인덱스 (이동 중 탭 포함,
 /// 제거 후 인덱스 보정). 없는 id 는 무동작
-fn move_entry(list: &mut Vec<(String, PathBuf)>, id: &str, to: usize) -> bool {
+fn move_entry(list: &mut Vec<(String, Option<PathBuf>)>, id: &str, to: usize) -> bool {
     let Some(i) = list.iter().position(|(sid, _)| sid == id) else {
         return false;
     };
@@ -198,14 +180,13 @@ fn move_entry(list: &mut Vec<(String, PathBuf)>, id: &str, to: usize) -> bool {
 }
 
 /// 탭 드래그 순서 이동 — 순서의 단일 출처는 레지스트리이므로 재배열도 native 가 하고,
-/// 저장·방송으로 front 가 따라온다 (복원 순서 = 탭 순서가 그대로 유지된다)
+/// 방송으로 front 가 따라온다
 #[tauri::command]
 fn move_session(app: tauri::AppHandle, id: String, to: usize) {
     let state = app.state::<AppState>();
     if !move_entry(&mut state.sessions.lock().unwrap(), &id, to) {
         return;
     }
-    persist_workspaces(&state);
     emit_sessions(&app, &state.sessions);
 }
 
@@ -218,23 +199,22 @@ fn list_sessions(state: tauri::State<AppState>) -> Vec<SessionInfo> {
 /// 탭 닫기 = 세션 종료(kill 의미) — 레지스트리에서 제거해 재-attach 를 차단한다.
 /// front 가 그 세션의 WS 연결을 끊으면 데몬 detach → 세션 grace 후 터미널 회수
 /// (즉시 kill 와이어는 없다 — grace 지연 회수 수용, docs/ticket/app-session-tabs).
-/// 마지막 탭을 닫으면 앱이 종료된다 (창 하나 = 앱 수명, 종전 수명 규칙과 동일).
+/// 마지막 탭을 닫으면 앱을 종료하는 대신 루트 없는 빈 세션(시작 페이지)으로 대체한다
+/// (VS Code 처럼 — 앱 종료는 창 X 로만. 창 하나 = 앱 수명 규칙은 창 닫기에만 남고,
+/// 탭 닫기는 최소 한 탭을 유지한다).
 #[tauri::command]
 fn close_session(app: tauri::AppHandle, id: String) {
     let state = app.state::<AppState>();
-    let now_empty = {
+    {
         let mut list = state.sessions.lock().unwrap();
         let Some(i) = list.iter().position(|(sid, _)| sid == &id) else {
             return;
         };
         list.remove(i);
-        list.is_empty()
-    };
-    if now_empty {
-        app.exit(0);
-        return;
+        if list.is_empty() {
+            list.push((rand_hex(), None));
+        }
     }
-    persist_workspaces(&state);
     emit_sessions(&app, &state.sessions);
 }
 
@@ -307,7 +287,7 @@ fn attach_os_drop(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
                     match std::path::Path::new(&dir).canonicalize() {
                         Ok(root) => {
                             let state = app2.state::<AppState>();
-                            open_workspace(&app2, &state, superlight_common::plain(root));
+                            open_workspace(&app2, &state, superlight_common::plain(root), None);
                         }
                         Err(e) => eprintln!("superlight-app: 드롭 경로 확인 실패: {e}"),
                     }
@@ -338,7 +318,7 @@ fn open_second_instance(app: &tauri::AppHandle, argv: Vec<String>, cwd: String) 
     match root.canonicalize() {
         Ok(root) => {
             let state = app.state::<AppState>();
-            open_workspace(app, &state, superlight_common::plain(root));
+            open_workspace(app, &state, superlight_common::plain(root), None);
         }
         Err(e) => eprintln!("superlight-app: 두 번째 실행 경로 확인 실패: {e}"),
     }
@@ -390,41 +370,23 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             open_folder,
             open_folder_path,
+            open_empty_session,
             list_sessions,
             close_session,
             move_session
         ])
         .setup(move |app| {
-            // 상태 파일은 OS 관례 경로(app_data_dir) 아래 state.json —
-            // 스키마·쓰기 규칙은 docs/decision/state-persistence.md
-            let data_dir = app.path().app_data_dir()?;
-            std::fs::create_dir_all(&data_dir)?;
-            let state_file = data_dir.join("state.json");
-
-            // 복원 우선순위: 명시 argv > 저장된 세션 목록 > cwd.
-            // 명시 인자의 경로 오류는 즉시 실패, 저장 목록의 소실 경로(삭제·이동)는
-            // 조용히 건너뛴다 — 남는 게 없으면 cwd fallback.
+            // 시작은 항상 빈 세션(시작 페이지)이다 — 마지막 워크스페이스 복원은 하지
+            // 않는다 (2026-09-02 사용자 결정, ticket app-empty-session). 명시 argv 로 준
+            // 폴더("CSL로 열기"·인자 실행)만 그 폴더를 연다. 명시 인자의 경로 오류는 즉시 실패.
             let roots: Vec<PathBuf> = match &cli_root {
                 Some(arg) => {
                     vec![arg.canonicalize().expect("워크스페이스 루트 경로가 존재해야 한다")]
                 }
-                None => {
-                    let saved: Vec<PathBuf> = load_workspaces(&state_file)
-                        .into_iter()
-                        .filter_map(|p| p.canonicalize().ok())
-                        .collect();
-                    if saved.is_empty() {
-                        vec![std::env::current_dir()
-                            .unwrap()
-                            .canonicalize()
-                            .expect("워크스페이스 루트 경로가 존재해야 한다")]
-                    } else {
-                        saved
-                    }
-                }
+                None => Vec::new(),
             };
 
-            app.manage(AppState { ws_url, sessions, state_file });
+            app.manage(AppState { ws_url, sessions });
             let state = app.state::<AppState>();
             // 초기 세션 등록 — 창을 만들기 전에 끝내야 주입 목록이 완전하다
             {
@@ -432,13 +394,12 @@ fn main() {
                 for root in roots {
                     // plain: Windows verbatim 루트는 '/' 와이어 경로·자식 cwd 를 깨뜨린다
                     let root = superlight_common::plain(root);
-                    // 저장 파일의 중복 방어 — 열기 경로는 open_workspace 가 걸러 새로 생기진 않는다
-                    if !list.iter().any(|(_, r)| r == &root) {
-                        list.push((rand_hex(), root));
-                    }
+                    list.push((rand_hex(), Some(root)));
+                }
+                if list.is_empty() {
+                    list.push((rand_hex(), None));
                 }
             }
-            persist_workspaces(&state);
 
             // 유일한 창 — 세션 탭은 front 가 이 창 안에서 그린다.
             // 주입 스크립트는 프론트 코드 실행 전에 평가된다 (host.ts 가 두 값을 읽는다).
@@ -462,8 +423,11 @@ fn main() {
             // 첫 페인트 전 흰 플래시 방지 — 테마 배경(--vscode-editor-background)과 일치
             .background_color(tauri::window::Color(0x1f, 0x1f, 0x1f, 0xff))
             .initialization_script(&format!(
-                "window.__SUPERLIGHT_WS__ = '{}'; window.__SUPERLIGHT_SESSIONS__ = {boot};",
-                state.ws_url
+                "window.__SUPERLIGHT_WS__ = '{}'; window.__SUPERLIGHT_SESSIONS__ = {boot}; window.__SUPERLIGHT_OPEN_ROOT__ = {open_root};",
+                state.ws_url,
+                // JSON 문자열로 — 경로 이스케이프 안전 (드라이브 문자엔 특수문자 없지만 관례)
+                open_root = serde_json::to_string(&default_open_root())
+                    .expect("문자열 직렬화는 실패할 수 없다"),
             ))
             .build()?;
             #[cfg(windows)]
@@ -480,46 +444,12 @@ fn main() {
 mod tests {
     use super::*;
 
-    fn temp_state(name: &str) -> AppState {
-        AppState {
-            ws_url: String::new(),
-            sessions: Arc::default(),
-            state_file: std::env::temp_dir().join(format!("superlight-test-{name}-{}.json", rand_hex())),
-        }
-    }
-
-    #[test]
-    fn persist_load_roundtrip() {
-        let state = temp_state("roundtrip");
-        state.sessions.lock().unwrap().push(("a".into(), PathBuf::from("/tmp/a")));
-        state.sessions.lock().unwrap().push(("b".into(), PathBuf::from("/tmp/b")));
-        persist_workspaces(&state);
-
-        // 저장 순서 = 레지스트리(탭) 순서 — 복원이 그대로 재현해야 한다
-        let loaded = load_workspaces(&state.state_file);
-        assert_eq!(loaded, vec![PathBuf::from("/tmp/a"), PathBuf::from("/tmp/b")]);
-        let _ = std::fs::remove_file(&state.state_file);
-    }
-
-    #[test]
-    fn empty_registry_not_persisted() {
-        let state = temp_state("skip-empty");
-        state.sessions.lock().unwrap().push(("a".into(), PathBuf::from("/tmp/a")));
-        persist_workspaces(&state);
-        // 마지막 탭 닫힘(=종료) 시나리오 — 빈 저장이 직전 목록을 지우면 안 된다
-        state.sessions.lock().unwrap().clear();
-        persist_workspaces(&state);
-
-        assert_eq!(load_workspaces(&state.state_file), vec![PathBuf::from("/tmp/a")]);
-        let _ = std::fs::remove_file(&state.state_file);
-    }
-
     #[test]
     fn move_entry_uses_display_insertion_index() {
         let mut list = vec![
-            ("a".to_string(), PathBuf::from("/a")),
-            ("b".to_string(), PathBuf::from("/b")),
-            ("c".to_string(), PathBuf::from("/c")),
+            ("a".to_string(), Some(PathBuf::from("/a"))),
+            ("b".to_string(), Some(PathBuf::from("/b"))),
+            ("c".to_string(), Some(PathBuf::from("/c"))),
         ];
         // 앞으로: c 를 맨 앞에
         assert!(move_entry(&mut list, "c", 0));
@@ -529,24 +459,5 @@ mod tests {
         assert_eq!(list.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), ["a", "b", "c"]);
         // 없는 id 는 무동작
         assert!(!move_entry(&mut list, "x", 0));
-    }
-
-    #[test]
-    fn missing_or_corrupt_file_loads_empty() {
-        let missing = std::env::temp_dir().join(format!("superlight-test-missing-{}.json", rand_hex()));
-        assert!(load_workspaces(&missing).is_empty());
-
-        let corrupt = std::env::temp_dir().join(format!("superlight-test-corrupt-{}.json", rand_hex()));
-        std::fs::write(&corrupt, "{ torn").unwrap();
-        assert!(load_workspaces(&corrupt).is_empty());
-        let _ = std::fs::remove_file(&corrupt);
-    }
-
-    #[test]
-    fn version_mismatch_ignored() {
-        let file = std::env::temp_dir().join(format!("superlight-test-ver-{}.json", rand_hex()));
-        std::fs::write(&file, r#"{ "version": 2, "workspaces": [{ "root": "/tmp/a" }] }"#).unwrap();
-        assert!(load_workspaces(&file).is_empty());
-        let _ = std::fs::remove_file(&file);
     }
 }

@@ -203,8 +203,19 @@ export class WsBackend implements ThinBackend {
       if (msg.error !== undefined) p.reject(new Error(msg.error));
       else p.resolve(msg.result);
     };
-    this.ws.onclose = () => {
+    this.ws.onclose = (ev) => {
       if (this.disposed) return; // 의도적 종료 — 실패 통보·재연결 모두 없음 (dispose 가 정리했다)
+      // relay 의 close 4403 = 미등록 세션. 레지스트리에서 빠진 세션은 재연결해도 다시
+      // 거부되므로 재시도를 영구히 멈춘다 (종전에는 1초 간격 무한 재연결에 빠졌다).
+      // 연결 표시는 끊김으로 남긴다 — 앱이라면 곧 reconcile 이 이 백엔드째로 dispose 한다
+      if (ev.code === 4403) {
+        this.disposed = true;
+        for (const p of this.pending.values()) p.reject(new Error('세션이 등록되어 있지 않다'));
+        this.pending.clear();
+        this.queue.length = 0;
+        this.connHandler?.(false);
+        return;
+      }
       // WHY: 재시도 실패도 close 를 쏜다(브라우저 1006) — 열렸던 연결의 close 일 때만
       //      reject 해야 한다. 안 그러면 끊김 중 만들어져 큐(미전송)에 있는 요청이
       //      "실패" 통보 후 재연결 때 조용히 전송돼 유령 쓰기가 된다 (응답은 버려져

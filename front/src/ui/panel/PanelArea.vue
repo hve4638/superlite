@@ -2,6 +2,7 @@
 import { ref } from 'vue';
 import { togglePanel } from '../../model/workbench';
 import { terminals, createTerminal, disposeTerminal } from '../../model/terminal';
+import { activeSessionEmpty } from '../../model/sessions';
 import TerminalPane from './TerminalPane.vue';
 
 type PanelTab = 'problems' | 'output' | 'debug' | 'terminal';
@@ -40,7 +41,13 @@ function killActiveTerminal() {
           <span class="codicon codicon-terminal-bash" />
           <span class="single-tab-label">bash</span>
         </span>
-        <span class="action-icon codicon codicon-plus" title="New Terminal" @click="createTerminal()" />
+        <!-- 빈 세션은 백엔드 연결이 없어 터미널을 만들 수 없다 -->
+        <span
+          v-if="!activeSessionEmpty()"
+          class="action-icon codicon codicon-plus"
+          title="New Terminal"
+          @click="createTerminal()"
+        />
         <span class="action-icon caret codicon codicon-chevron-down" title="Launch Profile..." />
         <span class="action-icon codicon codicon-split-horizontal" title="Split Terminal" />
         <span

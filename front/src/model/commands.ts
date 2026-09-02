@@ -1,9 +1,10 @@
 import { openQuickInput, showViewlet, toggleSideBar, togglePanel, workbench } from './workbench';
-import { backend } from './host';
+import { openFolderDialog } from './host';
 import { closeTab, editors, reopenClosedEditor, saveActive, splitActiveEditor, activeGroup } from './editors';
 import { createTerminal } from './terminal';
 import { refreshScm } from './scm';
-import { cycleSession, sessionsEnabled } from './sessions';
+import { activeSessionEmpty, cycleSession, sessionsEnabled } from './sessions';
+import { inApp } from './window';
 
 export interface Command {
   id: string;
@@ -115,6 +116,7 @@ export function setupCommands(): void {
     title: 'Terminal: Create New Terminal',
     keybinding: 'Ctrl+Shift+`',
     run: () => {
+      if (activeSessionEmpty()) return; // 빈 세션 — 백엔드 연결이 없어 터미널이 없다
       createTerminal();
       if (!workbench.panelVisible) togglePanel();
     },
@@ -156,10 +158,10 @@ export function setupCommands(): void {
     run: () => void reopenClosedEditor(),
   }, 'ctrl+shift+t');
 
-  // '폴더 열기'는 경로 퀵인풋이 공통 (VS Code 원격과 같은 방식 — 확정은 host.openFolder).
-  // mock 은 browseDir 가 없어 미등록. Tauri 는 OS 다이얼로그(native open_folder)를
-  // Ctrl+Shift+O 로 병행 제공한다 — 이원화 폐지는 ws docs/decision/web-folder-open.md 개정.
-  if (backend.browseDir) {
+  // '폴더 열기' — Ctrl+O 는 모든 환경에서 경로 입력 퀵인풋을 연다 ("Open folder by path",
+  // VS Code 원격과 같은 방식 — 확정은 host.openFolder). 앱은 OS 다이얼로그를 Ctrl+Shift+O 로
+  // 병행 제공한다 (web-folder-open.md). mock 은 세션 개념이 없어 미등록.
+  if (sessionsEnabled()) {
     register({
       id: 'workbench.action.files.openFolder',
       title: 'File: Open Folder...',
@@ -167,14 +169,13 @@ export function setupCommands(): void {
       run: () => openQuickInput('folder'),
     }, 'ctrl+o');
   }
-  const tauri = (window as { __TAURI__?: { core: { invoke: (cmd: string) => Promise<void> } } })
-    .__TAURI__;
-  if (tauri) {
+  if (inApp) {
     register({
       id: 'workbench.action.files.openFolderDialog',
       title: 'File: Open Folder (OS Dialog)...',
       keybinding: 'Ctrl+Shift+O',
-      run: () => void tauri.core.invoke('open_folder'),
+      // host.openFolderDialog — 활성 빈 탭이면 그 자리를 교체하는 replace 판단 포함
+      run: openFolderDialog,
     }, 'ctrl+shift+o');
   }
 

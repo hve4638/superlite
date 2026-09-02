@@ -13,7 +13,7 @@ import {
   sessionsEnabled,
   activateSession,
   closeSession,
-  addSession,
+  addEmptySession,
   moveSession,
   renameSession,
   type SessionTab,
@@ -26,7 +26,8 @@ const descriptions = computed(() => {
   const out = new Map<string, string>();
   for (const tabs of byName.values()) {
     if (tabs.length < 2) continue;
-    for (const t of tabs) out.set(t.id, parentHint(t.root));
+    // 빈 세션(root null)은 경로 힌트가 없다 — 같은 라벨의 빈 탭 여럿은 구분 없이 수용
+    for (const t of tabs) if (t.root !== null) out.set(t.id, parentHint(t.root));
   }
   return out;
 });
@@ -38,15 +39,16 @@ function parentHint(root: string): string {
   return segs.length >= 2 ? segs[segs.length - 2] : sep;
 }
 
-/** 기본 열기 — + 버튼과 드롭다운의 'Open Folder...' 가 공유한다 */
-function openDefault(): void {
-  addSession(() => openQuickInput('folder'));
+/** 드롭다운의 'Open Folder...' — 경로 입력 퀵인풋 (앱·웹 공통. OS 다이얼로그는
+ *  Ctrl+Shift+O). + 자체는 빈 탭을 만든다 — 폴더 열기는 시작 페이지 또는 이 드롭다운에서 */
+function openFolderEntry(): void {
+  openQuickInput('folder');
 }
 
-/** + 옆 드롭다운(Windows Terminal 의 v) — 지금은 기본 열기 하나만, 열기 방식이 늘면 여기로 */
+/** + 옆 드롭다운(Windows Terminal 의 v) — 열기 방식이 늘면 여기로 */
 function openAddMenu(e: MouseEvent): void {
   const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-  openContextMenu(r.left, r.bottom + 4, [{ label: 'Open Folder...', run: openDefault }]);
+  openContextMenu(r.left, r.bottom + 4, [{ label: 'Open Folder...', run: openFolderEntry }]);
 }
 
 // 세션 탭 드래그 순서 이동 — 세션 탭끼리만 오가는 로컬 상태 (에디터 탭 DnD 와 무관).
@@ -132,7 +134,7 @@ function commitRename(): void {
             'drop-before': dragId !== null && dropIndex === i,
             'drop-after': dragId !== null && dropIndex === i + 1 && i === sessions.list.length - 1,
           }"
-          :title="tab.root"
+          :title="tab.root ?? undefined"
           :draggable="renamingId !== tab.id"
           @dragstart="onTabDragStart($event, tab)"
           @dragend="endTabDrag()"
@@ -153,7 +155,8 @@ function commitRename(): void {
             @mousedown.stop
           />
           <template v-else>
-            <span class="session-name">{{ tab.name }}</span>
+            <!-- 빈 세션(이름 없음)의 표시 라벨 — 시작 페이지 탭임을 나타낸다 -->
+            <span class="session-name">{{ tab.name || 'Welcome' }}</span>
             <span v-if="descriptions.get(tab.id)" class="session-description">{{
               descriptions.get(tab.id)
             }}</span>
@@ -163,11 +166,12 @@ function commitRename(): void {
             @click.stop="closeSession(tab.id)"
           />
         </div>
-        <!-- 탭 끝의 + = 기본 열기, 옆의 v = 열기 방식 드롭다운 (Windows Terminal 구성) -->
+        <!-- 탭 끝의 + = 빈 세션 탭 (시작 페이지에서 폴더 열기로 잇는다),
+             옆의 v = 열기 방식 드롭다운 (Windows Terminal 구성) -->
         <span
           class="session-add codicon codicon-add"
-          title="Open Folder as New Session"
-          @click="openDefault()"
+          title="New Session"
+          @click="addEmptySession()"
         />
         <span
           class="session-add session-add-menu codicon codicon-chevron-down"

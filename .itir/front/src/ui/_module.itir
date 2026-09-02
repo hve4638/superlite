@@ -1,6 +1,7 @@
 import { workbench, openContextMenu, closeContextMenu, closeQuickInput, showViewlet, toggleSideBar, togglePanel } from '../model/workbench'
 import { inApp, appWindow, minimizeWindow, toggleMaximizeWindow, closeWindow } from '../model/window'
-import { sessions, sessionsEnabled, activateSession, closeSession, addSession, moveSession, renameSession, SessionTab } from '../model/sessions'
+import { sessions, sessionsEnabled, activateSession, closeSession, addEmptySession, browseBackend, moveSession, renameSession, SessionTab } from '../model/sessions'
+import { openFolder, openRootDefault } from '../model/host'
 import { editors, activeTab, openFile, indentOf, languageLabel, baseName, base64Bytes, confirmCloseSave, confirmCloseDiscard, confirmCloseCancel } from '../model/editors'
 import { files } from '../model/files'
 import { scm } from '../model/scm'

@@ -35,8 +35,10 @@ pub enum SessionRoots {
     Fixed(PathBuf),
     /// 등록된 세션만 허용 — Tauri 앱이 dialog·드롭·argv 로 얻은 root 를 등록한다.
     /// Vec 인 이유: 등록 순서가 곧 세션 탭 순서다 — 순서의 단일 출처를 레지스트리에 둔다
-    /// (세션 수가 한 자리라 조회는 선형 탐색으로 충분)
-    Registry(Arc<Mutex<Vec<(String, PathBuf)>>>),
+    /// (세션 수가 한 자리라 조회는 선형 탐색으로 충분).
+    /// root 가 None 인 엔트리는 루트 없는 빈 세션(시작 페이지 탭) — 탭으로는 살지만
+    /// 데몬 attach 대상이 아니다 (front 도 연결을 열지 않는다, ticket app-empty-session)
+    Registry(Arc<Mutex<Vec<(String, Option<PathBuf>)>>>),
 }
 
 impl SessionRoots {
@@ -46,7 +48,7 @@ impl SessionRoots {
             SessionRoots::Registry(list) => {
                 let session = session?;
                 let list = list.lock().unwrap();
-                list.iter().find(|(id, _)| id == session).map(|(_, root)| root.clone())
+                list.iter().find(|(id, _)| id == session).and_then(|(_, root)| root.clone())
             }
         }
     }
@@ -209,10 +211,23 @@ async fn ws_handler(
                 _ => return StatusCode::FORBIDDEN.into_response(),
             }
         }
-        // Registry 모드는 미등록·부재 세션을 거부한다 — root 는 등록 시점에 native 가 정한 것만
+        // Registry 모드는 미등록·부재·루트 없는 세션을 거부한다 — root 는 등록 시점에
+        // native 가 정한 것만.
+        // WHY: 거부를 HTTP 403 이 아니라 upgrade 후 close 4403 으로 — 브라우저 WS 는
+        //      handshake 실패의 HTTP status 를 노출하지 않아, 403 은 백엔드 다운(재시도
+        //      가치 있음)과 구분되지 않고 front 가 1초 간격 무한 재연결에 빠진다.
+        //      close code 만이 "재시도 무의미"를 전할 수 있는 통로다.
         _ => match app.roots.resolve(session.as_deref()) {
             Some(root) => root,
-            None => return StatusCode::FORBIDDEN.into_response(),
+            None => {
+                return ws.on_upgrade(|mut sock| async move {
+                    let close = Message::Close(Some(axum::extract::ws::CloseFrame {
+                        code: 4403,
+                        reason: "unknown session".into(),
+                    }));
+                    let _ = sock.send(close).await;
+                });
+            }
         },
     };
     ws.on_upgrade(move |sock| relay(sock, root, session))

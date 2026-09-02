@@ -1,9 +1,10 @@
 import { openQuickInput, showViewlet, toggleSideBar, togglePanel, workbench } from './workbench'
-import { backend } from './host'
+import { openFolderDialog } from './host'
 import { closeTab, editors, saveActive, splitActiveEditor, activeGroup } from './editors'
 import { createTerminal } from './terminal'
 import { refreshScm } from './scm'
-import { cycleSession, sessionsEnabled } from './sessions'
+import { activeSessionEmpty, cycleSession, sessionsEnabled } from './sessions'
+import { inApp } from './window'
 
 role: 커맨드 레지스트리 + 키바인딩 — VS Code 기본 chord 표기(ctrl+k ctrl+s 류) 지원
 
@@ -17,5 +18,5 @@ export fn installKeybindings(target) {
   role: window keydown 에 chord 상태기 설치
 }
 export fn setupCommands() {
-  role: 내장 커맨드 전부 등록 (저장·분할·뷰 전환·터미널 등). '폴더 열기'는 퀵인풋(경로 입력·자동완성)이 공통 — backend.browseDir 지원 시 Ctrl+O 로 등록 (mock 은 미등록). Tauri 환경(__TAURI__ 존재)은 native open_folder(OS 다이얼로그)를 Ctrl+Shift+O 로 병행 등록 — 이원화 폐지는 ws docs/decision/web-folder-open.md 개정 참조
+  role: 내장 커맨드 전부 등록 (저장·분할·뷰 전환·터미널 등 — 터미널 생성은 activeSessionEmpty 가드). '폴더 열기' Ctrl+O 는 모든 환경에서 경로 입력 퀵인풋을 연다 (sessionsEnabled 에서 등록, mock 미등록). 앱(inApp)은 OS 다이얼로그를 Ctrl+Shift+O(host.openFolderDialog — 빈 탭 replace 판단 포함)로 병행 제공한다 — web-folder-open.md (Ctrl+O=경로 입력, Ctrl+Shift+O=OS 다이얼로그)
 }

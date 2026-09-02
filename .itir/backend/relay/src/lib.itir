@@ -1,16 +1,16 @@
 role: 중계 코어 — 준비된 TcpListener 위에 /ws 라우터를 얹어 serve. 데몬 spawn·attach, 상주 제어 연결 포함. dist 는 옵션 (bin 은 정적 서빙, Tauri 앱은 자산 번들이라 불필요). root 는 세션 해석기(SessionRoots)가 정한다 — 고정 root(bin) 또는 세션 레지스트리 조회(Tauri 앱, decision/workspace-session-tabs.md)
 
 export class SessionRoots {
-  role: 세션 id → root 해석기 (rust enum). Fixed 는 모든 세션이 기동 인자의 root 하나(bin·종전 동작), Registry 는 native 쪽이 등록한 세션만 허용 — root 결정권이 native 에 남아 front 가 임의 경로를 지목할 통로가 없다. Registry 는 순서 보존 리스트 — 등록 순서가 곧 세션 탭 순서라 순서의 단일 출처를 레지스트리에 둔다 (세션 수가 한 자리라 선형 탐색으로 충분)
+  role: 세션 id → root 해석기 (rust enum). Fixed 는 모든 세션이 기동 인자의 root 하나(bin·종전 동작), Registry 는 native 쪽이 등록한 세션만 허용 — root 결정권이 native 에 남아 front 가 임의 경로를 지목할 통로가 없다. Registry 는 순서 보존 리스트 — 등록 순서가 곧 세션 탭 순서라 순서의 단일 출처를 레지스트리에 둔다 (세션 수가 한 자리라 선형 탐색으로 충분). 엔트리의 root 는 Option — 루트 없는 빈 세션(시작 페이지)도 레지스트리에 산다 (ticket app-empty-session)
   fn resolve(session?) -> root? {
-    role: Fixed 는 항상 그 root, Registry 는 등록된 id 만 — 미등록·부재는 None (ws_handler 가 FORBIDDEN 으로 변환)
+    role: Fixed 는 항상 그 root, Registry 는 등록된 id 중 root 가 있는 것만 — 미등록·부재·루트 없는 세션은 None (ws_handler 가 close 4403 으로 변환)
   }
 }
 fn serve() {
   role: 서버 기동 단일 진입점 — control_loop spawn + /ws 라우터(+옵션 dist ServeDir) axum serve. bin 과 Tauri 앱이 공유한다. root 대신 SessionRoots 를 받는다
 }
 fn ws_handler() {
-  role: /ws 관문 — SUPERLIGHT_TOKEN 설정 시 ?tkn= 일치 요구(일치가 곧 인증 — Origin 검증 생략, tauri:// 오리진 수용). 토큰 미설정 시 Origin=Host 검증(브라우저 CSRF). Registry 모드에선 ?session= 이 레지스트리에 있어야 하고 미등록·부재는 FORBIDDEN. Fixed(bin) 모드는 ?folder= 절대 경로로 root 를 넘겨받는다 (웹 '폴더 열기' — 인증 통과자는 터미널로 이미 셸을 가지므로 권한 확대가 아니다. canonicalize + 디렉토리 확인, 실패는 FORBIDDEN). Registry 는 folder 를 무시 — root 결정권은 native 에 남는다
+  role: /ws 관문 — SUPERLIGHT_TOKEN 설정 시 ?tkn= 일치 요구(일치가 곧 인증 — Origin 검증 생략, tauri:// 오리진 수용). 토큰 미설정 시 Origin=Host 검증(브라우저 CSRF). Registry 모드에선 ?session= 이 root 있는 등록 세션이어야 하고, 아니면 upgrade 후 close 4403 — HTTP 403 은 브라우저 WS 에서 일반 끊김과 구분되지 않아 프론트가 무한 재연결에 빠지므로, 재시도 무의미를 알리는 유일한 통로가 close code 다. Fixed(bin) 모드는 ?folder= 절대 경로로 root 를 넘겨받는다 (웹 '폴더 열기' — 인증 통과자는 터미널로 이미 셸을 가지므로 권한 확대가 아니다. canonicalize + 디렉토리 확인, 실패는 FORBIDDEN). Registry 는 folder 를 무시 — root 결정권은 native 에 남는다
 }
 fn token_eq() {
   role: 상수시간 토큰 비교 — 이른 반환 없이 XOR 누적

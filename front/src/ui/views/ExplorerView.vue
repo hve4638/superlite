@@ -4,7 +4,8 @@ import { collapseAll, files, parentOf, refreshTree, visibleNodes, toggleDir, typ
 import { editors, openFile } from '../../model/editors';
 import { createDir, createFile, deleteEntry, renameEntry, saveClipboardImage, undoFileOp } from '../../model/fileops';
 import { decorationFor } from '../../model/scm';
-import { workbench, openContextMenu, type ContextMenuItem } from '../../model/workbench';
+import { activeSessionEmpty } from '../../model/sessions';
+import { workbench, openContextMenu, openQuickInput, type ContextMenuItem } from '../../model/workbench';
 import { endEditorDrag, startFileDrag } from '../editor/tabDnd';
 import FileIcon from '../widgets/FileIcon.vue';
 import InlineNameInput from '../widgets/InlineNameInput.vue';
@@ -18,6 +19,11 @@ interface Editing {
   /** rename 대상의 원래 경로 */
   path?: string;
   initial: string;
+}
+
+/** 빈 세션의 'Open Folder' — 경로 입력 퀵인풋 (시작 페이지와 동일) */
+function openDefault(): void {
+  openQuickInput('folder');
 }
 
 const editing = ref<Editing | null>(null);
@@ -254,7 +260,12 @@ function decoColor(node: TreeNode): string | undefined {
 
 <template>
   <div class="explorer-view">
-    <div class="explorer-pane">
+    <!-- 빈 세션(루트 없음) — 트리 대신 폴더 열기 안내 (VS Code 'No Folder Opened' 뷰) -->
+    <div v-if="activeSessionEmpty()" class="no-folder">
+      <p>You have not yet opened a folder.</p>
+      <button class="no-folder-open" @click="openDefault()">Open Folder</button>
+    </div>
+    <div v-else class="explorer-pane">
       <div class="pane-header">
         <span class="codicon codicon-chevron-down twisty" />
         <span class="title">{{ workbench.workspaceName }}</span>
@@ -344,14 +355,16 @@ function decoColor(node: TreeNode): string | undefined {
         </template>
       </div>
     </div>
-    <div class="pane-header collapsed">
-      <span class="codicon codicon-chevron-right twisty" />
-      <span class="title">Outline</span>
-    </div>
-    <div class="pane-header collapsed">
-      <span class="codicon codicon-chevron-right twisty" />
-      <span class="title">Timeline</span>
-    </div>
+    <template v-if="!activeSessionEmpty()">
+      <div class="pane-header collapsed">
+        <span class="codicon codicon-chevron-right twisty" />
+        <span class="title">Outline</span>
+      </div>
+      <div class="pane-header collapsed">
+        <span class="codicon codicon-chevron-right twisty" />
+        <span class="title">Timeline</span>
+      </div>
+    </template>
     <ConfirmDialog
       v-if="confirming"
       :message="confirmMessage.message"
@@ -364,6 +377,25 @@ function decoColor(node: TreeNode): string | undefined {
 </template>
 
 <style scoped>
+.no-folder {
+  padding: 12px 16px;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.no-folder-open {
+  padding: 5px 0;
+  border: none;
+  border-radius: 2px;
+  background: var(--vscode-button-background, #0e639c);
+  color: var(--vscode-button-foreground, #ffffff);
+  font-size: 13px;
+  cursor: pointer;
+}
+.no-folder-open:hover {
+  background: var(--vscode-button-hoverBackground, #1177bb);
+}
 .explorer-view {
   flex: 1;
   min-height: 0;

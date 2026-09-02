@@ -4,6 +4,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { terminals, createTerminal, setActiveTerminal } from '../../model/terminal';
+import { activeSessionEmpty } from '../../model/sessions';
 import type { TerminalInstance } from '../../model/terminal';
 import { allTerminals } from '../../model/sessions';
 import { isWorkbenchChord } from '../../model/commands';
@@ -200,7 +201,8 @@ watchEffectful(
 let ro: ResizeObserver | null = null;
 
 onMounted(() => {
-  if (terminals.list.length === 0) createTerminal();
+  // 빈 세션은 백엔드 연결이 없다 — 자동 생성하면 응답 없는 유령 터미널이 생긴다
+  if (terminals.list.length === 0 && !activeSessionEmpty()) createTerminal();
   nextTick(() => {
     syncAll();
     bindings.get(terminals.activeId)?.term?.focus();

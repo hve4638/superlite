@@ -4,7 +4,8 @@ import { closeQuickInput, workbench } from '../model/workbench';
 import { files } from '../model/files';
 import { commandList, type Command } from '../model/commands';
 import { editors, openFile } from '../model/editors';
-import { backend, openFolder } from '../model/host';
+import { openFolder, openRootDefault } from '../model/host';
+import { browseBackend } from '../model/sessions';
 import FileIcon from './widgets/FileIcon.vue';
 
 interface FileItem {
@@ -47,11 +48,13 @@ function isFsRoot(dir: string): boolean {
   return dir === '/' || /^[A-Za-z]:\/$/.test(dir);
 }
 
-/** folder 모드 초기 입력 — 현재 워크스페이스 루트에서 시작한다 (VS Code 원격 열기와 동일) */
+/** folder 모드 초기 입력 — 현재 워크스페이스 루트에서 시작한다 (VS Code 원격 열기와 동일).
+ *  열린 워크스페이스가 없으면(빈 세션) OS 기본 루트에서 시작한다 — Windows 는 드라이브
+ *  루트('C:/'), 그 외 '/'. native 주입값(openRootDefault)이라 웹 서버 OS 와도 맞는다. */
 function initialQuery(mode: string): string {
   if (mode === 'commands') return '>';
   if (mode === 'folder') {
-    const root = normPath(workbench.rootPath);
+    const root = normPath(workbench.rootPath) || openRootDefault;
     return root.endsWith('/') ? root : `${root}/`;
   }
   return '';
@@ -84,14 +87,17 @@ const dirListing = ref<{ dir: string; names: string[] } | null>(null);
 watch(
   [isFolderMode, dirPart],
   async () => {
-    if (!isFolderMode.value || !backend.browseDir) return;
+    // 나열은 browseBackend — 활성 세션이 빈 세션(무연결)이면 형제 연결 세션에 위임한다
+    // (browseDir 는 절대 경로 나열이라 세션과 무관하게 같은 결과다)
+    const b = browseBackend();
+    if (!isFolderMode.value || !b?.browseDir) return;
     const dir = dirPart.value;
     if (!isAbsDir(dir)) {
       dirListing.value = null;
       return;
     }
     try {
-      const names = await backend.browseDir(dir);
+      const names = await b.browseDir(dir);
       if (dirPart.value === dir) dirListing.value = { dir, names };
     } catch {
       // 실존하지 않는 경로 타이핑 중 — 후보 없음이 곧 피드백이다
@@ -218,8 +224,19 @@ function segments(text: string, hl: number[]): { text: string; hl: boolean }[] {
 /** 타이핑된 입력이 가리키는 실존 디렉토리 — 조각이 비면 부모 자체(나열 성공이 실존
  *  증거), 아니면 후보와 정확 일치해야 한다. */
 const openTarget = computed<string | null>(() => {
+  if (!isFolderMode.value) return null;
   const listing = dirListing.value;
-  if (!isFolderMode.value || !listing || listing.dir !== dirPart.value) return null;
+  if (!listing || listing.dir !== dirPart.value) {
+    // 나열 백엔드가 없다(연결 세션 부재 — 앱 첫 기동의 빈 세션 등): 자동완성은 없지만
+    // 타이핑한 절대 경로를 그대로 확정 대상으로 삼는다. 실존·디렉토리 검증은 확정처가
+    // 한다 (앱 native open_folder_path / 웹 relay ?folder=). 꼬리 '/' 는 그 디렉토리 자체.
+    if (!browseBackend()) {
+      const q = query.value;
+      if (!isAbsDir(q)) return null;
+      return isFsRoot(q) ? q : q.replace(/\/$/, '');
+    }
+    return null;
+  }
   const frag = fragment.value;
   // 루트('/'·'C:/')는 꼬리 '/' 를 남긴다 — 'C:' 는 드라이브 상대 경로라 절대 경로가 아니다
   if (frag === '') return isFsRoot(listing.dir) ? listing.dir : listing.dir.slice(0, -1);

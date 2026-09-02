@@ -15,9 +15,13 @@ import type { TerminalInstance } from './terminal';
  * - 웹: front 가 소유. 세션마다 relay /ws 연결(?folder=)을 하나씩 연다. 지속 없음 —
  *   페이지 수명 (브라우저 새로고침 = 부팅 세션 하나로 리셋).
  * - mock: 부팅 세션 하나뿐, 탭 UI 를 그리지 않는다 (sessionsEnabled=false).
+ *
+ * root === null 인 탭은 루트 없는 빈 세션이다 (시작 페이지) — 백엔드 연결 없이
+ * (EmptyBackend) 시작 페이지만 그려지고, 폴더를 열면 그 자리가 워크스페이스 세션으로
+ * 교체된다. root === '' 는 다르다 — 웹 부팅 세션의 "서버 기본 root" (연결 있음).
  */
 
-export type SessionTab = { id: string; name: string; root: string };
+export type SessionTab = { id: string; name: string; root: string | null };
 
 type Tauri = {
   core: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> };
@@ -35,8 +39,9 @@ const ctxs = new Map<string, SessionCtx>();
 
 interface SessionsEnv {
   kind: 'app' | 'web' | 'mock';
-  /** 탭 하나의 백엔드 연결 생성 — 환경 분기는 host.ts(조립 지점)가 주입한다 */
-  backendFor: (tab: { id: string; root: string }) => ThinBackend;
+  /** 탭 하나의 백엔드 연결 생성 — 환경 분기는 host.ts(조립 지점)가 주입한다
+   *  (root null 인 빈 세션은 EmptyBackend — 연결을 열지 않는다) */
+  backendFor: (tab: { id: string; root: string | null }) => ThinBackend;
 }
 let env: SessionsEnv = { kind: 'mock', backendFor: () => { throw new Error('sessions 미구성'); } };
 
@@ -115,25 +120,56 @@ export function activateSession(id: string): void {
   activeCtx.value = ctx;
 }
 
-/** 탭 닫기 = 세션 종료(kill 의미) — 연결을 끊으면 데몬이 grace 후 터미널을 회수한다 */
+/** 탭 닫기 = 세션 종료(kill 의미) — 연결을 끊으면 데몬이 grace 후 터미널을 회수한다.
+ *  마지막 탭을 닫으면 빈 세션으로 대체한다 (탭 0 은 없다 — 앱 종료는 창 X). */
 export function closeSession(id: string): void {
   if (env.kind === 'app') {
     // native 가 레지스트리 제거·지속 저장 후 sessions-changed 로 알린다 (reconcile 이 정리).
-    // 마지막 탭 닫기 = 앱 종료 (native 판단)
+    // 마지막 탭이면 native 가 빈 세션으로 대체한다 (앱 종료는 창 X)
     void tauri?.core.invoke('close_session', { id });
     return;
   }
-  if (sessions.list.length <= 1) return; // 웹: 마지막 탭은 닫을 수 없다 (페이지가 곧 앱)
+  // 웹: 마지막 탭을 닫으면 빈 세션을 먼저 세워 활성으로 삼은 뒤 제거한다
+  // (activeCtx 가 폐기된 컨텍스트를 가리키는 순간이 없게)
+  if (sessions.list.length <= 1) {
+    const nid = genSessionId();
+    addLocal({ id: nid, name: '', root: null });
+    activateSession(nid);
+  }
   removeLocal(id);
 }
 
-/** 탭 추가(+) — 앱은 OS 폴더 다이얼로그, 웹은 폴더 퀵인풋 (확정은 host.openFolder 경유) */
-export function addSession(openFolderPicker: () => void): void {
+/** 탭 추가(+) 기본 동작 — 루트 없는 빈 세션 탭 (폴더 선택 없이 빈 탭 먼저, 시작
+ *  페이지에서 열기로 잇는다). 앱은 native 등록(sessions-changed 반향으로 탭 생성),
+ *  웹은 로컬 추가. mock 은 탭 UI 가 없어 닿지 않는다 */
+export function addEmptySession(): void {
   if (env.kind === 'app') {
-    void tauri?.core.invoke('open_folder');
+    void tauri?.core.invoke('open_empty_session');
     return;
   }
-  openFolderPicker();
+  const id = genSessionId();
+  addLocal({ id, name: '', root: null });
+  activateSession(id);
+}
+
+/** 활성 탭이 빈 세션인가 — 시작 페이지 표시·탐색기 빈 상태·터미널 생성 차단·
+ *  폴더 열기의 빈 탭 교체 판단이 공유한다 (반응형 — sessions 읽기) */
+export function activeSessionEmpty(): boolean {
+  return sessions.list.find((t) => t.id === sessions.activeId)?.root === null;
+}
+
+/** 폴더 탐색(browseDir) 가능한 백엔드 — 활성 세션 우선, 활성이 빈 세션(무연결)이면
+ *  아무 연결 세션의 것으로 위임한다. browseDir 는 절대 경로 나열이라 세션 root 와
+ *  무관해 어느 연결이든 같은 결과다 (웹 = 서버 FS, 앱 = 데몬 FS). 전부 빈 세션이면
+ *  null — 확정 검증이 불가하므로 호출측이 OS 다이얼로그 등으로 우회한다 */
+export function browseBackend(): ThinBackend | null {
+  const active = ctxs.get(sessions.activeId)?.backend;
+  if (active?.browseDir) return active;
+  for (const t of sessions.list) {
+    const b = ctxs.get(t.id)?.backend;
+    if (b?.browseDir) return b;
+  }
+  return null;
 }
 
 /** 세션 탭 이름 변경 (탭 더블클릭 rename) — 표시 라벨은 front 소유라 로컬만 바꾼다.
@@ -179,15 +215,25 @@ function normRoot(root: string): string {
  *  (origin, path) 쌍으로 확장한다 — 같은 경로라도 origin 이 다르면 별개 세션이다. */
 export function openWebFolder(root: string): void {
   const norm = normRoot(root);
-  const existing = sessions.list.find((t) => normRoot(t.root) === norm);
+  const existing = sessions.list.find((t) => t.root !== null && normRoot(t.root) === norm);
   if (existing) {
+    // 이미 열린 워크스페이스 — 포커스만 이동, 활성 빈 탭이 있어도 그대로 남긴다 (앱과 동일)
     activateSession(existing.id);
     return;
   }
+  // 활성 탭이 빈 세션이면 새 탭이 그 자리를 교체한다 (시작 페이지에서 열기 흐름 —
+  // 앱의 native replace 와 동일 의미)
+  const emptyId = activeSessionEmpty() ? sessions.activeId : null;
   const id = genSessionId();
   const name = root.split('/').filter((s) => s !== '').pop() ?? root;
   addLocal({ id, name, root });
+  if (emptyId !== null) {
+    const from = sessions.list.findIndex((t) => t.id === id);
+    const [tab] = sessions.list.splice(from, 1);
+    sessions.list.splice(sessions.list.findIndex((t) => t.id === emptyId), 0, tab);
+  }
   activateSession(id);
+  if (emptyId !== null) removeLocal(emptyId);
 }
 
 /** native 레지스트리 목록으로 로컬 상태를 맞춘다 — 추가는 컨텍스트 생성, 제거는 폐기.
