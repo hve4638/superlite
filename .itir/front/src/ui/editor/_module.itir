@@ -7,4 +7,4 @@ import { setBeforeSessionSwitch, activeSessionEmpty } from '../../model/sessions
 import { StartPage } from '../StartPage'
 import { EDITOR_FONT_SIZE, MONO_FONT_FAMILY } from '../../theme/fonts'
 
-role: 에디터 영역 — monaco 수명주기(monaco.ts)와 그룹/탭바/diff 렌더링(.vue), 탭 드래그 이동/분리(진행 상태는 tabDnd.ts 모듈 상태로 공유). monaco 모델은 path 당 하나, 그룹 간 공유. 열 수 없는 문서(doc.unopenable)는 모델을 만들지 않고 편집기 자리에 사유 안내를 띄운다 (VS Code binary/large 안내 근사). 이미지 문서(doc.image)도 모델 없이 편집기 자리에 이미지 뷰어(ImageView.vue — 체커보드, 영역 전체 휠 줌(커서 지점 고정)·드래그 팬·더블클릭 fit 복귀)를 띄운다. 해상도·크기·배율 표시는 statusbar 몫 — ImageView 가 editors.imageView 를 세운다
+role: 에디터 영역 — monaco 수명주기(monaco.ts)와 그룹/탭바/diff 렌더링(.vue), 탭 드래그 이동/분리(진행 상태는 tabDnd.ts 모듈 상태로 공유). monaco 모델은 path 당 하나, 그룹 간 공유. 열 수 없는 문서(doc.unopenable)는 모델을 만들지 않고 편집기 자리에 사유 안내를 띄운다 (VS Code binary/large 안내 근사). 이미지 문서(doc.image)도 모델 없이 편집기 자리에 이미지 뷰어(ImageView.vue — 체커보드, 영역 전체 휠 줌(커서 지점 고정)·드래그 팬·더블클릭 fit 복귀)를 띄운다. 해상도·크기·배율 표시는 statusbar 몫 — ImageView 가 editors.imageView 를 세운다. 부팅 유휴 시간에 더미 에디터를 한 번 만들어 폰트 측정 캐시를 데운다 — 첫 파일 콜드 오픈의 고정 비용(에디터 생성)을 부팅으로 옮기는 프리웜. 실측값은 localStorage 에 영속화(VS Code editorFontInfo 동일 수법)해 재실행부터는 부팅 실측도 건너뛴다 — 복원값은 monaco 가 5초 뒤 백그라운드 재실측(untrusted 취급)

@@ -115,5 +115,5 @@ export fn languageLabel(path) -> label {
   role: statusbar 표시용 언어 이름 — 순수 함수, 세션 무관
 }
 export fn indentOf(path) -> spaces {
-  role: 들여쓰기 감지 — 최소 양수 선행 공백 (VS Code detectIndentation 근사)
+  role: 들여쓰기 감지 — 최소 양수 선행 공백 (VS Code detectIndentation 근사). 앞 1만 줄 상한 — sync 마다 불리므로 초대형 파일 전체 스캔을 막는다
 }

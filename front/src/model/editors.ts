@@ -678,14 +678,21 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     }
   }
 
-  /** 들여쓰기 감지: 최소 양수 선행 공백 (VS Code detectIndentation 근사) */
+  /** 들여쓰기 감지: 최소 양수 선행 공백 (VS Code detectIndentation 근사).
+   *  앞 1만 줄까지만 본다 — 탭 전환(sync)마다 불리므로 초대형 파일의 전체 스캔은
+   *  줄 수 비례 비용이 된다 (split 도 전체 할당이라 indexOf 순회로 상한을 지킨다) */
   function indentOf(path: string): number {
     const doc = editors.docs.get(path);
     if (!doc) return 4;
+    const content = doc.content;
     let min = Infinity;
-    for (const line of doc.content.split('\n')) {
-      const m = line.match(/^( +)\S/);
+    let pos = 0;
+    for (let i = 0; i < 10000 && pos < content.length; i++) {
+      let end = content.indexOf('\n', pos);
+      if (end === -1) end = content.length;
+      const m = content.slice(pos, end).match(/^( +)\S/);
       if (m) min = Math.min(min, m[1].length);
+      pos = end + 1;
     }
     return Number.isFinite(min) ? min : 4;
   }

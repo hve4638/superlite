@@ -5,6 +5,8 @@ import * as monaco from 'monaco-editor';
 // WHY: monaco 0.56 은 exports map 이 'monaco-editor/*' → 'esm/vs/*.js' 라서
 //      구버전 경로(esm/vs/...)로는 vite 가 resolve 하지 못한다.
 import editorWorker from 'monaco-editor/editor/editor.worker?worker';
+import { FontMeasurements } from 'monaco-editor/editor/browser/config/fontMeasurements';
+import { FontInfo, SERIALIZED_FONT_INFO_VERSION } from 'monaco-editor/editor/common/config/fontInfo';
 import tsWorker from 'monaco-editor/languages/features/typescript/ts.worker?worker';
 import jsonWorker from 'monaco-editor/languages/features/json/json.worker?worker';
 import cssWorker from 'monaco-editor/languages/features/css/css.worker?worker';
@@ -108,6 +110,57 @@ export const EDITOR_OPTIONS: monaco.editor.IStandaloneEditorConstructionOptions 
   automaticLayout: true,
   renderLineHighlight: 'line',
 };
+
+// 폰트 실측 결과의 localStorage 영속화 — VS Code 의 editorFontInfo(storage) 동일 수법.
+// 재실행부터는 복원값이 캐시에 있어 첫 에디터 생성이 글리프 실측을 건너뛴다. 복원값은
+// monaco 가 untrusted 로 취급해 5초 뒤 백그라운드 재실측한다 (그 사이 OS 폰트가 바뀌었을
+// 수 있다 — VS Code 동일). serializeFontInfo/restoreFontInfo 는 monaco 배포판에서 빠져
+// 내부 캐시 메서드로 재구성한다 — 시그니처가 바뀌어도 try/catch 로 무해하게 실측 경로가 된다.
+const FONT_CACHE_KEY = 'superlight.editorFontInfo';
+try {
+  const raw = localStorage.getItem(FONT_CACHE_KEY);
+  if (raw) {
+    for (const saved of JSON.parse(raw)) {
+      if (saved?.version !== SERIALIZED_FONT_INFO_VERSION) continue;
+      const fi = new FontInfo(saved, false);
+      FontMeasurements._writeToCache(window, fi, fi);
+    }
+  }
+} catch { /* 손상·스키마 불일치 — 실측 경로로 */ }
+
+// 신뢰(실측) 값만 저장 — 복원 직후의 untrusted 만 있는 캐시로 저장분을 덮어 지우면 안 된다
+function saveFontCache(): void {
+  try {
+    const trusted = FontMeasurements._ensureCache(window).getValues().filter((v) => v.isTrusted);
+    if (trusted.length > 0) localStorage.setItem(FONT_CACHE_KEY, JSON.stringify(trusted));
+  } catch { /* 내부 시그니처 변경 등 — 저장만 포기 */ }
+}
+// 5초 재실측 이후의 최신값을 담기 위해 종료 시점에도 저장한다 (pagehide — 모바일 포함 최후 신호)
+window.addEventListener('pagehide', saveFontCache);
+
+// 첫 에디터 생성의 고정 비용(폰트 글리프 측정·뷰 싱글턴 초기화)을 부팅 유휴 시간으로
+// 옮긴다 — 콜드 오픈 실측(4x 스로틀)에서 파일 내용과 무관한 이 비용이 ~75% 를 차지했다.
+// 더미를 한 프레임 렌더 후 버려도 monaco 의 폰트 측정 캐시는 전역에 남는다.
+const idle: (cb: () => void) => void =
+  'requestIdleCallback' in window ? (cb) => requestIdleCallback(cb) : (cb) => setTimeout(cb, 0);
+idle(() => {
+  if (monaco.editor.getEditors().length > 0) {
+    saveFontCache(); // 이미 실제 에디터가 떴다 — 데울 것은 없고, 그 실측값은 저장한다
+    return;
+  }
+  const host = document.createElement('div');
+  host.style.cssText = 'position:absolute;left:-10000px;top:0;width:800px;height:600px;overflow:hidden';
+  document.body.appendChild(host);
+  // URI 미지정 — 자동 inmemory URI 라 파일 모델 캐시·HMR 재실행과 충돌하지 않는다
+  const model = monaco.editor.createModel('prewarm\n', 'plaintext');
+  const ed = monaco.editor.create(host, { ...EDITOR_OPTIONS, model });
+  requestAnimationFrame(() => {
+    ed.dispose();
+    model.dispose();
+    host.remove();
+    saveFontCache(); // 프리웜 실측 직후가 첫 저장 기회다 (복원 부팅에서는 untrusted 뿐이라 no-op)
+  });
+});
 
 /** path → 편집용 공유 모델. 그룹/diff 가 같은 파일이면 같은 모델을 쓴다. */
 const models = new Map<string, monaco.editor.ITextModel>();
