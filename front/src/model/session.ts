@@ -29,7 +29,9 @@ export interface SessionCtx {
   init(): Promise<void>;
 }
 
-export function createSessionCtx(backend: ThinBackend): SessionCtx {
+/** browseOnly: 원격 빈 세션 — 연결은 열되 트리·SCM 로드는 하지 않는다 (시작 페이지만,
+ *  폴더 열기 퀵인풋의 browseDir 만 쓴다). 워크스페이스 정보는 접속 확인용으로 받는다 */
+export function createSessionCtx(backend: ThinBackend, browseOnly = false): SessionCtx {
   // WHY: 훅(applyExternalEdit 등)은 활성 세션에서만 발화해야 한다 — 배경 세션의 재로드가
   //      같은 경로를 가진 활성 세션의 monaco 모델을 덮으면 안 된다. 컨텍스트 완성 후
   //      비교되도록 지연 평가 클로저로 넘긴다.
@@ -46,11 +48,13 @@ export function createSessionCtx(backend: ThinBackend): SessionCtx {
   const sessionCtx: SessionCtx = {
     backend, files, editors, scm, search, workbench, terminals, fileops, watch,
     init: () =>
-      (initP ??= Promise.all([
-        workbench.initWorkbench(),
-        files.initFiles(),
-        scm.refreshScm(),
-      ]).then(() => watch.initWatch())),
+      (initP ??= (watch.initConnection(), browseOnly
+        ? workbench.initWorkbench()
+        : Promise.all([
+            workbench.initWorkbench(),
+            files.initFiles(),
+            scm.refreshScm(),
+          ]).then(() => watch.initWatch()))),
   };
   return sessionCtx;
 }

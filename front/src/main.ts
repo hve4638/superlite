@@ -8,7 +8,7 @@ import './model/host';
 import Workbench from './ui/Workbench.vue';
 import { installKeybindings, setupCommands } from './model/commands';
 import { initOsDrop } from './model/osdrop';
-import { bootReady, hasAnyDirty, initSessions } from './model/sessions';
+import { hasAnyDirty, initSessions } from './model/sessions';
 
 setupCommands();
 installKeybindings(window);
@@ -21,7 +21,7 @@ window.addEventListener('beforeunload', (e) => {
   if (hasAnyDirty()) e.preventDefault();
 });
 
-// 부팅 세션들의 초기 데이터 로드 후 마운트 — 부팅 시 빈 셸이 깜빡이는 것을 피한다
-await bootReady();
-
+// WHY: 초기 로드(트리·git status)를 기다리지 않고 바로 마운트한다 — 큰 워크스페이스는
+//      첫 readDir/listFiles 가 수 초라, 기다리면 그동안 배경색만 보인다. 로드 중임은
+//      탐색기의 진행 막대(files.loading)가 알린다 (VS Code 도 셸 먼저, 뷰별 progress)
 createApp(Workbench).mount('#app');

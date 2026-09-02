@@ -144,21 +144,31 @@ export function createWatch(
   }
 
   /** 백엔드 연결 상태 — 상태바 표시용 (mock 은 항상 true) */
-  const connection = reactive({ ok: true });
+  const connection = reactive({
+    ok: true,
+    /** 영구 실패 사유 (원격 ssh 접속 실패) — 재연결하지 않으며 탐색기가 진행 막대 대신 보인다 */
+    error: null as string | null,
+  });
 
-  function initWatch(): void {
-    backend.onConnection?.((ok) => {
+  /** 연결 상태 구독 — 초기 로드보다 먼저 (원격 ssh 실패는 첫 readDir 응답 자리에 오므로,
+   *  init 완료 뒤에 구독하면 영원히 못 받는다) */
+  function initConnection(): void {
+    backend.onConnection?.((ok, error) => {
       connection.ok = ok;
+      connection.error = error ?? null;
       // 끊김 중의 fsChanges 는 이미 놓쳤다 — overflow 와 같은 전체 리프레시로 재동기화
       if (ok) fullRefresh();
     });
+  }
+
+  function initWatch(): void {
     if (!backend.onFsChanges) return; // mock — 외부 변경이 없다
     backend.onFsChanges(onBatch);
     window.addEventListener('focus', fullRefresh);
     // 파일 목록·git 은 폴링하지 않는다 — 이벤트 + 포커스 안전망이 전부다
   }
 
-  return { connection, initWatch };
+  return { connection, initConnection, initWatch };
 }
 
 // ---- 활성 세션 전달 shim

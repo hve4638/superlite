@@ -77,7 +77,7 @@ export class WsBackend implements ThinBackend {
   private termInputQueue = new Map<number, string[]>();
   private inputBlockedHandler: ((term: number, blocked: boolean) => void) | null = null;
   private fsHandler: ((changes: FsChange[], overflow: boolean) => void) | null = null;
-  private connHandler: ((connected: boolean) => void) | null = null;
+  private connHandler: ((connected: boolean, error?: string) => void) | null = null;
   private sessionLostHandler: ((deadTerms: number[]) => void) | null = null;
   /** 이번 연결이 재연결인가 — attach 응답(id 0)의 resumed 해석에 쓴다 */
   private isReconnect = false;
@@ -231,12 +231,15 @@ export class WsBackend implements ThinBackend {
       // relay 의 close 4403 = 미등록 세션. 레지스트리에서 빠진 세션은 재연결해도 다시
       // 거부되므로 재시도를 영구히 멈춘다 (종전에는 1초 간격 무한 재연결에 빠졌다).
       // 연결 표시는 끊김으로 남긴다 — 앱이라면 곧 reconcile 이 이 백엔드째로 dispose 한다
-      if (ev.code === 4403) {
+      // 4502 = relay 의 원격(ssh) 접속 실패, 사유 동봉 — 재연결마다 ssh 를 다시 띄우므로
+      // 자동 재시도하지 않고 사유를 UI 에 넘긴다 (재접속은 사용자 몫)
+      if (ev.code === 4403 || ev.code === 4502) {
         this.disposed = true;
-        for (const p of this.pending.values()) p.reject(new Error('세션이 등록되어 있지 않다'));
+        const reason = ev.code === 4403 ? '세션이 등록되어 있지 않다' : ev.reason || '원격 접속 실패';
+        for (const p of this.pending.values()) p.reject(new Error(reason));
         this.pending.clear();
         this.queue.length = 0;
-        this.connHandler?.(false);
+        this.connHandler?.(false, ev.code === 4502 ? reason : undefined);
         return;
       }
       // WHY: 재시도 실패도 close 를 쏜다(브라우저 1006) — 열렸던 연결의 close 일 때만
@@ -381,7 +384,7 @@ export class WsBackend implements ThinBackend {
     this.fsHandler = cb;
   }
 
-  onConnection(cb: (connected: boolean) => void): void {
+  onConnection(cb: (connected: boolean, error?: string) => void): void {
     this.connHandler = cb;
   }
 

@@ -1,5 +1,8 @@
 #!/bin/sh
-# Windows 배포 세트 빌드 — front dist → cross-compile → <ws>/build/ 에 3파일.
+# Windows 배포 세트 빌드 — front dist → cross-compile → <ws>/build/ 에 4파일.
+# superlight-daemon-linux-x86_64 는 musl 정적 linux 데몬 — Windows 앱이 linux 원격(ssh)에
+# 올려 실행한다 (backend/relay ssh.rs remote_daemon_bin 의 형제 파일 규칙).
+# 사전 준비: rustup target add x86_64-pc-windows-gnu x86_64-unknown-linux-musl
 # main 은 워크스페이스 루트의 build/ 에, 다른 브랜치는 build/<워크트리 폴더명>/ 에
 # 넣는다 — 병행 워커끼리 서로 덮어쓰는 사고 방지.
 # 순서 주의: front 를 고쳤으면 이 스크립트로 dist 부터 다시 — dist 재빌드 없이
@@ -34,8 +37,10 @@ fi
 
 (cd front && npm run build)
 cargo build --release --target x86_64-pc-windows-gnu -p superlight-app -p superlight-daemon
+cargo build --release --target x86_64-unknown-linux-musl -p superlight-daemon
 
 rel=target/x86_64-pc-windows-gnu/release
 mkdir -p "$out"
 cp "$rel/superlight-app.exe" "$rel/superlight-daemon.exe" "$rel/WebView2Loader.dll" "$out/"
-echo "→ $out/ (superlight-app.exe, superlight-daemon.exe, WebView2Loader.dll)"
+cp target/x86_64-unknown-linux-musl/release/superlight-daemon "$out/superlight-daemon-linux-x86_64"
+echo "→ $out/ (superlight-app.exe, superlight-daemon.exe, WebView2Loader.dll, superlight-daemon-linux-x86_64)"

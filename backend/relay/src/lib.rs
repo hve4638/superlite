@@ -16,16 +16,32 @@ use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum::Router;
+use axum::{Json, Router};
 use serde_json::json;
-use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tower_http::services::ServeDir;
+
+mod ssh;
 
 #[cfg(unix)]
 type DaemonStream = tokio::net::UnixStream;
 #[cfg(windows)]
 type DaemonStream = tokio::net::windows::named_pipe::NamedPipeClient;
+
+/// 접속 대상 — 세션 root 문자열이 `ssh://` 스킴이면 원격이다. 레지스트리·지속 저장은
+/// PathBuf 를 불투명하게 나르고, 해석은 접속 직전 이 한 곳에서만 한다.
+enum Target {
+    Local(PathBuf),
+    Remote { host: String, path: String },
+}
+
+fn to_target(root: PathBuf) -> Target {
+    match ssh::parse_remote(&root.to_string_lossy()) {
+        Some((host, path)) => Target::Remote { host, path },
+        None => Target::Local(root),
+    }
+}
 
 /// 세션 id → root 해석기. root 결정권은 native(레지스트리 등록자)에 남는다 —
 /// front 는 session id 만 말하고 임의 경로를 지목할 통로가 없다 (decision/workspace-session-tabs.md).
@@ -66,7 +82,10 @@ pub async fn serve(listener: TcpListener, roots: SessionRoots, token: Option<Str
     // 상주 제어 연결 — 데몬 기동 보장 + 백엔드 생존 신호. 이게 있는 한 데몬은 안 죽는다.
     tokio::spawn(control_loop());
 
-    let mut app = Router::new().route("/ws", get(ws_handler));
+    let mut app = Router::new()
+        .route("/ws", get(ws_handler))
+        .route("/ssh/hosts", get(hosts_handler))
+        .route("/ssh/state", axum::routing::post(state_handler));
     if let Some(dist) = &dist {
         app = app.fallback_service(ServeDir::new(dist));
     }
@@ -98,14 +117,19 @@ async fn daemon_conn(spawn: bool) -> Result<DaemonStream, String> {
     Err(format!("데몬 기동 실패 (5초): {}", sock.display()))
 }
 
-fn spawn_daemon() -> Result<(), String> {
-    let bin = match std::env::var("SUPERLIGHT_DAEMON_BIN") {
-        Ok(p) => PathBuf::from(p),
+/// 데몬 바이너리 위치 — 로컬 spawn 과 원격 업로드(ssh 모듈)가 같은 규칙을 쓴다
+pub(crate) fn daemon_bin_path() -> Result<PathBuf, String> {
+    match std::env::var("SUPERLIGHT_DAEMON_BIN") {
+        Ok(p) => Ok(PathBuf::from(p)),
         // 형제 바이너리 — cargo build --workspace 가 둘 다 만든다
-        Err(_) => std::env::current_exe()
+        Err(_) => Ok(std::env::current_exe()
             .map_err(|e| format!("current_exe: {e}"))?
-            .with_file_name("superlight-daemon"),
-    };
+            .with_file_name("superlight-daemon")),
+    }
+}
+
+fn spawn_daemon() -> Result<(), String> {
+    let bin = daemon_bin_path()?;
     let mut cmd = std::process::Command::new(&bin);
     // 프로세스 그룹 분리 — 백엔드 터미널의 Ctrl+C 가 데몬까지 죽이지 않게.
     // 로그는 상속 — 개발 중 백엔드 터미널에서 같이 보인다.
@@ -171,20 +195,15 @@ fn token_eq(a: &str, b: &str) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-async fn ws_handler(
-    State(app): State<App>,
-    Query(query): Query<std::collections::HashMap<String, String>>,
-    headers: HeaderMap,
-    ws: WebSocketUpgrade,
-) -> Response {
+/// /ws 와 /ssh/* 가 공유하는 접속 인증 — 통과 = 워크스페이스(터미널 포함) 접근 권한
+fn authed(app: &App, query: &std::collections::HashMap<String, String>, headers: &HeaderMap) -> bool {
     if let Some(token) = &app.token {
         // 토큰 일치가 곧 인증 — 이때 Origin 검증은 생략한다. 임의 웹페이지는 랜덤 토큰을
         // 알 수 없어 CSRF 가 성립하지 않고, Tauri webview(tauri://·http://tauri.localhost)
         // 처럼 Origin 이 Host 와 다를 수밖에 없는 정당한 클라이언트가 이 경로로 들어온다.
-        if !query.get("tkn").is_some_and(|t| token_eq(t, token)) {
-            return StatusCode::FORBIDDEN.into_response();
-        }
-    } else if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) {
+        return query.get("tkn").is_some_and(|t| token_eq(t, token));
+    }
+    if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) {
         // WHY: WS 는 CORS 밖 — Origin 검증이 없으면 사용자가 방문한 임의의 웹페이지가
         //      localhost 백엔드에 붙어 셸을 얻는다. 브라우저 요청은 Origin 호스트가 Host 와
         //      같아야 하고(같은 오리진·vite 프록시 모두 충족), 비브라우저(체크 스크립트)는
@@ -192,9 +211,69 @@ async fn ws_handler(
         let host = headers.get("host").and_then(|v| v.to_str().ok()).unwrap_or("");
         let origin_host =
             origin.strip_prefix("http://").or_else(|| origin.strip_prefix("https://"));
-        if origin_host != Some(host) {
-            return StatusCode::FORBIDDEN.into_response();
-        }
+        return origin_host == Some(host);
+    }
+    true
+}
+
+/// /ssh/* 는 Tauri webview(http://tauri.localhost 오리진)가 fetch 로 부른다 — WebSocket 인
+/// /ws 와 달리 CORS 대상이라 허용 헤더가 없으면 브라우저가 응답을 버린다 ("Failed to fetch").
+/// 접근 통제는 authed(토큰 일치 / Origin=Host)가 이미 하므로 '*' 가 권한을 넓히지 않는다 —
+/// 토큰 없는 교차 오리진 요청은 어차피 403 이다. GET + 표준 헤더뿐이라 preflight 도 없다
+fn cors(mut resp: Response) -> Response {
+    resp.headers_mut()
+        .insert("access-control-allow-origin", axum::http::HeaderValue::from_static("*"));
+    resp
+}
+
+async fn hosts_handler(
+    state: State<App>,
+    query: Query<std::collections::HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Response {
+    cors(hosts_inner(state, query, headers).await)
+}
+
+/// 원격 탐색기의 호스트 목록 — 백엔드가 실행된 머신의 ~/.ssh/config (읽기 전용) 에
+/// superlight 자체 상태(고정·숨김·drift)를 합친 것. /ws 를 거치지 않는 백엔드 자체 응답 —
+/// 주소·연결은 백엔드 소유라는 결정 (decision/remote-ssh.md 2026-08-31)의 첫 표면이다.
+async fn hosts_inner(
+    State(app): State<App>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Response {
+    if !authed(&app, &query, &headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    Json(ssh::host_list()).into_response()
+}
+
+/// POST /ssh/state?op=&host= — 고정·숨김 상태 변경 (hide·unhide·pin·unpin·ack·refresh).
+/// 본문 없이 쿼리만 쓴다 — JSON 본문은 CORS preflight(OPTIONS) 를 유발해 라우트가 하나 더
+/// 필요해진다. 응답은 갱신된 목록 (GET 과 같은 형태) — 프론트가 재조회 없이 갈아끼운다
+async fn state_handler(
+    State(app): State<App>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Response {
+    if !authed(&app, &query, &headers) {
+        return cors(StatusCode::FORBIDDEN.into_response());
+    }
+    let op = query.get("op").map(String::as_str).unwrap_or("");
+    cors(match ssh::update_state(op, &query) {
+        Ok(list) => Json(list).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
+    })
+}
+
+async fn ws_handler(
+    State(app): State<App>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+) -> Response {
+    if !authed(&app, &query, &headers) {
+        return StatusCode::FORBIDDEN.into_response();
     }
     // 세션 id — 데몬이 재접속 시 같은 세션(터미널)을 이어 붙이는 키.
     // 없으면(체크 스크립트) 익명 세션 — 연결과 함께 죽는 종전 동작.
@@ -202,15 +281,18 @@ async fn ws_handler(
     let session = query.get("session").cloned().filter(|s| !s.is_empty());
     // 웹 '폴더 열기' — Fixed(bin) 는 ?folder= 절대 경로로 root 를 넘겨받는다 (VS Code web
     // 의 ?folder= 상당). /ws 인증 통과자는 이미 터미널로 셸을 얻으므로 임의 root 가 권한을
-    // 넓히지 않는다. Registry(Tauri) 는 무시 — root 결정권은 native 에 남는다.
-    let root = match (&app.roots, query.get("folder").filter(|f| !f.is_empty())) {
-        (SessionRoots::Fixed(_), Some(folder)) => {
+    // 넓히지 않는다 — ssh:// 원격도 마찬가지다 (로컬 셸 보유자는 ssh 를 직접 부를 수 있다).
+    // Registry(Tauri) 는 무시 — root 결정권은 native 에 남는다.
+    let target = match (&app.roots, query.get("folder").filter(|f| !f.is_empty())) {
+        (SessionRoots::Fixed(_), Some(folder)) => match ssh::parse_remote(folder) {
+            // 원격 경로 검증은 원격 데몬의 attach canonicalize 가 한다 — 여기선 형식만
+            Some((host, path)) => Target::Remote { host, path },
             // plain: Windows verbatim 루트는 '/' 와이어 경로·자식 cwd 를 깨뜨린다 (common 참조)
-            match std::path::Path::new(folder).canonicalize() {
-                Ok(p) if p.is_dir() => superlight_common::plain(p),
+            None => match std::path::Path::new(folder).canonicalize() {
+                Ok(p) if p.is_dir() => Target::Local(superlight_common::plain(p)),
                 _ => return StatusCode::FORBIDDEN.into_response(),
-            }
-        }
+            },
+        },
         // Registry 모드는 미등록·부재·루트 없는 세션을 거부한다 — root 는 등록 시점에
         // native 가 정한 것만.
         // WHY: 거부를 HTTP 403 이 아니라 upgrade 후 close 4403 으로 — 브라우저 WS 는
@@ -218,7 +300,7 @@ async fn ws_handler(
         //      가치 있음)과 구분되지 않고 front 가 1초 간격 무한 재연결에 빠진다.
         //      close code 만이 "재시도 무의미"를 전할 수 있는 통로다.
         _ => match app.roots.resolve(session.as_deref()) {
-            Some(root) => root,
+            Some(root) => to_target(root),
             None => {
                 return ws.on_upgrade(|mut sock| async move {
                     let close = Message::Close(Some(axum::extract::ws::CloseFrame {
@@ -230,7 +312,7 @@ async fn ws_handler(
             }
         },
     };
-    ws.on_upgrade(move |sock| relay(sock, root, session))
+    ws.on_upgrade(move |sock| relay(sock, target, session))
 }
 
 /// payload 프레임의 상한 — READ_MAX_BYTES(50MB)보다 넉넉한 방어선. 초과는 프레임
@@ -244,11 +326,14 @@ enum DaemonFrame {
     Bin(Vec<u8>),
 }
 
+/// 데몬 쪽 스트림의 읽기/쓰기 반쪽 — 로컬은 IPC 소켓 split, 원격은 ssh child 의
+/// stdout/stdin. 프레이밍은 양쪽 동일하다 (원격 헬퍼 --pipe 는 생 바이트 중계)
+type DaemonRead = Box<dyn AsyncRead + Send + Unpin>;
+type DaemonWrite = Box<dyn AsyncWrite + Send + Unpin>;
+
 /// 순차 읽기 전용 — select 안에서 쓰면 취소 시 부분 읽기가 유실돼 프레임 동기가 깨진다.
 /// (전용 태스크에서만 호출할 것)
-async fn read_frame(
-    r: &mut BufReader<tokio::io::ReadHalf<DaemonStream>>,
-) -> std::io::Result<Option<DaemonFrame>> {
+async fn read_frame(r: &mut BufReader<DaemonRead>) -> std::io::Result<Option<DaemonFrame>> {
     use tokio::io::AsyncReadExt;
     let mut first = [0u8; 1];
     if r.read_exact(&mut first).await.is_err() {
@@ -274,21 +359,74 @@ async fn read_frame(
     }
 }
 
-/// 프론트 WS ↔ 데몬 소켓 1:1 중계. 어느 쪽이 끊겨도 둘 다 정리 —
-/// 데몬 쪽 연결 drop 이 그 연결의 터미널을 정리한다.
+/// 프론트 WS ↔ 데몬 1:1 중계 (로컬은 IPC 소켓, 원격은 ssh exec 채널의 stdio — 어느 쪽이든
+/// 내용은 불투명). 어느 쪽이 끊겨도 둘 다 정리 — 데몬 쪽 연결 drop 이 그 연결의 터미널을
+/// 정리한다 (원격은 detach 전환 — 원격 데몬의 세션 grace 가 재접속을 기다린다).
 /// 방향별 전용 태스크 — 바이너리 프레임 읽기(read_frame)는 다중 await 라 select 취소에
 /// 안전하지 않아, 종전의 단일 select 루프 구조를 쓸 수 없다.
-async fn relay(ws: WebSocket, root: PathBuf, session: Option<String>) {
+async fn relay(ws: WebSocket, target: Target, session: Option<String>) {
     use futures_util::{SinkExt, StreamExt};
-    let Ok(stream) = daemon_conn(false).await else {
-        return; // ws 는 drop 으로 닫힌다 — 프론트 onclose 가 진행 중 요청을 실패 처리
+    // _child: 원격 ssh subprocess 의 수명 앵커 — relay 종료(drop)가 곧 ssh kill 이다
+    let mut remote: Option<(String, bool)> = None;
+    let (read_half, mut write_half, root_str, _child): (
+        DaemonRead,
+        DaemonWrite,
+        String,
+        Option<tokio::process::Child>,
+    ) = match target {
+        Target::Local(root) => {
+            let Ok(stream) = daemon_conn(false).await else {
+                return; // ws 는 drop 으로 닫힌다 — 프론트 onclose 가 진행 중 요청을 실패 처리
+            };
+            let (r, w) = tokio::io::split(stream);
+            (Box::new(r), Box::new(w), root.to_string_lossy().into_owned(), None)
+        }
+        Target::Remote { host, path } => {
+            // 원격 정보(홈·OS·arch) 조회 → 홈(~) 해석 → 헬퍼 배치·파이프 spawn. 실패는 close 4502(사유)로 프론트에
+            // — 재시도는 사용자 몫(탭 다시 접속), 상세는 로그로
+            // 경로 없는 ssh://host 는 원격 빈 세션 — 홈에 attach 하되 탐색 전용(watch:false)
+            let browse_only = path.is_empty();
+            let conn = async {
+                let info = ssh::probe_remote(&host).await?;
+                let path = ssh::expand_home(&info.home, if browse_only { "/~" } else { &path });
+                Ok::<_, String>((ssh::pipe_conn(&host, &info).await?, path))
+            };
+            let (mut child, path) = match conn.await {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("backend: ssh {host} 연결 실패: {e}");
+                    // close 4502 + 사유 — 그냥 닫으면 프론트가 1초 재연결 루프에서 ssh 를
+                    // 무한 재시도하고 탐색기는 진행 막대만 돈다. 사유는 WS close 한도(123B)
+                    // 안에서 문자 경계로 자른다
+                    let mut reason = e.clone();
+                    while reason.len() > 120 {
+                        reason.pop();
+                    }
+                    let close = Message::Close(Some(axum::extract::ws::CloseFrame {
+                        code: 4502,
+                        reason: reason.into(),
+                    }));
+                    let mut ws = ws;
+                    let _ = ws.send(close).await;
+                    return;
+                }
+            };
+            let (r, w) = (child.stdout.take().unwrap(), child.stdin.take().unwrap());
+            remote = Some((host, browse_only));
+            (Box::new(r), Box::new(w), path, Some(child))
+        }
     };
-    let (read_half, mut write_half) = tokio::io::split(stream);
     // 첫 줄은 attach. 응답(id 0)이 프론트로 중계돼도 무시된다 — 프론트 id 는 1부터.
-    let mut attach = json!({"id": 0, "method": "attach", "params": {"root": root.to_string_lossy()}});
+    let mut attach = json!({"id": 0, "method": "attach", "params": {"root": root_str}});
     if let Some(s) = session {
         attach["params"]["session"] = json!(s);
     }
+    if matches!(remote, Some((_, true))) {
+        attach["params"]["watch"] = json!(false);
+    }
+    // 최근 폴더 기록 대상 — 원격 폴더 세션(빈 세션 제외)의 attach 성공 응답에서 데몬이
+    // 돌려준 정규화 경로(rootPath)를 적는다
+    let mut record_host = remote.and_then(|(h, b)| (!b).then_some(h));
     if write_line(&mut write_half, &attach.to_string()).await.is_err() {
         return;
     }
@@ -300,6 +438,13 @@ async fn relay(ws: WebSocket, root: PathBuf, session: Option<String>) {
         loop {
             match read_frame(&mut reader).await {
                 Ok(Some(DaemonFrame::Line(l))) => {
+                    if let Some(host) = record_host.take() {
+                        // 첫 줄 = attach 응답 (데몬은 attach 전 다른 응답을 내지 않는다)
+                        let v: serde_json::Value = serde_json::from_str(&l).unwrap_or_default();
+                        if let Some(p) = v["result"]["rootPath"].as_str() {
+                            ssh::record_recent(&host, p);
+                        }
+                    }
                     if ws_tx.send(Message::Text(l.into())).await.is_err() {
                         break;
                     }

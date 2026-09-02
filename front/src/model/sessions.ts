@@ -19,6 +19,8 @@ import type { TerminalInstance } from './terminal';
  * root === null 인 탭은 루트 없는 빈 세션이다 (시작 페이지) — 백엔드 연결 없이
  * (EmptyBackend) 시작 페이지만 그려지고, 폴더를 열면 그 자리가 워크스페이스 세션으로
  * 교체된다. root === '' 는 다르다 — 웹 부팅 세션의 "서버 기본 root" (연결 있음).
+ * root === 'ssh://host'(경로 없음)는 원격 빈 세션 — 시작 페이지이되 연결은 있다
+ * (탐색 전용 attach): 폴더 열기 퀵인풋이 그 호스트를 탐색한다 (isRemoteEmpty).
  */
 
 export type SessionTab = { id: string; name: string; root: string | null };
@@ -61,15 +63,37 @@ export function setBeforeSessionSwitch(fn: () => void): void {
   beforeSwitch = fn;
 }
 
+/** ssh://host/path 또는 ssh://host root 의 host — 원격이 아니면 null */
+export function remoteHost(root: string): string | null {
+  const m = /^ssh:\/\/([^/]+)(?:\/|$)/.exec(root);
+  return m ? m[1] : null;
+}
+
+/** 경로 없는 원격 root(`ssh://host`) — 원격 빈 세션. 시작 페이지를 보이고 폴더 열기가 그
+ *  호스트를 탐색한다 (relay 는 홈에 탐색 전용 attach). 폴더를 열면 제자리 교체된다 */
+export function isRemoteEmpty(root: string | null): boolean {
+  return root !== null && /^ssh:\/\/[^/]+\/?$/.test(root);
+}
+
+/** 탭 라벨 — 원격은 호스트가 정체성의 절반이라 함께 표시한다 ("proj [omc]") */
+function tabLabel(root: string, name: string): string {
+  const host = remoteHost(root);
+  return host === null ? name : `${name} [${host}]`;
+}
+
 function addLocal(tab: SessionTab, backend?: ThinBackend): SessionCtx {
-  const ctx = createSessionCtx(backend ?? env.backendFor(tab));
+  const ctx = createSessionCtx(backend ?? env.backendFor(tab), isRemoteEmpty(tab.root));
   ctxs.set(tab.id, ctx);
   sessions.list.push({ ...tab });
-  // 이름 채움 — 워크스페이스 정보가 오면 탭 라벨을 실제 이름으로 (부팅 주입 목록은 이미 이름이 있다)
+  // 이름 채움 — 워크스페이스 정보가 오면 탭 라벨을 실제 이름으로 (부팅 주입 목록은 이미 이름이 있다).
+  // 원격 빈 세션은 홈 이름이 오지만 라벨은 Welcome [host] 고정 (TitleBar)
   void ctx.init().then(() => {
     const t = sessions.list.find((x) => x.id === tab.id);
-    if (t && ctx.workbench.workbench.workspaceName) t.name = ctx.workbench.workbench.workspaceName;
+    if (t && ctx.workbench.workbench.workspaceName && !isRemoteEmpty(t.root))
+      t.name = tabLabel(t.root ?? '', ctx.workbench.workbench.workspaceName);
     if (t && !t.root && ctx.workbench.workbench.rootPath) t.root = ctx.workbench.workbench.rootPath;
+  }, () => {
+    // 초기 로드 실패(원격 ssh 접속 실패 등) — 사유는 connection.error 로 탐색기에 보인다
   });
   return ctx;
 }
@@ -95,11 +119,6 @@ export function bootSession(tab: SessionTab, backend: ThinBackend): void {
   addLocal(tab, backend);
   sessions.activeId = tab.id;
   activeCtx.value = ctxs.get(tab.id)!;
-}
-
-/** 부팅 세션들의 초기 로드 완료 대기 — main.ts 가 마운트 전에 기다린다 (빈 셸 깜빡임 방지) */
-export function bootReady(): Promise<void> {
-  return Promise.all([...ctxs.values()].map((c) => c.init())).then(() => {});
 }
 
 /** 세션 탭 순환 (Ctrl+Alt+Tab) — 활성 탭의 이웃으로 wrap 이동 */
@@ -155,7 +174,8 @@ export function addEmptySession(): void {
 /** 활성 탭이 빈 세션인가 — 시작 페이지 표시·탐색기 빈 상태·터미널 생성 차단·
  *  폴더 열기의 빈 탭 교체 판단이 공유한다 (반응형 — sessions 읽기) */
 export function activeSessionEmpty(): boolean {
-  return sessions.list.find((t) => t.id === sessions.activeId)?.root === null;
+  const root = sessions.list.find((t) => t.id === sessions.activeId)?.root;
+  return root === null || isRemoteEmpty(root ?? '');
 }
 
 /** 폴더 탐색(browseDir) 가능한 백엔드 — 활성 세션 우선, 활성이 빈 세션(무연결)이면
@@ -211,29 +231,44 @@ function normRoot(root: string): string {
 
 /** 웹 '폴더 열기' 확정 — 새 세션 탭으로 연다 (host.openFolder 가 부른다).
  *  같은 워크스페이스가 이미 열려 있으면 새 탭 대신 그 탭으로 포커스만 옮긴다.
- *  워크스페이스 정체성은 지금은 경로가 전부지만, ssh 등 원격 세션이 붙으면
- *  (origin, path) 쌍으로 확장한다 — 같은 경로라도 origin 이 다르면 별개 세션이다. */
-export function openWebFolder(root: string): void {
+ *  워크스페이스 정체성은 root 문자열이 전부다 — ssh://host/path 원격은 스킴·호스트가
+ *  문자열에 포함돼 같은 경로라도 origin 이 다르면 별개 세션이 된다.
+ *  replace: 확정 직전의 활성 탭을 새 탭으로 대체한다 (VS Code 원격의 "현재 창에 연결") —
+ *  대상이 이미 열린 탭이라 포커스만 옮긴 경우에도 이전 탭은 닫는다. */
+export function openWebFolder(root: string, replace = false): void {
   const norm = normRoot(root);
+  const prevId = sessions.activeId;
   const existing = sessions.list.find((t) => t.root !== null && normRoot(t.root) === norm);
   if (existing) {
-    // 이미 열린 워크스페이스 — 포커스만 이동, 활성 빈 탭이 있어도 그대로 남긴다 (앱과 동일)
+    // 이미 열린 워크스페이스 — 포커스만 이동, 활성 빈 탭이 있어도 그대로 남긴다 (앱과 동일).
+    // 명시적 replace 만 이전 탭을 닫는다
     activateSession(existing.id);
+    if (replace && existing.id !== prevId) removeLocal(prevId);
     return;
   }
-  // 활성 탭이 빈 세션이면 새 탭이 그 자리를 교체한다 (시작 페이지에서 열기 흐름 —
-  // 앱의 native replace 와 동일 의미)
-  const emptyId = activeSessionEmpty() ? sessions.activeId : null;
+  // 대체 대상: 활성 탭이 빈 세션이면(시작 페이지에서 열기 — 앱의 native replace 와 동일
+  // 의미) 또는 명시적 replace. 새 탭이 그 탭의 자리를 차지한다
+  const replaceId = replace || activeSessionEmpty() ? prevId : null;
   const id = genSessionId();
-  const name = root.split('/').filter((s) => s !== '').pop() ?? root;
-  addLocal({ id, name, root });
-  if (emptyId !== null) {
+  const base = root.split('/').filter((s) => s !== '').pop() ?? root;
+  addLocal({ id, name: tabLabel(root, base), root });
+  if (replaceId !== null) {
     const from = sessions.list.findIndex((t) => t.id === id);
     const [tab] = sessions.list.splice(from, 1);
-    sessions.list.splice(sessions.list.findIndex((t) => t.id === emptyId), 0, tab);
+    sessions.list.splice(sessions.list.findIndex((t) => t.id === replaceId), 0, tab);
   }
   activateSession(id);
-  if (emptyId !== null) removeLocal(emptyId);
+  if (replaceId !== null) removeLocal(replaceId);
+}
+
+/** 앱 '현재 탭 대체' 열기의 뒷정리 — open_folder_path invoke 뒤 이전 활성 탭을 닫는다
+ *  (native replace 는 빈 세션만 제자리 교체하므로, 비어 있지 않은 탭은 여기서 닫는다).
+ *  같은 워크스페이스 재열기(native 가 포커스 이동만 지시)면 이전 탭이 곧 대상이라
+ *  닫지 않는다 — root 문자열 대조로 판정한다 (원격 ssh:// 는 정확히 같은 문자열) */
+export function replaceAppSession(prevId: string, newRoot: string): void {
+  const prev = sessions.list.find((t) => t.id === prevId);
+  if (!prev || (prev.root !== null && normRoot(prev.root) === normRoot(newRoot))) return;
+  closeSession(prevId);
 }
 
 /** native 레지스트리 목록으로 로컬 상태를 맞춘다 — 추가는 컨텍스트 생성, 제거는 폐기.

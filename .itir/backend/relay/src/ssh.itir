@@ -1,0 +1,47 @@
+role: SSH 원격 접속 통로 — 시스템 OpenSSH subprocess 로 원격 데몬에 닿는다 (ws docs/decision/remote-ssh.md). SSH 프로토콜을 직접 구현하지 않는다: 인증·~/.ssh/config·ProxyJump 는 ssh 바이너리에 위임하고, exec 채널(원격 명령의 stdin/stdout) 위에서 데몬 와이어를 그대로 말한다 — 포트 포워딩 불요. 원격 요구: sshd + 비대화형 인증(BatchMode — 키·agent 전제, 대화형 2FA 는 v0 밖) + 바이너리 업로드·실행 가능한 unix 원격. 헬퍼는 별도 바이너리가 아니라 데몬 자신의 --pipe 모드 — "헬퍼가 곧 원격의 데몬" 대칭. 데몬 바이너리는 원격 OS·arch 에 맞춰 고른다 (remote_daemon_bin)
+
+fn parse_remote(s) -> remote? {
+  role: ssh://<host>/<절대경로> 파싱 → (host, path) — 원격 root 표기 (프론트·레지스트리 공용). 경로 없는 ssh://<host> 는 원격 빈 세션 (path "" — relay 가 홈에 탐색 전용 attach). '-' 선두 host 거부 (ssh 옵션 주입 봉쇄)
+}
+fn config_blocks() -> block[] {
+  role: ~/.ssh/config 를 Host 블록(별칭, 정규화된 "Key Value" 옵션 줄들) 단위로 읽는다 (읽기 전용) — 와일드카드·부정 패턴 제외, Include 는 v0 미지원. 옵션 줄은 고정 스냅샷·drift 비교·`ssh -o` 재투입에 그대로 쓴다
+}
+class HostEntry {
+  role: 원격 탐색기 한 항목 (프론트 응답) — name·favorite·pinned·drift·missing(config 에 없고 고정도 안 된 즐겨찾기)
+}
+class Panes {
+  role: FAVORITE·ALL pane 접힘 상태 — 전역 지속 (새 창에도 반영)
+}
+class HostList {
+  role: 원격 탐색기 전체 응답 — favorites(즐겨찾기 순)·all(config 순, 즐겨찾기 표시)·panes·recent(host → 최근 폴더)
+}
+fn host_list() -> list {
+  role: 원격 탐색기 목록 — favorites 는 즐겨찾기 순서(고정 항목은 config 에서 사라져도 남고 drift = 저장본≠현재 블록·ack 한 상태 제외, 고정 안 한 항목은 missing), all 은 config 전체. 즐겨찾기가 비면 panes 를 저장값과 무관하게 favorite 닫힘·all 열림으로 (사용자 결정)
+}
+fn update_state(op, query) -> list {
+  role: superlight 자체 상태 파일(설정 디렉터리의 code-superlight/remote.json) 변경 — fav·unfav(고정도 버림)·pin(즐겨찾기에서만, 현재 블록 스냅샷)·unpin·ack(현재 config 상태를 인정해 경고만 끔)·refresh(저장본을 현재 블록으로 교체)·forget(최근 폴더 한 줄 제거)·pane(접힘 상태). 구 형식(pinned 목록)은 읽을 때 즐겨찾기로 이전. ~/.ssh/config 는 건드리지 않는다
+}
+fn record_recent(host, path) {
+  role: 최근 폴더 기록 — relay 가 원격 폴더 세션 attach 성공 시 데몬이 돌려준 정규화 경로로 부른다. 최신순·중복 제거·10개 상한 (VS Code Remote Explorer 의 호스트 하위 최근 폴더)
+}
+fn ssh_cmd(host) {
+  role: 공통 ssh 골격 — BatchMode(프롬프트 대신 실패) + unix 는 ControlMaster/ControlPersist 연결 공유 (수명 자체 구현 대신 OpenSSH 위임 — decision/process-topology.md 개정. 마스터 소켓은 데몬 IPC 와 같은 0700 디렉터리). Windows OpenSSH 는 ControlMaster 미지원이라 뺀다 — 접속마다 인증할 뿐 동작 동일. Windows 는 CREATE_NO_WINDOW 로 spawn — GUI 앱이 콘솔 자식을 띄울 때 생기는 빈 콘솔 창 깜빡임 방지. 고정된 즐겨찾기는 저장본 옵션을 -o 로 재투입 — 명령줄이 config 보다 우선하므로 config 변경·삭제와 무관하게 고정 시점 설정으로 접속
+}
+class RemoteInfo {
+  role: 원격 기본 정보 — home·os(std OS 표기)·arch(std ARCH 표기). 데몬 바이너리 선택 키
+}
+fn probe_remote(host) -> info {
+  role: 접속마다 exec 한 번으로 $HOME·uname -s·uname -m 조회, darwin→macos·arm64→aarch64 정규화
+}
+fn expand_home(home, path) -> path {
+  role: `/~`·`/~/sub` 표기를 원격 $HOME 절대 경로로 치환 (순수) — 프론트는 원격 홈을 모르므로 세션 root 에 '~' 를 적는다. '~' 가 아니면 그대로
+}
+fn remote_daemon_bin(info) -> path {
+  role: 원격 OS·arch 용 데몬 바이너리 — 로컬과 같으면 로컬 데몬, 다르면 형제 파일 superlight-daemon-<os>-<arch> (Windows 배포 세트가 musl 정적 linux-x86_64 데몬을 동봉 — build.sh). 없으면 파일명·위치를 담은 오류
+}
+fn ensure_remote_bin(host, info) -> remote_path {
+  role: 원격 헬퍼(=데몬 바이너리) 배치 보장 — $HOME/.cache/code-superlight/bin/<내용해시>/ 에 없으면 remote_daemon_bin 산출물을 ssh stdin 으로 업로드. 해시 키라 재빌드=재배포·빌드 혼용 없음
+}
+fn pipe_conn(host, info) -> child {
+  role: 원격 데몬 파이프 연결 — 배치 보장 후 `ssh host superlight-daemon --pipe` spawn. child 의 stdin/stdout 이 데몬 와이어 (relay 가 로컬 소켓 자리에 물린다). kill_on_drop — relay 종료 = ssh 종료 → 원격 데몬 세션 detach
+}

@@ -27,6 +27,15 @@ function onKeydown(e: KeyboardEvent): void {
     e.preventDefault();
     e.stopPropagation();
     closeContextMenu();
+    return;
+  }
+  // 니모닉 — 항목의 key 와 일치하면 그 항목 실행 (수식키 없이)
+  if (e.ctrlKey || e.altKey || e.metaKey) return;
+  const hit = workbench.contextMenu.items.find((it) => it.key !== undefined && it.key === e.key.toLowerCase());
+  if (hit) {
+    e.preventDefault();
+    e.stopPropagation();
+    runItem(hit);
   }
 }
 

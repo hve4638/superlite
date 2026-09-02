@@ -2,11 +2,13 @@ import { reactive } from '@vue/reactivity';
 import type { ThinBackend } from '../backend/types';
 import { ctx, viewOf } from './ctx';
 
-export type ViewletId = 'explorer' | 'search' | 'scm';
+export type ViewletId = 'explorer' | 'search' | 'scm' | 'remote';
 
 export interface ContextMenuItem {
   label?: string;
   keybinding?: string;
+  /** 메뉴가 열린 동안 이 키(소문자 한 글자)를 누르면 실행 — 라벨의 "(H)" 같은 니모닉 */
+  key?: string;
   separator?: boolean;
   enabled?: boolean;
   run?: () => void;

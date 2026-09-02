@@ -7,13 +7,13 @@ export type TreeNode
 export val files
 
 export fn createFiles(backend) {
-  role: 세션별 트리 모듈 생성 — 트리·펼침·로딩 상태가 팩토리 클로저에 산다 (한 페이지에 세션 여럿)
+  role: 세션별 트리 모듈 생성 — 트리·펼침·로딩 상태가 팩토리 클로저에 산다 (한 페이지에 세션 여럿). loading(루트 첫 로드, 진행 막대)·slowDirs(자식 로드 800ms 초과 디렉토리, twistie 스피너 — VS Code asyncDataTree slow 규칙)
 }
 export fn parentOf(path) {
   role: 부모 디렉토리 경로 (루트는 '') — 순수 함수, 세션 무관
 }
 export fn initFiles() {
-  role: 루트 나열로 트리 초기화
+  role: 루트 나열로 트리 초기화 — root 가 오면 loading 을 내리고(탐색기 진행 막대 종료) quick open 용 listFiles 는 그 뒤에. 셸은 이 완료를 기다리지 않고 마운트된다 (main.ts)
 }
 export fn toggleDir(node) {
   role: 디렉토리 펼침/접힘 (첫 펼침에 자식 로드)

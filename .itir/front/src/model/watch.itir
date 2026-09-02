@@ -11,9 +11,9 @@ role: 데몬 fsChanges 배치 소비 — 소비자별 고정 창 디바운스 (�
 export val connection
 
 export fn createWatch(backend, editorsM, filesM, scmM, searchM) {
-  role: 세션별 감시 소비 모듈 생성 — 디바운스 소비자(누적 버퍼·타이머)가 세션마다 독립이다
+  role: 세션별 감시 소비 모듈 생성 — 디바운스 소비자(누적 버퍼·타이머)가 세션마다 독립이다. initConnection(연결 상태 구독)은 초기 로드보다 먼저 호출된다 — 원격 ssh 실패는 첫 응답 자리에 close 4502 로 오므로 init 뒤 구독은 놓친다. connection.error = 재시도 무의미한 영구 실패 사유
 }
 export fn initWatch() {
-  role: onFsChanges·onConnection 구독 + 포커스 안전망 등록 (mock 은 구독 자체가 없어 no-op)
+  role: onFsChanges 구독 + 포커스 안전망 등록 (onConnection 은 initConnection 이 먼저) (mock 은 구독 자체가 없어 no-op)
   effects: { 외부 변경이 열린 문서·트리·SCM 에 흘러든다 }
 }

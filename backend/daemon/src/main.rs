@@ -80,6 +80,11 @@ fn wire_rel(s: &str) -> String {
 
 #[tokio::main]
 async fn main() {
+    // --pipe: ssh 헬퍼 모드 — 데몬 본체가 아니라 stdio ↔ 데몬 소켓 중계자로 뜬다
+    if std::env::args().any(|a| a == "--pipe") {
+        pipe_main().await;
+        return;
+    }
     let sock = superlight_common::socket_path();
     // WHY: 단독 보장은 파일 락으로 — connect 검사→unlink→bind 순서는 원자적이지 않아
     //      동시 기동 시 산 데몬의 소켓 파일을 다른 데몬이 지우는 race 가 있다.
@@ -191,6 +196,63 @@ async fn main() {
             // 카운터가 새고, 유휴 종료(연결 0 판정)가 영구히 막힌다
             let _count = ConnCount(conns);
             handle_conn(stream, sessions).await;
+        });
+    }
+}
+
+/// ssh 헬퍼 모드 — 백엔드가 `ssh host superlight-daemon --pipe` 로 원격(=이 머신)에
+/// 이 프로세스를 띄운다 (ws docs/decision/remote-ssh.md). 이 머신의 데몬 소켓에 접속
+/// (부재 시 자기 자신을 데몬으로 spawn)해 stdin/stdout 과 양방향 중계만 한다 — 내용
+/// 해석 없음. 로컬 relay 의 daemon_conn+spawn 대응물이고, "헬퍼가 곧 원격의 데몬"
+/// 대칭의 접점이다 (relay 는 별개 크레이트 + common 은 tokio 무의존이라 소량 중복 수용).
+///
+/// ssh 가 죽으면(네트워크 단절·창 닫기) stdin EOF → 종료. 데몬 쪽 연결 drop 이 세션을
+/// detach 로 돌리고, 세션 grace 안의 재접속(새 헬퍼)이 터미널을 이어받는다.
+async fn pipe_main() {
+    let sock = superlight_common::socket_path();
+    let mut stream = None;
+    for i in 0..50 {
+        #[cfg(unix)]
+        let conn = tokio::net::UnixStream::connect(&sock).await;
+        #[cfg(windows)]
+        let conn = tokio::net::windows::named_pipe::ClientOptions::new().open(sock.as_os_str());
+        if let Ok(s) = conn {
+            stream = Some(s);
+            break;
+        }
+        if i == 0 {
+            spawn_self_daemon();
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let Some(stream) = stream else {
+        eprintln!("superlight-daemon --pipe: 데몬 기동 실패 (5초): {}", sock.display());
+        std::process::exit(1);
+    };
+    let (mut sock_r, mut sock_w) = tokio::io::split(stream);
+    let (mut in_r, mut out_w) = (tokio::io::stdin(), tokio::io::stdout());
+    // 어느 방향이든 끝나면(EOF·에러) 프로세스 종료가 나머지를 정리한다
+    tokio::select! {
+        _ = tokio::io::copy(&mut in_r, &mut sock_w) => {}
+        _ = tokio::io::copy(&mut sock_r, &mut out_w) => {}
+    }
+}
+
+/// 데몬 본체 spawn (헬퍼 → 자기 자신을 인자 없이) — relay 의 spawn_daemon 과 같은 정책
+fn spawn_self_daemon() {
+    let Ok(bin) = std::env::current_exe() else { return };
+    let mut cmd = std::process::Command::new(bin);
+    // 이 프로세스의 stdout 은 ssh 채널(와이어)이다 — 상속되면 데몬 로그가 프로토콜을
+    // 오염시킨다 (데몬은 stderr 로만 쓰지만 fail-safe). stderr 는 ssh 를 타고 백엔드 로그로
+    cmd.stdout(std::process::Stdio::null());
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::creation_flags(&mut cmd, 0x0000_0010);
+    if let Ok(mut child) = cmd.spawn() {
+        // 좀비 방지 — 데몬이 이미 있어 즉시 물러난 자식 회수 (헬퍼는 오래 살 수 있다)
+        std::thread::spawn(move || {
+            let _ = child.wait();
         });
     }
 }
@@ -380,8 +442,12 @@ async fn handle_conn(
                         }
                         let path = r.to_string_lossy().into_owned();
                         // 감시 실패(inotify 한도 등)는 치명적이지 않다 — 감시 없이 동작.
-                        // 워처는 연결 스코프 — 끊김 중 놓친 이벤트는 프론트가 재접속 시 전체 리프레시
-                        watch::start_watcher(r, tx.clone(), watcher_slot.clone());
+                        // 워처는 연결 스코프 — 끊김 중 놓친 이벤트는 프론트가 재접속 시 전체 리프레시.
+                        // watch:false (와이어 v7) 는 탐색 전용 attach — 원격 빈 세션이 폴더 열기
+                        // 퀵인풋으로 이 머신을 탐색만 하는 동안 홈 전체에 재귀 워처를 걸지 않는다
+                        if req["params"]["watch"].as_bool() != Some(false) {
+                            watch::start_watcher(r, tx.clone(), watcher_slot.clone());
+                        }
                         cleanup.session = Some(s);
                         let _ = tx.send(
                             json!({"id": req["id"], "result": {"rootPath": path, "resumed": resumed}})

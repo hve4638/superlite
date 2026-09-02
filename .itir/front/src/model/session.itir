@@ -12,6 +12,6 @@ role: 세션 컨텍스트 조립 — 세션(워크스페이스) 하나가 쓰는
 
 export type SessionCtx
 
-export fn createSessionCtx(backend) -> SessionCtx {
-  role: 모듈 팩토리들을 의존 순서(files·editors → scm·search·workbench → terminals·fileops → watch)로 생성해 컨텍스트로 묶는다. editors 에는 isActive(활성 세션 판별)를 넘긴다 — monaco 훅이 활성 세션에서만 발화해 배경 재로드가 활성 모델을 덮지 않게. init() 은 초기 로드(워크스페이스 정보·트리·SCM)+감시 구독의 멱등 진입점
+export fn createSessionCtx(backend, browseOnly?) -> SessionCtx {
+  role: 모듈 팩토리들을 의존 순서(files·editors → scm·search·workbench → terminals·fileops → watch)로 생성해 컨텍스트로 묶는다. editors 에는 isActive(활성 세션 판별)를 넘긴다 — monaco 훅이 활성 세션에서만 발화해 배경 재로드가 활성 모델을 덮지 않게. init() 은 초기 로드(워크스페이스 정보·트리·SCM)+감시 구독의 멱등 진입점. browseOnly(원격 빈 세션)면 연결 확인과 워크스페이스 정보만 — 트리·SCM·감시는 열지 않는다 (시작 페이지의 폴더 열기가 browseDir 만 쓴다)
 }

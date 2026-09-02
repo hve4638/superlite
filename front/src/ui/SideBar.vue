@@ -2,20 +2,24 @@
 import { computed } from 'vue';
 import { workbench } from '../model/workbench';
 import { runSearch, clearSearch, collapseAllResults } from '../model/search';
+import { refreshHosts } from '../model/remote';
 import ExplorerView from './views/ExplorerView.vue';
 import SearchView from './views/SearchView.vue';
 import ScmView from './views/ScmView.vue';
+import RemoteView from './views/RemoteView.vue';
 
 const TITLES: Record<string, string> = {
   explorer: 'Explorer',
   search: 'Search',
   scm: 'Source Control',
+  remote: 'Remote Explorer',
 };
 
 const view = computed(() => {
   switch (workbench.activeViewlet) {
     case 'search': return SearchView;
     case 'scm': return ScmView;
+    case 'remote': return RemoteView;
     default: return ExplorerView;
   }
 });
@@ -30,6 +34,9 @@ const ACTIONS: Record<string, { icon: string; label: string; run: () => void }[]
     { icon: 'codicon-collapse-all', label: 'Collapse All', run: collapseAllResults },
   ],
   scm: [],
+  remote: [
+    { icon: 'codicon-refresh', label: 'Refresh', run: () => void refreshHosts() },
+  ],
 };
 const actions = computed(() => ACTIONS[workbench.activeViewlet] ?? []);
 </script>

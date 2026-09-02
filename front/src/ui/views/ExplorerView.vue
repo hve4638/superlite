@@ -5,6 +5,7 @@ import { editors, openFile } from '../../model/editors';
 import { createDir, createFile, deleteEntry, renameEntry, saveClipboardImage, undoFileOp } from '../../model/fileops';
 import { decorationFor } from '../../model/scm';
 import { activeSessionEmpty } from '../../model/sessions';
+import { connection } from '../../model/watch';
 import { workbench, openContextMenu, openQuickInput, type ContextMenuItem } from '../../model/workbench';
 import { endEditorDrag, startFileDrag } from '../editor/tabDnd';
 import FileIcon from '../widgets/FileIcon.vue';
@@ -164,6 +165,12 @@ const BACKGROUND_MENU: ContextMenuItem[] = [
   { label: 'New Folder...', run: () => void startCreate('createDir', null) },
 ];
 
+/** 디렉토리 twistie — 펼침 chevron, 로드가 800ms 를 넘기면 스피너 (VS Code tree-item-loading) */
+function twistieClass(node: TreeNode): string {
+  if (files.slowDirs.has(node.path)) return 'codicon-loading loading';
+  return files.expanded.has(node.path) ? 'codicon-chevron-down' : 'codicon-chevron-right';
+}
+
 function onRowClick(node: TreeNode): void {
   files.selectedPath = node.path;
   if (node.kind === 'directory') {
@@ -221,6 +228,39 @@ function onTreeKeydown(e: KeyboardEvent): void {
 const treeEl = ref<HTMLElement | null>(null);
 
 /**
+ * 가상 스크롤 — 보이는 행(+여유)만 DOM 에 둔다. 행 높이는 고정 22px (spec) 이라 위치 계산이
+ * 산술이다. WHY: 큰 디렉토리(수만 항목)를 펼치면 전체 렌더가 메인 스레드를 수 초 잠갔다 —
+ * VS Code 탐색기도 가상 리스트다. 상단 오프셋은 transform 으로 (레이아웃 재계산 없음)
+ */
+const ROW_H = 22;
+const OVERSCAN = 10;
+const scrollTop = ref(0);
+const viewportH = ref(0);
+const win = computed(() => {
+  const total = rows.value.length;
+  const start = Math.max(0, Math.floor(scrollTop.value / ROW_H) - OVERSCAN);
+  const end = Math.min(total, Math.ceil((scrollTop.value + viewportH.value) / ROW_H) + OVERSCAN);
+  return { start, rows: rows.value.slice(start, end), total };
+});
+function onTreeScroll(): void {
+  scrollTop.value = treeEl.value?.scrollTop ?? 0;
+}
+let treeRo: ResizeObserver | null = null;
+onMounted(() => {
+  const el = treeEl.value;
+  if (!el) return;
+  viewportH.value = el.clientHeight;
+  treeRo = new ResizeObserver(() => (viewportH.value = el.clientHeight));
+  treeRo.observe(el);
+});
+onBeforeUnmount(() => treeRo?.disconnect());
+
+/** 행 밖(빈 영역) 클릭 판정 — 가상 스크롤 래퍼가 있어 .self 로는 잡히지 않는다 */
+function outsideRows(e: Event): boolean {
+  return (e.target as HTMLElement).closest('.row') === null;
+}
+
+/**
  * 트리 포커스 한정 붙여넣기 — 클립보드 이미지를 선택 위치에 파일로 저장 (텍스트 등은 무시).
  * WHY: 터미널과 같은 방침으로 navigator.clipboard.read()(권한 프롬프트) 대신 네이티브
  *      paste 이벤트를 쓴다. tabindex div 는 편집 가능 요소가 아니라 paste 가 요소로
@@ -276,15 +316,27 @@ function decoColor(node: TreeNode): string | undefined {
           <span class="codicon codicon-collapse-all" title="Collapse Folders in Explorer" @click="collapseAll()" />
         </div>
       </div>
+      <!-- 루트 첫 로드 중 — VS Code 뷰 헤더 아래의 무한 진행 막대 (monaco-progress-container) -->
+      <div v-if="files.loading && !connection.error" class="progress">
+        <div class="progress-bit" />
+      </div>
+      <!-- 영구 접속 실패(원격 ssh) — 재연결하지 않으므로 사유를 보인다. 재접속은 탭을 다시 여는 것 -->
+      <div v-if="connection.error" class="conn-error">
+        <span class="codicon codicon-error" />
+        <span>{{ connection.error }}</span>
+      </div>
       <div
         ref="treeEl"
         class="tree"
         tabindex="0"
         @keydown="onTreeKeydown"
-        @click.self="files.selectedPath = null"
-        @contextmenu.self.prevent="onTreeContextMenu($event)"
+        @scroll.passive="onTreeScroll"
+        @click="outsideRows($event) && (files.selectedPath = null)"
+        @contextmenu="outsideRows($event) && (($event.preventDefault(), onTreeContextMenu($event)))"
       >
-        <template v-for="row in rows" :key="row.node?.path ?? '__edit'">
+        <div class="tree-inner" :style="{ height: `${win.total * ROW_H}px` }">
+        <div class="tree-window" :style="{ transform: `translateY(${win.start * ROW_H}px)` }">
+        <template v-for="row in win.rows" :key="row.node?.path ?? '__edit'">
           <!-- rename 중인 행 — 라벨 자리에 인라인 입력 -->
           <div
             v-if="row.node && isRenaming(row.node)"
@@ -294,7 +346,7 @@ function decoColor(node: TreeNode): string | undefined {
             <span
               v-if="row.node.kind === 'directory'"
               class="twistie codicon"
-              :class="files.expanded.has(row.node.path) ? 'codicon-chevron-down' : 'codicon-chevron-right'"
+              :class="twistieClass(row.node)"
             />
             <span v-else class="twistie leaf" />
             <FileIcon v-if="row.node.kind === 'file'" :name="row.node.name" />
@@ -323,7 +375,7 @@ function decoColor(node: TreeNode): string | undefined {
             <span
               v-if="row.node.kind === 'directory'"
               class="twistie codicon"
-              :class="files.expanded.has(row.node.path) ? 'codicon-chevron-down' : 'codicon-chevron-right'"
+              :class="twistieClass(row.node)"
             />
             <!-- WHY: 파일 행은 twistie 폭 없이 8px 패딩만 갖는다 (spec: 파일명이 폴더명과 같은 x 에 정렬) -->
             <span v-else class="twistie leaf" />
@@ -353,6 +405,8 @@ function decoColor(node: TreeNode): string | undefined {
             />
           </div>
         </template>
+        </div>
+        </div>
       </div>
     </div>
     <template v-if="!activeSessionEmpty()">
@@ -410,6 +464,40 @@ function decoColor(node: TreeNode): string | undefined {
 }
 
 /* ===== pane header (spec .pane-header: 22px, 11px/700, bg #181818) ===== */
+.conn-error {
+  display: flex;
+  gap: 6px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--vscode-errorForeground);
+  word-break: break-all;
+}
+.conn-error .codicon {
+  flex: none;
+  font-size: 16px;
+}
+/* VS Code progressbar.css infinite — 2px 막대가 뷰 폭을 가로질러 반복 */
+.progress {
+  position: relative;
+  height: 2px;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.progress-bit {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 2%;
+  height: 2px;
+  background: var(--vscode-progressBar-background);
+  animation: progress-infinite 4s steps(100) infinite;
+  transform: translate3d(0, 0, 0);
+}
+@keyframes progress-infinite {
+  0% { transform: translateX(0) scaleX(1); }
+  50% { transform: translateX(2500%) scaleX(3); }
+  to { transform: translateX(4900%) scaleX(1); }
+}
 .pane-header {
   display: flex;
   align-items: center;
@@ -465,6 +553,12 @@ function decoColor(node: TreeNode): string | undefined {
   overflow-x: hidden;
   outline: none; /* tabindex 포커스 링 억제 — VS Code 트리도 컨테이너 링이 없다 */
 }
+.tree-inner {
+  position: relative;
+}
+.tree-window {
+  will-change: transform;
+}
 .row {
   display: flex;
   align-items: center;
@@ -493,6 +587,15 @@ function decoColor(node: TreeNode): string | undefined {
   padding: 0 4px 0 10px;
   font-size: 16px;
   flex-shrink: 0;
+}
+/* spec tree.css .codicon-tree-item-loading — steps 로 FPS 를 낮춰 CPU 를 아낀다 */
+.row .twistie.loading::before {
+  display: inline-block;
+  animation: codicon-spin 1.25s steps(30) infinite;
+  transform-origin: center center;
+}
+@keyframes codicon-spin {
+  to { transform: rotate(360deg); }
 }
 /* 파일 행 twistie 는 폭 0 + 좌측 8px 패딩만 (spec: 파일 아이콘이 폴더 chevron 아래 정렬) */
 .row .twistie.leaf {

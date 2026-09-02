@@ -55,7 +55,7 @@ port ThinBackend {
     role: 외부 파일 변경 배치 구독 (옵셔널 — mock 은 외부 변경이 없다)
   }
   fn onConnection(cb) {
-    role: 연결 상태 변화 구독 (옵셔널 — mock 은 끊길 일이 없다). 재연결 시 true — 구독자가 전체 리프레시로 재동기화한다
+    role: 연결 상태 변화 구독 (옵셔널 — mock 은 끊길 일이 없다). 재연결 시 true — 구독자가 전체 리프레시로 재동기화한다. error 동반 false = 영구 실패(원격 ssh 접속 실패, close 4502) — 재연결하지 않는다
   }
   fn onInputBlocked(cb) {
     role: 터미널 입력 배압 상태 구독 (옵셔널 — mock 은 즉시 소화라 미구현). 미소화 입력이 창(1M chars)을 넘어 전송을 멈추면 (TerminalSession.id, true), 대기분이 모두 나가면 false. 셸이 입력을 읽지 않는 상황을 사용자에게 표면화하는 통로

@@ -1,7 +1,13 @@
 role: 수명과 연결 — 파일 락 단독 보장, accept 루프, 유휴 grace 자진 종료, 연결당 read 루프, 세션 지속(재접속 시 터미널 이어 붙임)
 
 fn main() {
-  role: IPC 확보(락 승자만 — unix 는 unlink 후 socket bind, Windows 는 named pipe 인스턴스 루프) + 유휴 감시 태스크(연결 0 이고 detach 세션도 없어야 종료) + 세션 reaper + accept 루프
+  role: IPC 확보(락 승자만 — unix 는 unlink 후 socket bind, Windows 는 named pipe 인스턴스 루프) + 유휴 감시 태스크(연결 0 이고 detach 세션도 없어야 종료) + 세션 reaper + accept 루프. --pipe 인자면 데몬 본체 대신 pipe_main 헬퍼 모드
+}
+fn pipe_main() {
+  role: ssh 헬퍼 모드 — 백엔드가 `ssh host superlight-daemon --pipe` 로 원격(=이 머신)에 띄운다. 이 머신의 데몬 소켓에 접속(부재 시 자기 자신을 데몬으로 spawn)해 stdin/stdout 과 양방향 중계만 — 내용 해석 없음 (로컬 relay 의 daemon_conn+spawn 대응물, "헬퍼가 곧 원격의 데몬" 대칭의 접점). ssh 사망 = stdin EOF → 종료 → 데몬이 세션을 detach 로 돌리고 세션 grace 안의 재접속이 터미널을 이어받는다
+}
+fn spawn_self_daemon() {
+  role: 헬퍼가 데몬 본체를 spawn (자기 자신, 인자 없이) — relay 의 spawn_daemon 과 같은 정책. stdout 은 null (상속되면 ssh 채널=와이어를 오염)
 }
 fn acquire_lock() {
   role: 단독 데몬 보장 — connect 검사 대신 OS 파일 락(File::try_lock, 검사→unlink→bind 는 원자적이지 않다)
@@ -16,7 +22,7 @@ fn reap_sessions() {
   role: detach 후 grace 를 넘긴 세션 회수 — 터미널 kill 후 맵에서 제거
 }
 fn handle_conn() {
-  role: 연결 수명 — 라인 프레이밍 요청 디스패치(단일 writer 태스크로 응답 직렬화 — 텍스트 줄·바이너리 payload 이중 채널 select, 응답은 id 대응이라 채널 간 순서는 계약이 아니다) + attach 1회 규칙. readFile 은 반환형(ReadOut)이 달라 일반 경로와 분리 라우팅 — Payload 는 payload_frame(0x00 매직+4B BE 길이, 와이어 v6)으로 바이너리 채널에 싣는다. attach 에 session id 가 있으면 세션 재사용(터미널 생존·버퍼 flush), 없으면 연결과 함께 죽는 익명 세션. attach 응답의 resumed 가 세션 회수 여부를 프론트에 알린다. 종료 뒷정리(detach 전환·익명 세션 터미널 kill)와 연결 카운터 감소는 drop guard — panic 에도 보장돼 유휴 종료가 막히지 않는다
+  role: 연결 수명 — 라인 프레이밍 요청 디스패치(단일 writer 태스크로 응답 직렬화 — 텍스트 줄·바이너리 payload 이중 채널 select, 응답은 id 대응이라 채널 간 순서는 계약이 아니다) + attach 1회 규칙. readFile 은 반환형(ReadOut)이 달라 일반 경로와 분리 라우팅 — Payload 는 payload_frame(0x00 매직+4B BE 길이, 와이어 v6)으로 바이너리 채널에 싣는다. attach 에 session id 가 있으면 세션 재사용(터미널 생존·버퍼 flush), 없으면 연결과 함께 죽는 익명 세션. attach 의 watch:false(와이어 v7)는 탐색 전용 — 재귀 워처를 걸지 않는다 (원격 빈 세션이 홈을 탐색만 할 때). attach 응답의 resumed 가 세션 회수 여부를 프론트에 알린다. 종료 뒷정리(detach 전환·익명 세션 터미널 kill)와 연결 카운터 감소는 drop guard — panic 에도 보장돼 유휴 종료가 막히지 않는다
 }
 fn err() {
   role: Display → String 에러 축약 (크레이트 공용)

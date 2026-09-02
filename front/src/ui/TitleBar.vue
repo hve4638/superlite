@@ -16,6 +16,8 @@ import {
   addEmptySession,
   moveSession,
   renameSession,
+  isRemoteEmpty,
+  remoteHost,
   type SessionTab,
 } from '../model/sessions';
 
@@ -31,6 +33,13 @@ const descriptions = computed(() => {
   }
   return out;
 });
+
+/** 탭 라벨 — 이름은 워크스페이스 정보가 오면 채워진다: 그 전엔 빈 세션만 Welcome, 로드 중인
+ *  세션은 공백. 원격 빈 세션(경로 없는 ssh://host)은 이름과 무관하게 "Welcome [host]" */
+function sessionLabel(tab: SessionTab): string {
+  if (isRemoteEmpty(tab.root)) return `Welcome [${remoteHost(tab.root ?? '')}]`;
+  return tab.name || (tab.root === null ? 'Welcome' : '…');
+}
 
 /** 루트의 부모 디렉토리명 — root 는 native 경로라 구분자가 OS 마다 다르다 */
 function parentHint(root: string): string {
@@ -156,7 +165,8 @@ function commitRename(): void {
           />
           <template v-else>
             <!-- 빈 세션(이름 없음)의 표시 라벨 — 시작 페이지 탭임을 나타낸다 -->
-            <span class="session-name">{{ tab.name || 'Welcome' }}</span>
+            <!-- 이름은 워크스페이스 정보가 오면 채워진다 — 그 전엔 빈 세션만 Welcome, 로드 중인 세션은 공백 -->
+            <span class="session-name">{{ sessionLabel(tab) }}</span>
             <span v-if="descriptions.get(tab.id)" class="session-description">{{
               descriptions.get(tab.id)
             }}</span>
@@ -285,7 +295,8 @@ function commitRename(): void {
   font-size: 10px;
   opacity: 0.7;
 }
-.session-close {
+/* 후행 셀렉터 — codicon.css 의 (0,2,0) 규칙이 display 를 덮는다 (창 제어 버튼과 같은 사유) */
+.session-tab .session-close {
   margin-left: auto; /* min-width 로 생긴 여백에서 닫기는 오른쪽 끝 (Windows Terminal 동일) */
   display: flex;
   align-items: center;
@@ -316,7 +327,7 @@ function commitRename(): void {
 .session-close:hover {
   background: var(--vscode-toolbar-hoverBackground);
 }
-.session-add {
+.titlebar-tabs .session-add {
   align-self: center;
   display: flex;
   align-items: center;
@@ -359,7 +370,9 @@ function commitRename(): void {
   display: flex;
   flex-shrink: 0;
 }
-.window-control {
+/* WHY: 후행 셀렉터 — codicon.css 의 .codicon[class*='codicon-'] (0,2,0) 이 display 를
+   inline-block 으로 덮어 글리프가 35px 상자의 위에 붙었다 (Windows 에서 -ㅁx 가 위로 치우침) */
+.window-controls .window-control {
   display: flex;
   align-items: center;
   justify-content: center;

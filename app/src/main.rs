@@ -104,6 +104,15 @@ fn default_open_root() -> String {
 /// 워크스페이스 정체성은 지금은 canonicalize 된 로컬 경로가 전부지만, ssh 등 원격
 /// 세션이 붙으면 (origin, path) 쌍이 되어야 한다 — 같은 경로라도 origin 이 다르면
 /// 별개 세션이다.
+/// 빈 세션 root 판정 — None(로컬 시작 페이지) 또는 경로 없는 원격 `ssh://host`(원격 시작
+/// 페이지 — 그 호스트 탐색만, relay 참조). 둘 다 폴더 열기가 제자리 교체하는 대상이다
+fn is_empty_root(root: Option<&std::path::Path>) -> bool {
+    match root.and_then(|r| r.to_str()) {
+        None => true,
+        Some(s) => s.strip_prefix("ssh://").is_some_and(|rest| !rest.contains('/')),
+    }
+}
+
 fn open_workspace(app: &tauri::AppHandle, state: &AppState, root: PathBuf, replace: Option<&str>) {
     {
         let mut list = state.sessions.lock().unwrap();
@@ -114,8 +123,9 @@ fn open_workspace(app: &tauri::AppHandle, state: &AppState, root: PathBuf, repla
             return;
         }
         let session = rand_hex();
-        // 교체 대상은 여전히 루트가 없어야 한다 — 경합(그 사이 다른 열기로 교체됨)이면 push
-        match replace.and_then(|rid| list.iter().position(|(id, r)| id == rid && r.is_none())) {
+        // 교체 대상은 여전히 빈 세션(루트 없음 또는 경로 없는 원격 ssh://host)이어야 한다 —
+        // 경합(그 사이 다른 열기로 교체됨)이면 push
+        match replace.and_then(|rid| list.iter().position(|(id, r)| id == rid && is_empty_root(r.as_deref()))) {
             Some(i) => list[i] = (session, Some(root)),
             None => list.push((session, Some(root))),
         }
@@ -144,15 +154,22 @@ async fn open_folder(app: tauri::AppHandle, replace: Option<String>) -> Result<(
 /// 가지므로 권한 확대가 아니고, 검증·세션 등록은 여전히 여기(native)가 소유한다.
 #[tauri::command]
 fn open_folder_path(app: tauri::AppHandle, path: String, replace: Option<String>) -> Result<(), String> {
-    // plain: Windows verbatim 루트는 '/' 와이어 경로·자식 cwd 를 깨뜨린다 (common 참조)
-    let root = superlight_common::plain(
-        std::path::Path::new(&path)
-            .canonicalize()
-            .map_err(|e| format!("경로 확인 실패: {e}"))?,
-    );
-    if !root.is_dir() {
-        return Err(format!("디렉토리가 아니다: {}", root.display()));
-    }
+    // ssh://host/path — 원격 워크스페이스. 레지스트리는 문자열 그대로 나르고(로컬 검증
+    // 불가·불필요), 해석·접속은 relay 가, 경로 검증은 원격 데몬 attach 가 한다
+    let root = if path.starts_with("ssh://") {
+        PathBuf::from(&path)
+    } else {
+        // plain: Windows verbatim 루트는 '/' 와이어 경로·자식 cwd 를 깨뜨린다 (common 참조)
+        let root = superlight_common::plain(
+            std::path::Path::new(&path)
+                .canonicalize()
+                .map_err(|e| format!("경로 확인 실패: {e}"))?,
+        );
+        if !root.is_dir() {
+            return Err(format!("디렉토리가 아니다: {}", root.display()));
+        }
+        root
+    };
     let state = app.state::<AppState>();
     open_workspace(&app, &state, root, replace.as_deref());
     Ok(())

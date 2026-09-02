@@ -1,11 +1,16 @@
 <script setup lang="ts">
 import { workbench, showViewlet, type ViewletId } from '../model/workbench';
 import { scm } from '../model/scm';
+import { remoteEnabled } from '../model/remote';
 
 const items: { id: ViewletId; icon: string; label: string }[] = [
   { id: 'explorer', icon: 'codicon-files', label: 'Explorer' },
   { id: 'search', icon: 'codicon-search', label: 'Search' },
   { id: 'scm', icon: 'codicon-source-control', label: 'Source Control' },
+  // 원격 탐색기 — 백엔드 HTTP API 가 있는 환경만 (mock 은 원격 개념이 없다)
+  ...(remoteEnabled()
+    ? [{ id: 'remote' as ViewletId, icon: 'codicon-remote-explorer', label: 'Remote Explorer' }]
+    : []),
 ];
 
 function isActive(id: ViewletId): boolean {

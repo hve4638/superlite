@@ -32,10 +32,11 @@ function fmtSize(bytes: number): string {
       <div
         class="statusbar-item remote"
         :class="{ offline: !connection.ok }"
-        :title="connection.ok ? 'Open a Remote Window' : 'Reconnecting…'"
+        :title="connection.ok ? 'Open a Remote Window' : connection.error ?? 'Reconnecting…'"
       >
         <span class="codicon codicon-remote" />
-        <span v-if="!connection.ok">Reconnecting…</span>
+        <!-- 영구 실패(원격 ssh)는 재연결하지 않는다 — Reconnecting 대신 실패 표시 -->
+        <span v-if="!connection.ok">{{ connection.error ? 'Connection failed' : 'Reconnecting…' }}</span>
       </div>
       <div v-if="scm.branch" class="statusbar-item" :title="`${scm.branch} (Git)`">
         <span class="codicon codicon-source-control" />

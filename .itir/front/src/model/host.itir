@@ -3,7 +3,7 @@ import { MockBackend } from '../backend/mock'
 import { WsBackend } from '../backend/ws'
 import { EmptyBackend } from '../backend/empty'
 import { ctx, viewOf } from './ctx'
-import { activeSessionEmpty, bootSession, configureSessions, genSessionId, openWebFolder, sessions, SessionTab } from './sessions'
+import { activeSessionEmpty, bootSession, configureSessions, genSessionId, openWebFolder, remoteHost, replaceAppSession, sessions, SessionTab } from './sessions'
 import { notify } from './notifications'
 
 role: ThinBackend 조립 지점 — 구현체를 직접 참조해도 되는 유일한 파일 (itir boundary assembly). 세션 관리자에 환경(kind·탭별 연결 생성기)을 주입하고 부팅 세션들을 등록한다. 앱은 주입된 __SUPERLIGHT_WS__ endpoint 와 __SUPERLIGHT_SESSIONS__ 목록(native 레지스트리가 발급 — 복원이면 여럿, 마지막이 활성)으로, 웹은 ?tkn=·?folder= 로 부팅 세션 하나를 만든다 (tkn 존재 자체가 실 백엔드 선택 신호). root 가 null 인 탭(빈 세션)은 연결을 열지 않는다 — EmptyBackend (앱·웹 공통). 모듈 평가 시점에 부팅을 끝낸다 — model shim 을 쓰는 모든 모듈보다 앞서야 하므로 main.ts 가 이 파일을 최우선 import 한다
@@ -11,8 +11,11 @@ role: ThinBackend 조립 지점 — 구현체를 직접 참조해도 되는 유�
 export val backend
 export val openRootDefault
 
-export fn openFolder(root) {
-  role: '폴더 열기' 확정의 단일 진입점 — 앱·웹 모두 "새 세션 탭 추가"이되, 활성 탭이 빈 세션이면 그 자리를 교체한다 (replace — 시작 페이지에서 열기 흐름). 앱은 native open_folder_path invoke (검증·등록은 native 소유, sessions-changed 반향으로 탭 생성. 잘못된 경로 reject 는 notify 로 드러낸다 — 퀵인풋이 자동완성 없이도 타이핑 확정을 허용하므로), 웹은 세션 관리자가 ?folder= 연결을 하나 더 연다. mock 은 무동작. 환경 분기가 여기 숨어 퀵인풋은 환경을 모른다
+export fn openFolder(root, opts?) {
+  role: '폴더 열기' 확정의 단일 진입점 — 앱·웹 모두 "새 세션 탭 추가"이되, 활성 탭이 빈 세션이면 그 자리를 교체한다 (replace — 시작 페이지에서 열기 흐름). 앱은 native open_folder_path invoke (검증·등록은 native 소유, sessions-changed 반향으로 탭 생성. 잘못된 경로 reject 는 notify 로 드러낸다 — 퀵인풋이 자동완성 없이도 타이핑 확정을 허용하므로), 웹은 세션 관리자가 ?folder= 연결을 하나 더 연다. mock 은 무동작. 환경 분기가 여기 숨어 퀵인풋·원격 탐색기는 환경을 모른다. root 는 로컬 절대 경로 또는 ssh://host/path (원격 탐색기 접속 — 해석은 relay 몫). 활성 세션이 원격이면 맨 경로도 그 호스트의 경로로 본다 (퀵인풋 browseDir 가 원격 데몬을 탐색하므로 — VS Code 원격 창의 Open Folder 와 동일). opts.replace 면 비어 있지 않은 활성 탭도 대체 (웹은 openWebFolder replace, 앱은 invoke 후 replaceAppSession — native replace 는 빈 탭 전용)
+}
+export fn backendApiUrl(path, query?) -> url? {
+  role: 백엔드 자체 HTTP API(/ssh/*) 주소 — 데몬 와이어(/ws) 밖에서 백엔드가 직접 응답하는 첫 표면 (주소·연결은 백엔드 소유 — ws docs/decision/remote-ssh.md). 웹은 같은 오리진 상대 경로, 앱은 주입된 WS endpoint 에서 오리진·토큰 유도. mock 은 null — 호출측(원격 탐색기)이 UI 를 감추는 신호
 }
 export fn openFolderDialog() {
   role: OS 폴더 다이얼로그 열기 (앱 전용 — native open_folder invoke, 활성 빈 탭이면 replace 동반). Ctrl+Shift+O 커맨드가 쓴다 — 앱의 OS 다이얼로그 병행 통로. Ctrl+O·시작 페이지·탐색기·+ 드롭다운은 경로 입력 퀵인풋을 쓴다 (web-folder-open.md — Ctrl+O 는 모든 환경에서 경로 입력)

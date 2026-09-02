@@ -15,12 +15,14 @@ export function parentOf(path: string): string {
   return slash === -1 ? '' : path.slice(0, slash);
 }
 
+// 재사용 collator — localeCompare 는 호출마다 collator 를 만들어 수만 항목 정렬이 초 단위였다
+const collator = new Intl.Collator(undefined, { sensitivity: 'base' });
 function sortEntries(entries: DirEntry[]): DirEntry[] {
   // WHY: VS Code explorer 정렬 — 디렉토리 우선, 이후 이름순(대소문자 무시).
   //      dotfile 도 같은 규칙으로 알파벳 위치에 온다 (ls 처럼 앞으로 몰지 않는다).
   return [...entries].sort((a, b) => {
     if (a.kind !== b.kind) return a.kind === 'directory' ? -1 : 1;
-    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+    return collator.compare(a.name, b.name);
   });
 }
 
@@ -32,6 +34,11 @@ export function createFiles(backend: ThinBackend) {
     selectedPath: null as string | null,
     /** quick open 용 전체 파일 목록 */
     allFiles: [] as string[],
+    /** 루트 첫 로드 중 — 탐색기가 진행 막대를 보인다 (셸은 로드를 기다리지 않고 마운트된다) */
+    loading: true,
+    /** 자식 로드가 800ms 를 넘긴 디렉토리 — twistie 가 스피너로 바뀐다 (VS Code asyncDataTree
+     *  의 slow 상태: 빠른 로드엔 깜빡임 없이, 느린 로드엔 "걸려 있음"을 그 행에서 알린다) */
+    slowDirs: new Set<string>(),
   });
 
   async function loadChildren(node: TreeNode): Promise<void> {
@@ -45,6 +52,7 @@ export function createFiles(backend: ThinBackend) {
   async function initFiles(): Promise<void> {
     const entries = sortEntries(await backend.readDir(''));
     files.root = entries.map((e) => ({ name: e.name, path: e.path, kind: e.kind, depth: 0, children: null }));
+    files.loading = false;
     files.allFiles = await backend.listFiles();
   }
 
@@ -58,9 +66,12 @@ export function createFiles(backend: ThinBackend) {
     // WHY: 로드 완료 전 재클릭(더블클릭)이 두 번째 toggle 로 들어오면 펼침이 무효화된다 — 로드 중엔 무시
     if (loadingDirs.has(node.path)) return;
     loadingDirs.add(node.path);
+    const slowTimer = setTimeout(() => files.slowDirs.add(node.path), 800);
     try {
       await loadChildren(node);
     } finally {
+      clearTimeout(slowTimer);
+      files.slowDirs.delete(node.path);
       loadingDirs.delete(node.path);
     }
     files.expanded.add(node.path);

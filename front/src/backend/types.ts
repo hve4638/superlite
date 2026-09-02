@@ -141,7 +141,8 @@ export interface ThinBackend {
    * 연결 상태 변화 구독 (mock 은 끊길 일이 없어 미구현). 재연결 시 true — 끊김 중 놓친
    * 변경은 복구할 수 없으므로 구독자가 전체 리프레시로 재동기화해야 한다.
    */
-  onConnection?(cb: (connected: boolean) => void): void;
+  /** error: 재시도 무의미한 영구 실패의 사유 (원격 ssh 접속 실패 등) — 이때 connected=false 고정 */
+  onConnection?(cb: (connected: boolean, error?: string) => void): void;
   /**
    * 터미널 입력 배압 상태 구독 (옵셔널 — mock 은 즉시 소화라 미구현). 셸이 입력을 읽지
    * 않아 미소화 전송량이 창을 넘으면 (TerminalSession.id, true) — 이후 입력은 로컬 대기.
