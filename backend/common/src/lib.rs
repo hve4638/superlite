@@ -28,6 +28,9 @@ pub fn socket_path() -> PathBuf {
 ///    (텍스트는 deflate-raw 압축). 구버전 relay 는 0x00 프레임을 줄로 오독해 연결이 깨진다.
 /// 7: attach 에 watch=false 추가 (탐색 전용 attach — 재귀 워처 생략). 구버전 데몬은 미지
 ///    파라미터를 무시하고 원격 홈 전체에 워처를 걸어 빈 원격 세션이 조용히 무거워진다.
+/// 8: SCM 스테이징 — gitStage/gitUnstage/gitDiscard/gitLog/gitBranches/gitCheckout 추가,
+///    gitCommit 이 인덱스만 커밋, gitStatus 항목에 staged 플래그. 구버전 데몬은 새 메서드를
+///    unknown 으로 삼키고 gitCommit 이 전체 스테이징으로 동작해 부분 커밋이 조용히 깨진다.
 /// 9: 데몬→프론트 요청 통로 — 소켓 요청자의 frontRequest 를 세션 프론트에 request 이벤트로
 ///    전달하고 requestReply 로 응답을 되돌린다 + PTY 에 SUPERLIGHT_SOCK·SUPERLIGHT_SESSION 주입.
 ///    구버전 데몬은 frontRequest 를 attach 전 요청으로 거부하고 환경변수도 없어 셸 심이 조용히
