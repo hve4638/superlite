@@ -80,6 +80,7 @@ export class WsBackend implements ThinBackend {
   private fsHandler: ((changes: FsChange[], overflow: boolean) => void) | null = null;
   private connHandler: ((connected: boolean, error?: string) => void) | null = null;
   private sessionLostHandler: ((deadTerms: number[]) => void) | null = null;
+  private requestHandler: ((method: string, params: unknown) => Promise<unknown>) | null = null;
   /** 이번 연결이 재연결인가 — attach 응답(id 0)의 resumed 해석에 쓴다 */
   private isReconnect = false;
   /** dispose 됨 — 재연결 루프를 멈춘다 (세션 탭 닫기 등 의도적 종료) */
@@ -193,6 +194,10 @@ export class WsBackend implements ThinBackend {
         this.fsHandler?.(msg.changes ?? [], msg.overflow === true);
         return;
       }
+      if (msg.event === 'request') {
+        void this.handleRequest(msg.rid, String(msg.method ?? ''), msg.params);
+        return;
+      }
       if (msg.event === 'termExit') {
         // WHY: 콜백을 정리보다 먼저 — dispose(사용자 kill)가 지운 뒤 도착한 termExit 는
         //      맵에 없어 조용히 끝난다 (자연 종료에만 발화하는 계약)
@@ -291,6 +296,22 @@ export class WsBackend implements ThinBackend {
         p.reject(new Error(`payload 프레임 해석 실패: ${e instanceof Error ? e.message : e}`));
       }
     }
+  }
+
+  /**
+   * 데몬→프론트 요청 (와이어 v9) — 구독자 결과를 requestReply 로 되돌린다. 구독자 부재·throw
+   * 는 error 로. 끊김 중 답은 큐로 가는데, 데몬은 끊김 시점에 요청자에게 이미 에러를 돌려
+   * 늦은 답은 무시된다 (rid 미대응)
+   */
+  private async handleRequest(rid: unknown, method: string, params: unknown): Promise<void> {
+    let reply: Record<string, unknown>;
+    try {
+      if (!this.requestHandler) throw new Error('요청 처리기 없음');
+      reply = { rid, result: (await this.requestHandler(method, params)) ?? null };
+    } catch (e) {
+      reply = { rid, error: e instanceof Error ? e.message : String(e) };
+    }
+    this.send({ method: 'requestReply', params: reply });
   }
 
   /** 세션 탭 닫기 등 의도적 종료 — 재연결을 멈추고 연결·대기 요청을 정리한다 */
@@ -413,6 +434,10 @@ export class WsBackend implements ThinBackend {
 
   onSessionLost(cb: (deadTerms: number[]) => void): void {
     this.sessionLostHandler = cb;
+  }
+
+  onRequest(cb: (method: string, params: unknown) => Promise<unknown>): void {
+    this.requestHandler = cb;
   }
 
   createTerminal(cols: number, rows: number): TerminalSession {

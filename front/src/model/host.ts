@@ -4,7 +4,9 @@ import { WsBackend } from '../backend/ws';
 import type { ThinBackend } from '../backend/types';
 import { ctx, viewOf } from './ctx';
 import { notify } from './notifications';
+import type { SessionCtx } from './session';
 import {
+  activateSession,
   activeSessionEmpty,
   bootSession,
   configureSessions,
@@ -53,14 +55,14 @@ const backendOf = (t: { id: string; root: string | null }): ThinBackend =>
 if (injected) {
   const appBackendOf = (t: { id: string; root: string | null }): ThinBackend =>
     t.root === null ? new EmptyBackend() : new WsBackend(injected, t.id);
-  configureSessions({ kind: 'app', backendFor: appBackendOf });
+  configureSessions({ kind: 'app', backendFor: appBackendOf, onRequest: handleRequest });
   // 부팅 세션들 — native 가 initialization_script 로 목록을 주입한다 (복원이면 여럿).
   // 단일 세션 주입(__SUPERLIGHT_SESSION__)은 과도기 호환. 마지막 탭이 활성이 된다
   const list =
     injectedSessions ?? (injectedSession ? [{ id: injectedSession, name: '', root: '' }] : []);
   for (const t of list) bootSession(t, appBackendOf(t));
 } else if (params.has('ws') || tkn !== null) {
-  configureSessions({ kind: 'web', backendFor: backendOf });
+  configureSessions({ kind: 'web', backendFor: backendOf, onRequest: handleRequest });
   const folder = params.get('folder') ?? '';
   const id = genSessionId();
   const name = folder.split('/').filter((s) => s !== '').pop() ?? '';
@@ -68,6 +70,64 @@ if (injected) {
 } else {
   configureSessions({ kind: 'mock', backendFor: () => new MockBackend() });
   bootSession({ id: 'mock', name: '', root: '' }, new MockBackend());
+}
+
+/**
+ * 데몬 소켓 요청자(셸 심 `superlight …`, ticket cli-open-command)가 세션에 보낸 요청의 처리
+ * (와이어 v9). 통로의 첫 핸들러 둘 — notify(알림 표시)·open(경로 열기: 파일은 그 세션
+ * 편집기, 폴더는 폴더 열기). 이후 전용 명령은 여기에 method 를 더한다. 결과는 요청자에게
+ * 돌아가고 throw 는 에러로 돌아간다. 요청이 온 세션 탭으로 전환한다 (VS Code 가 요청한
+ * 창을 앞으로 가져오는 것과 같은 의미 — OS 수준 창 포커스는 없음)
+ */
+async function handleRequest(
+  tab: SessionTab,
+  ctx: SessionCtx,
+  method: string,
+  params: unknown,
+): Promise<unknown> {
+  const p = (typeof params === 'object' && params !== null ? params : {}) as Record<string, unknown>;
+  switch (method) {
+    case 'notify': {
+      const sev = p.severity === 'error' || p.severity === 'warning' ? p.severity : 'info';
+      notify(sev, String(p.message ?? ''));
+      return null;
+    }
+    case 'open': {
+      const abs = typeof p.path === 'string' ? p.path : '';
+      if (!abs) throw new Error('path 필요');
+      const { full, wire } = requestPath(ctx.workbench.workbench.rootPath, abs);
+      // 파일인가 — stat 은 정규 파일만 성공한다. 아니면 폴더 나열(browseDir, 절대 경로)로
+      // 확인, 그것도 실패하면 그 에러(경로 부재 등)가 요청자에게 돌아간다
+      const isFile = await ctx.backend.stat(wire).then(() => true, () => false);
+      if (!isFile) {
+        if (!ctx.backend.browseDir) throw new Error('폴더 열기 미지원');
+        await ctx.backend.browseDir(full);
+      }
+      activateSession(tab.id);
+      if (isFile) {
+        if (!(await ctx.editors.openFile(wire))) throw new Error(`열 수 없다: ${abs}`);
+        return { kind: 'file' };
+      }
+      openFolder(full); // 활성 세션 기준 원격 판정 — 방금 전환했으므로 이 세션의 호스트다
+      return { kind: 'folder' };
+    }
+    default:
+      throw new Error(`미지 요청: ${method}`);
+  }
+}
+
+/** 요청자가 준 절대 경로 → full('/' 구분 절대 경로 — 폴더 열기·browseDir 용)과 wire(파일
+ *  단건 RPC 용 — 루트 안이면 상대화, 밖이면 절대 경로 그대로. readFile/stat 은 절대 경로
+ *  허용 — OS 드롭과 같은 규칙). 드라이브 경로(Windows)만 '\\' 를 '/' 로 — unix 는 '\\' 가
+ *  파일명 문자다 */
+function requestPath(rootPath: string, abs: string): { full: string; wire: string } {
+  const win = /^[a-zA-Z]:/.test(abs);
+  const full = win ? abs.replaceAll('\\', '/') : abs;
+  const root = (win ? rootPath.replaceAll('\\', '/') : rootPath).replace(/\/+$/, '');
+  const inRoot =
+    root !== '' &&
+    (win ? full.toLowerCase().startsWith(`${root.toLowerCase()}/`) : full.startsWith(`${root}/`));
+  return { full, wire: inRoot ? full.slice(root.length + 1) : full };
 }
 
 /** 활성 세션의 백엔드 — 종전 싱글턴 이름 유지 (monaco·QuickInput·commands 가 쓴다) */

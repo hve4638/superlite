@@ -1,4 +1,4 @@
-role: 수명과 연결 — 파일 락 단독 보장, accept 루프, 유휴 grace 자진 종료, 연결당 read 루프, 세션 지속(재접속 시 터미널 이어 붙임)
+role: 수명과 연결 — 파일 락 단독 보장, accept 루프, 유휴 grace 자진 종료, 연결당 read 루프, 세션 지속(재접속 시 터미널 이어 붙임). 데몬→프론트 요청(와이어 v9)은 front 모듈 — frontRequest(attach 없이 허용, params.session 으로 대상 세션 지목)·requestReply 디스패치만 여기
 
 fn main() {
   role: IPC 확보(락 승자만 — unix 는 unlink 후 socket bind, Windows 는 named pipe 인스턴스 루프) + 유휴 감시 태스크(연결 0 이고 detach 세션도 없어야 종료) + 세션 reaper + accept 루프. --pipe 인자면 데몬 본체 대신 pipe_main 헬퍼 모드
@@ -16,13 +16,13 @@ fn wire_rel() {
   role: 와이어 상대 경로 정규화 (크레이트 공용) — Windows 산출 경로의 '\' 를 '/' 로. unix 는 '\' 가 파일명 문자라 불변
 }
 class Session {
-  role: 연결보다 오래 사는 상태 한 벌 — 터미널 맵 + 출력 sink(끊김 중 버퍼링) + root + detach 시각. attach 의 session id 가 키. sessions 맵 락 아래에서 terms 락을 잡지 않는다 (터미널 하나의 정체가 전역을 얼리지 않게)
+  role: 연결보다 오래 사는 상태 한 벌 — 터미널 맵 + 출력 sink(끊김 중 버퍼링) + root + detach 시각 + 프론트 응답 대기 요청(pending, 와이어 v9) + 자기 session id(PTY 환경변수 SUPERLIGHT_SESSION 으로 요청자에게 알린다, 익명은 None). attach 의 session id 가 키. sessions 맵 락 아래에서 terms 락을 잡지 않는다 (터미널 하나의 정체가 전역을 얼리지 않게)
 }
 fn reap_sessions() {
   role: detach 후 grace 를 넘긴 세션 회수 — 터미널 kill 후 맵에서 제거
 }
 fn handle_conn() {
-  role: 연결 수명 — 라인 프레이밍 요청 디스패치(단일 writer 태스크로 응답 직렬화 — 텍스트 줄·바이너리 payload 이중 채널 select, 응답은 id 대응이라 채널 간 순서는 계약이 아니다) + attach 1회 규칙. readFile 은 반환형(ReadOut)이 달라 일반 경로와 분리 라우팅 — Payload 는 payload_frame(0x00 매직+4B BE 길이, 와이어 v6)으로 바이너리 채널에 싣는다. attach 에 session id 가 있으면 세션 재사용(터미널 생존·버퍼 flush), 없으면 연결과 함께 죽는 익명 세션. attach 의 watch:false(와이어 v7)는 탐색 전용 — 재귀 워처를 걸지 않는다 (원격 빈 세션이 홈을 탐색만 할 때). attach 응답의 resumed 가 세션 회수 여부를 프론트에 알린다. 종료 뒷정리(detach 전환·익명 세션 터미널 kill)와 연결 카운터 감소는 drop guard — panic 에도 보장돼 유휴 종료가 막히지 않는다
+  role: 연결 수명 — 라인 프레이밍 요청 디스패치(단일 writer 태스크로 응답 직렬화 — 텍스트 줄·바이너리 payload 이중 채널 select, 응답은 id 대응이라 채널 간 순서는 계약이 아니다) + attach 1회 규칙. readFile 은 반환형(ReadOut)이 달라 일반 경로와 분리 라우팅 — Payload 는 payload_frame(0x00 매직+4B BE 길이, 와이어 v6)으로 바이너리 채널에 싣는다. attach 에 session id 가 있으면 세션 재사용(터미널 생존·버퍼 flush), 없으면 연결과 함께 죽는 익명 세션. attach 의 watch:false(와이어 v7)는 탐색 전용 — 재귀 워처를 걸지 않는다 (원격 빈 세션이 홈을 탐색만 할 때). attach 응답의 resumed 가 세션 회수 여부를 프론트에 알린다. 종료 뒷정리(detach 전환·익명 세션 터미널 kill·대기 중 요청자 요청 에러 회신)와 연결 카운터 감소는 drop guard — panic 에도 보장돼 유휴 종료가 막히지 않는다. frontRequest 는 attach 검사 밖 — 요청자 연결은 attach 없이 요청·응답만 주고받고 끊는다
 }
 fn err() {
   role: Display → String 에러 축약 (크레이트 공용)

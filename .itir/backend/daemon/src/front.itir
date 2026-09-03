@@ -1,0 +1,16 @@
+import { sink_send, Sink, SinkState } from './term'
+
+role: 데몬→프론트 요청 통로 (와이어 v9) — 소켓 요청자(셸 심, ticket cli-open-command)의 frontRequest 를 세션 프론트에 request 이벤트(rid·method·params)로 전달하고, 프론트의 requestReply(rid, result|error)를 요청자 연결에 응답으로 되돌린다. 데몬은 method·params 를 해석하지 않는다 — 범용 통로. 요청자는 attach 없이 요청만 보내고 끊는다 (attach 는 세션 sink 를 탈취하므로)
+
+// 세션별 미응답 요청 — rid → (요청자 연결 tx, 요청자 id)
+type Pending
+
+fn request() {
+  role: 세션 sink 가 Attached 일 때만 rid 발급·pending 등록 후 request 이벤트 전송(비폐기). detach 상태면 즉시 에러 — 셸 명령의 기대는 버퍼링·재접속 대기가 아니다
+}
+fn reply() {
+  role: requestReply → pending 에서 rid 를 꺼내 요청자에게 {id, result|error} 회신. 미대응 rid(늦은 답)는 무시
+}
+fn fail_all() {
+  role: 프론트 연결 소실(ConnCleanup) 시 대기 요청 전부 에러 회신 — 응답이 올 수 없다
+}

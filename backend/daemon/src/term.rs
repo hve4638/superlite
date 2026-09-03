@@ -195,7 +195,15 @@ pub(crate) fn kill_term(mut t: Term) {
     });
 }
 
-pub(crate) fn handle_term(method: &str, p: &Value, terms: &Terms, sink: &Sink, root: &Path) {
+/// session — PTY 환경변수 SUPERLIGHT_SESSION 으로 셸에 알릴 세션 id (익명 세션은 None)
+pub(crate) fn handle_term(
+    method: &str,
+    p: &Value,
+    terms: &Terms,
+    sink: &Sink,
+    root: &Path,
+    session: Option<&str>,
+) {
     let id = p["term"].as_u64().unwrap_or(0);
     match method {
         "createTerminal" => {
@@ -205,7 +213,7 @@ pub(crate) fn handle_term(method: &str, p: &Value, terms: &Terms, sink: &Sink, r
             }
             let cols = p["cols"].as_u64().unwrap_or(80) as u16;
             let rows = p["rows"].as_u64().unwrap_or(24) as u16;
-            if let Err(e) = spawn_term(id, cols, rows, root, terms.clone(), sink.clone()) {
+            if let Err(e) = spawn_term(id, cols, rows, root, session, terms.clone(), sink.clone()) {
                 let msg = json!({"event": "termData", "term": id, "data": format!("pty 생성 실패: {e}\r\n")});
                 sink_send(sink, msg.to_string(), true);
                 // code 없는 termExit = 비정상 — 프론트가 탭을 유지해 위 에러 출력을 보여준다
@@ -273,6 +281,7 @@ fn spawn_term(
     cols: u16,
     rows: u16,
     root: &Path,
+    session: Option<&str>,
     terms: Terms,
     sink: Sink,
 ) -> Result<(), String> {
@@ -289,6 +298,14 @@ fn spawn_term(
     // ConPTY 세계엔 TERM 규약이 없다 — 심어두면 Windows 태생 도구들이 오판한다
     #[cfg(unix)]
     cmd.env("TERM", "xterm-256color");
+    // 요청자(셸 심 `superlight <path>`, ticket cli-open-command)가 이 데몬·세션을 찾는 좌표
+    // (와이어 v9). SUPERLIGHT_SOCK 은 common 의 우회 변수와 같은 이름 — 셸 안에서 띄운
+    // 백엔드·심이 socket_path() 만으로 이 데몬(격리 인스턴스 포함)에 붙는다.
+    // 원격에서는 원격 데몬이 PTY 를 만드므로 자연히 원격 소켓이 된다
+    cmd.env("SUPERLIGHT_SOCK", superlight_common::socket_path().as_os_str());
+    if let Some(sid) = session {
+        cmd.env("SUPERLIGHT_SESSION", sid);
+    }
     let child = pty.slave.spawn_command(cmd).map_err(err)?;
     let mut writer = pty.master.take_writer().map_err(err)?;
     let mut reader = pty.master.try_clone_reader().map_err(err)?;

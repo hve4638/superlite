@@ -44,6 +44,9 @@ interface SessionsEnv {
   /** 탭 하나의 백엔드 연결 생성 — 환경 분기는 host.ts(조립 지점)가 주입한다
    *  (root null 인 빈 세션은 EmptyBackend — 연결을 열지 않는다) */
   backendFor: (tab: { id: string; root: string | null }) => ThinBackend;
+  /** 데몬 소켓 요청자(셸 심)가 세션에 보낸 요청의 처리기 (와이어 v9) — 어떤 요청이 있는지는
+   *  조립 지점(host.ts)이 정한다. 반환값이 요청자에게 돌아가고 throw 는 에러로 돌아간다 */
+  onRequest?: (tab: SessionTab, ctx: SessionCtx, method: string, params: unknown) => Promise<unknown>;
 }
 let env: SessionsEnv = { kind: 'mock', backendFor: () => { throw new Error('sessions 미구성'); } };
 
@@ -85,6 +88,13 @@ function addLocal(tab: SessionTab, backend?: ThinBackend): SessionCtx {
   const ctx = createSessionCtx(backend ?? env.backendFor(tab), isRemoteEmpty(tab.root));
   ctxs.set(tab.id, ctx);
   sessions.list.push({ ...tab });
+  // 요청자 요청은 그 세션의 연결로 오므로 컨텍스트에 묶어 처리기로 넘긴다 (탭은 id 로 재조회 —
+  // 이름·root 는 이후 바뀐다)
+  ctx.backend.onRequest?.((method, params) => {
+    const t = sessions.list.find((x) => x.id === tab.id);
+    if (!t || !env.onRequest) return Promise.reject(new Error(`처리기 없는 요청: ${method}`));
+    return env.onRequest(t, ctx, method, params);
+  });
   // 이름 채움 — 워크스페이스 정보가 오면 탭 라벨을 실제 이름으로 (부팅 주입 목록은 이미 이름이 있다).
   // 원격 빈 세션은 홈 이름이 오지만 라벨은 Welcome [host] 고정 (TitleBar)
   void ctx.init().then(() => {

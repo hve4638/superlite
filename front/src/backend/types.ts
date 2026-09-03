@@ -177,4 +177,11 @@ export interface ThinBackend {
    * 끊김 중에 만든 터미널은 재연결 큐 flush 로 새 세션에 살아 있으므로 명단 밖이다.
    */
   onSessionLost?(cb: (deadTerms: number[]) => void): void;
+  /**
+   * 데몬 소켓 요청자(셸 심 등)가 이 세션에 보낸 요청 구독 (와이어 v9, 옵셔널 — mock·빈
+   * 세션은 요청자가 없다). 데몬은 method·params 를 해석하지 않는다 — 어떤 요청이 있는지는
+   * 구독자의 몫. cb 의 반환값이 요청자에게 result 로, throw 는 error 로 돌아간다 (왕복).
+   * 구독이 없으면 구현체가 에러로 답한다.
+   */
+  onRequest?(cb: (method: string, params: unknown) => Promise<unknown>): void;
 }

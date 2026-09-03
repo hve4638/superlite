@@ -81,6 +81,9 @@ port ThinBackend {
   fn onSessionLost(cb) {
     role: 재연결됐지만 데몬 세션이 회수된 경우(장기 끊김) 구독 (옵셔널). cb 는 죽은 터미널의 TerminalSession.id 목록을 받는다 — 끊김 중에 만들어진 터미널은 새 세션에 살아 있으므로 전체가 아니라 명단만 정리해야 한다
   }
+  fn onRequest(cb) {
+    role: 데몬 소켓 요청자(셸 심 등, ticket cli-open-command)가 이 세션에 보낸 요청 구독 (와이어 v9, 옵셔널 — mock·빈 세션은 요청자가 없다). 데몬은 method·params 를 해석하지 않는 범용 통로 — 어떤 요청이 있는지는 구독자(host.ts 조립 지점)의 몫. cb 반환값이 요청자에게 result 로, throw 는 error 로 돌아간다 (왕복). 구독 부재는 구현체가 에러로 답한다
+  }
 }
 
 export type WorkspaceInfo

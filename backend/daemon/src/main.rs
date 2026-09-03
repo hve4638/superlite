@@ -18,7 +18,12 @@
 //! coalesce 해 {"event":"fsChanges","changes":[{path,kind}]} 로 푸시한다. 배치가 넘치면
 //! changes 대신 overflow:true — 프론트는 전체 리프레시로 대응한다.
 //!
-//! 모듈: req(RPC 요청 처리) · term(PTY) · watch(파일 감시). 이 파일은 수명과 연결만 안다.
+//! 데몬→프론트 요청(와이어 v9): 소켓 요청자의 frontRequest 를 세션 프론트에 request 이벤트로
+//! 전달하고 requestReply 를 되돌린다 (front 모듈). PTY 는 SUPERLIGHT_SOCK·SUPERLIGHT_SESSION
+//! 환경변수로 요청자가 이 데몬·세션을 찾는 좌표를 받는다.
+//!
+//! 모듈: req(RPC 요청 처리) · term(PTY) · watch(파일 감시) · front(프론트 요청 중계).
+//! 이 파일은 수명과 연결만 안다.
 //!
 //! ponytail: 같은 session id 동시 attach 는 tmux 식 탈취 (마지막 연결이 이벤트를 가져간다).
 
@@ -34,6 +39,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
+mod front;
 mod req;
 mod term;
 mod watch;
@@ -42,11 +48,16 @@ use term::{Sink, SinkState, Terms};
 
 /// 연결보다 오래 사는 상태 한 벌 — attach 의 session id 가 키.
 struct Session {
+    /// attach 의 session id — PTY 환경변수(SUPERLIGHT_SESSION)로 요청자에게 알린다.
+    /// 익명 세션은 None (요청자가 지목할 수 없다)
+    id: Option<String>,
     root: PathBuf,
     terms: Terms,
     sink: Sink,
     /// None = 연결이 붙어 있다. Some(시각) 부터 세션 grace 를 재고 넘기면 회수.
     detached_at: Mutex<Option<Instant>>,
+    /// 프론트 응답 대기 중인 요청자 요청 (와이어 v9)
+    pending: front::Pending,
 }
 
 type Sessions = Arc<Mutex<HashMap<String, Arc<Session>>>>;
@@ -292,17 +303,19 @@ fn attach_session(
         *s.detached_at.lock().unwrap() = None;
         return Ok((s.clone(), true));
     }
-    let s = Arc::new(new_session(root.to_path_buf(), tx));
+    let s = Arc::new(new_session(Some(id.to_string()), root.to_path_buf(), tx));
     map.insert(id.to_string(), s.clone());
     Ok((s, false))
 }
 
-fn new_session(root: PathBuf, tx: &UnboundedSender<String>) -> Session {
+fn new_session(id: Option<String>, root: PathBuf, tx: &UnboundedSender<String>) -> Session {
     Session {
+        id,
         root,
         terms: Terms::default(),
         sink: Arc::new(Mutex::new(SinkState::Attached(tx.clone()))),
         detached_at: Mutex::new(None),
+        pending: front::Pending::default(),
     }
 }
 
@@ -337,6 +350,9 @@ impl Drop for ConnCleanup {
             if matches!(&*sink, SinkState::Attached(cur) if cur.same_channel(&self.tx)) {
                 *sink = SinkState::Detached(VecDeque::new(), 0);
                 *s.detached_at.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+                drop(sink);
+                // 응답할 프론트가 사라졌다 — 기다리는 요청자에게 알린다 (sink 락 밖)
+                front::fail_all(&s.pending, "프론트 연결이 끊겼다");
             }
         } else {
             for (_, t) in s.terms.lock().unwrap_or_else(|e| e.into_inner()).drain() {
@@ -407,6 +423,34 @@ async fn handle_conn(
         let method = req["method"].as_str().unwrap_or("").to_string();
         match method.as_str() {
             "ping" => {} // 생존 신호 — read timeout 리셋이 목적의 전부, 응답 없음
+            // 요청자(셸 심)의 프론트 요청 (와이어 v9) — attach 없이 허용. 대상 세션은
+            // params.session 으로 지목 (PTY 환경변수 SUPERLIGHT_SESSION). 응답은 프론트의
+            // requestReply 가 올 때 front::reply 가 이 연결로 돌려준다
+            "frontRequest" => {
+                let p = &req["params"];
+                let target = p["session"]
+                    .as_str()
+                    .and_then(|sid| sessions.lock().unwrap().get(sid).cloned());
+                match target {
+                    Some(s) => front::request(
+                        &s.pending,
+                        &s.sink,
+                        &tx,
+                        req["id"].clone(),
+                        p["method"].as_str().unwrap_or(""),
+                        p["params"].clone(),
+                    ),
+                    None => {
+                        let _ = tx.send(json!({"id": req["id"], "error": "세션 없음"}).to_string());
+                    }
+                }
+            }
+            // 프론트의 요청 응답 — 이 연결의 세션에서 대기 중인 요청자에게 회신
+            "requestReply" => {
+                if let Some(s) = &cleanup.session {
+                    front::reply(&s.pending, &req["params"]);
+                }
+            }
             "attach" => {
                 // WHY: 재-attach 를 허용하면 클라이언트가 root 를 갈아끼워 safe_join 의
                 //      루트 봉쇄를 통째로 우회한다 — 연결당 한 번만
@@ -433,7 +477,7 @@ async fn handle_conn(
                                     break;
                                 }
                             },
-                            None => (Arc::new(new_session(r.clone(), &tx)), false),
+                            None => (Arc::new(new_session(None, r.clone(), &tx)), false),
                         };
                         if resumed {
                             // 배압 카운터 리셋 — 프론트도 재연결 시 0 에서 다시 센다
@@ -463,7 +507,7 @@ async fn handle_conn(
             // 터미널 계열은 입력 순서 보장이 필요해 read 루프에서 즉시 처리 (전부 논블로킹)
             "createTerminal" | "termWrite" | "termResize" | "termAck" | "disposeTerminal" => {
                 let Some(s) = &cleanup.session else { continue };
-                term::handle_term(&method, &req["params"], &s.terms, &s.sink, &s.root);
+                term::handle_term(&method, &req["params"], &s.terms, &s.sink, &s.root, s.id.as_deref());
             }
             // readFile 은 대형 응답이 바이너리 payload 프레임을 탄다 (와이어 v6) — 반환형이
             // 달라 일반 경로와 분리 라우팅
