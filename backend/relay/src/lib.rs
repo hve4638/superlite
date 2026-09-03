@@ -302,12 +302,10 @@ async fn ws_handler(
         _ => match app.roots.resolve(session.as_deref()) {
             Some(root) => to_target(root),
             None => {
-                return ws.on_upgrade(|mut sock| async move {
-                    let close = Message::Close(Some(axum::extract::ws::CloseFrame {
-                        code: 4403,
-                        reason: "unknown session".into(),
-                    }));
-                    let _ = sock.send(close).await;
+                return ws.on_upgrade(|sock| async move {
+                    use futures_util::StreamExt;
+                    let (mut tx, mut rx) = sock.split();
+                    close_with(&mut tx, &mut rx, 4403, "unknown session").await;
                 });
             }
         },
@@ -359,6 +357,35 @@ async fn read_frame(r: &mut BufReader<DaemonRead>) -> std::io::Result<Option<Dae
     }
 }
 
+/// '재시도 무의미' 를 close code 로 프론트에 — 4403(미등록 세션)·4502(접속 실패 + 사유).
+/// 코드 없는 close 는 프론트가 재연결(원격은 매번 ssh 재시도)한다. 사유는 WS close
+/// 한도(123B) 안에서 문자 경계로 자른다.
+/// WHY: Close 를 보낸 뒤 클라이언트의 Close 응답(닫기 핸드셰이크)을 기다린다 — 바로 소켓을
+///      drop 하면 Chrome 은 비정상 종료(1006)로 보고해 코드·사유가 유실되고 프론트는 무한
+///      재연결에 빠진다 (실측 2026-09-03 — node 클라이언트는 코드를 보여 줘 눈에 안 띄었다)
+async fn close_with(
+    tx: &mut (impl futures_util::Sink<Message> + Unpin),
+    rx: &mut (impl futures_util::Stream<Item = Result<Message, axum::Error>> + Unpin),
+    code: u16,
+    reason: &str,
+) {
+    use futures_util::{SinkExt, StreamExt};
+    let mut reason = reason.to_string();
+    while reason.len() > 120 {
+        reason.pop();
+    }
+    let close = Message::Close(Some(axum::extract::ws::CloseFrame { code, reason: reason.into() }));
+    let _ = tx.send(close).await;
+    let _ = tokio::time::timeout(Duration::from_secs(2), async {
+        while let Some(Ok(m)) = rx.next().await {
+            if matches!(m, Message::Close(_)) {
+                break;
+            }
+        }
+    })
+    .await;
+}
+
 /// 프론트 WS ↔ 데몬 1:1 중계 (로컬은 IPC 소켓, 원격은 ssh exec 채널의 stdio — 어느 쪽이든
 /// 내용은 불투명). 어느 쪽이 끊겨도 둘 다 정리 — 데몬 쪽 연결 drop 이 그 연결의 터미널을
 /// 정리한다 (원격은 detach 전환 — 원격 데몬의 세션 grace 가 재접속을 기다린다).
@@ -366,8 +393,10 @@ async fn read_frame(r: &mut BufReader<DaemonRead>) -> std::io::Result<Option<Dae
 /// 안전하지 않아, 종전의 단일 select 루프 구조를 쓸 수 없다.
 async fn relay(ws: WebSocket, target: Target, session: Option<String>) {
     use futures_util::{SinkExt, StreamExt};
+    let (mut ws_tx, mut ws_rx) = ws.split();
     // _child: 원격 ssh subprocess 의 수명 앵커 — relay 종료(drop)가 곧 ssh kill 이다
     let mut remote: Option<(String, bool)> = None;
+    let mut stderr_last: Option<Arc<Mutex<String>>> = None;
     let (read_half, mut write_half, root_str, _child): (
         DaemonRead,
         DaemonWrite,
@@ -395,23 +424,26 @@ async fn relay(ws: WebSocket, target: Target, session: Option<String>) {
                 Ok(v) => v,
                 Err(e) => {
                     eprintln!("backend: ssh {host} 연결 실패: {e}");
-                    // close 4502 + 사유 — 그냥 닫으면 프론트가 1초 재연결 루프에서 ssh 를
-                    // 무한 재시도하고 탐색기는 진행 막대만 돈다. 사유는 WS close 한도(123B)
-                    // 안에서 문자 경계로 자른다
-                    let mut reason = e.clone();
-                    while reason.len() > 120 {
-                        reason.pop();
-                    }
-                    let close = Message::Close(Some(axum::extract::ws::CloseFrame {
-                        code: 4502,
-                        reason: reason.into(),
-                    }));
-                    let mut ws = ws;
-                    let _ = ws.send(close).await;
+                    close_with(&mut ws_tx, &mut ws_rx, 4502, &e).await;
                     return;
                 }
             };
             let (r, w) = (child.stdout.take().unwrap(), child.stdin.take().unwrap());
+            // 헬퍼·원격 데몬의 stderr — 백엔드 로그로 흘리면서 마지막 줄을 남긴다: attach 전에
+            // 끊기면 그 줄이 곧 실패 사유다 ("데몬 기동 실패 (5초): …" 등)
+            let stderr = child.stderr.take().unwrap();
+            let last = Arc::new(Mutex::new(String::new()));
+            let (h, l) = (host.clone(), last.clone());
+            tokio::spawn(async move {
+                let mut lines = BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    eprintln!("backend: ssh {h}: {line}");
+                    if !line.trim().is_empty() {
+                        *l.lock().unwrap() = line;
+                    }
+                }
+            });
+            stderr_last = Some(last);
             remote = Some((host, browse_only));
             (Box::new(r), Box::new(w), path, Some(child))
         }
@@ -426,25 +458,69 @@ async fn relay(ws: WebSocket, target: Target, session: Option<String>) {
     }
     // 최근 폴더 기록 대상 — 원격 폴더 세션(빈 세션 제외)의 attach 성공 응답에서 데몬이
     // 돌려준 정규화 경로(rootPath)를 적는다
-    let mut record_host = remote.and_then(|(h, b)| (!b).then_some(h));
+    let record_host = remote.and_then(|(h, b)| (!b).then_some(h));
     if write_line(&mut write_half, &attach.to_string()).await.is_err() {
         return;
     }
-    let (mut ws_tx, mut ws_rx) = ws.split();
+    // 첫 프레임 = attach 응답 (데몬은 attach 전 다른 응답을 내지 않는다). 여기서 실패가
+    // 드러나면 — 데몬이 에러를 돌려주고 끊거나(경로 부재 등), 응답 전에 EOF(원격 헬퍼의
+    // 데몬 기동 실패·바이너리 실행 불가) — 그냥 닫지 않고 close 4502 + 사유로 프론트에
+    // 알린다. 종전에는 코드 없는 close 라 프론트가 1초 간격 재연결(원격은 매번 ssh)에
+    // 빠져 "Reconnecting…" 만 영원히 보였다 (2026-09-03 사용자 보고)
+    // 기다리는 동안의 프론트 요청은 그대로 데몬에 흘리고(프론트는 attach 응답을 기다리지
+    // 않고 첫 요청을 보낸다), 프론트가 끊으면(탭 닫기·페이지 이탈) 그대로 접는다 — ssh child
+    // 는 drop 으로 죽는다. read_frame 취소는 어차피 이 연결을 버리므로 무해
+    let mut reader = BufReader::new(read_half);
+    let frame = tokio::select! {
+        f = read_frame(&mut reader) => f,
+        _ = async {
+            while let Some(Ok(m)) = ws_rx.next().await {
+                match m {
+                    Message::Text(t) => {
+                        if t.as_str().contains('\n') || write_line(&mut write_half, t.as_str()).await.is_err() {
+                            break;
+                        }
+                    }
+                    Message::Close(_) => break,
+                    _ => {}
+                }
+            }
+        } => return,
+    };
+    let first = match frame {
+        Ok(Some(DaemonFrame::Line(l))) => {
+            let v: serde_json::Value = serde_json::from_str(&l).unwrap_or_default();
+            if let Some(e) = v["error"].as_str() {
+                eprintln!("backend: attach 실패 ({root_str}): {e}");
+                close_with(&mut ws_tx, &mut ws_rx, 4502, e).await;
+                return;
+            }
+            if let Some(host) = record_host {
+                if let Some(p) = v["result"]["rootPath"].as_str() {
+                    ssh::record_recent(&host, p);
+                }
+            }
+            l
+        }
+        _ => {
+            // 헬퍼 stderr 의 마지막 줄이 사유 — 아직 안 왔을 수 있으니 잠깐 기다린다
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            let last = stderr_last.map(|l| l.lock().unwrap().clone()).unwrap_or_default();
+            let reason = if last.is_empty() { "데몬이 attach 전에 연결을 끊음".to_string() } else { last };
+            eprintln!("backend: attach 전 끊김 ({root_str}): {reason}");
+            close_with(&mut ws_tx, &mut ws_rx, 4502, &reason).await;
+            return;
+        }
+    };
 
     // 데몬 → 프론트: 순차 프레임 읽기 → WS 재프레이밍 (Line→Text, Bin→Binary)
     let mut down = tokio::spawn(async move {
-        let mut reader = BufReader::new(read_half);
+        if ws_tx.send(Message::Text(first.into())).await.is_err() {
+            return;
+        }
         loop {
             match read_frame(&mut reader).await {
                 Ok(Some(DaemonFrame::Line(l))) => {
-                    if let Some(host) = record_host.take() {
-                        // 첫 줄 = attach 응답 (데몬은 attach 전 다른 응답을 내지 않는다)
-                        let v: serde_json::Value = serde_json::from_str(&l).unwrap_or_default();
-                        if let Some(p) = v["result"]["rootPath"].as_str() {
-                            ssh::record_recent(&host, p);
-                        }
-                    }
                     if ws_tx.send(Message::Text(l.into())).await.is_err() {
                         break;
                     }

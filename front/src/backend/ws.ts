@@ -237,11 +237,12 @@ export class WsBackend implements ThinBackend {
       // relay 의 close 4403 = 미등록 세션. 레지스트리에서 빠진 세션은 재연결해도 다시
       // 거부되므로 재시도를 영구히 멈춘다 (종전에는 1초 간격 무한 재연결에 빠졌다).
       // 연결 표시는 끊김으로 남긴다 — 앱이라면 곧 reconcile 이 이 백엔드째로 dispose 한다
-      // 4502 = relay 의 원격(ssh) 접속 실패, 사유 동봉 — 재연결마다 ssh 를 다시 띄우므로
-      // 자동 재시도하지 않고 사유를 UI 에 넘긴다 (재접속은 사용자 몫)
+      // 4502 = relay 의 접속 실패(ssh 접속·원격 데몬 기동·attach 실패), 사유 동봉 — 재연결해도
+      // 같은 결과(원격은 매번 ssh 를 다시 띄운다)라 자동 재시도하지 않고 사유를 UI 에 넘긴다
+      // (재접속은 사용자 몫)
       if (ev.code === 4403 || ev.code === 4502) {
         this.disposed = true;
-        const reason = ev.code === 4403 ? '세션이 등록되어 있지 않다' : ev.reason || '원격 접속 실패';
+        const reason = ev.code === 4403 ? '세션이 등록되어 있지 않다' : ev.reason || '접속 실패';
         for (const p of this.pending.values()) p.reject(new Error(reason));
         this.pending.clear();
         this.queue.length = 0;

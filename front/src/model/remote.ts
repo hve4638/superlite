@@ -1,5 +1,6 @@
 import { reactive } from '@vue/reactivity';
 import { backendApiUrl, openFolder } from './host';
+import type { OpenMode } from './sessions';
 
 /**
  * 원격 탐색기 (SSH) 모델 — 백엔드 머신의 ~/.ssh/config 호스트 목록에 superlight 자체
@@ -106,12 +107,13 @@ export function setPaneOpen(pane: 'favorite' | 'all', open: boolean): void {
 
 /** 호스트에 접속 — 경로 없는 `ssh://host` 로 원격 빈 세션(시작 페이지)을 연다. 폴더는 그
  *  세션의 '폴더 열기'가 원격을 탐색해 고른다 (VS Code "Connect to Host" 와 동일).
- *  replace=현재 탭 대체(→, "현재 창에 연결") / 새 탭(새 창 아이콘) */
-export function connectHost(host: string, replace: boolean): void {
-  openFolder(`ssh://${host}`, { replace });
+ *  mode 'replace'=현재 탭 대체(→, "현재 창에 연결") / 'new'=항상 새 탭(새 창 아이콘 — 활성
+ *  탭이 빈 세션이어도 대체하지 않는다) */
+export function connectHost(host: string, mode: OpenMode): void {
+  openFolder(`ssh://${host}`, { mode });
 }
 
 /** 최근 폴더로 바로 접속 — path 는 원격 절대 경로 */
-export function openRecent(host: string, path: string, replace: boolean): void {
-  openFolder(`ssh://${host}${path}`, { replace });
+export function openRecent(host: string, path: string, mode: OpenMode): void {
+  openFolder(`ssh://${host}${path}`, { mode });
 }

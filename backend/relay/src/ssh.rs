@@ -484,8 +484,8 @@ pub async fn pipe_conn(host: &str, info: &RemoteInfo) -> Result<Child, String> {
     let bin = ensure_remote_bin(host, info).await?;
     let mut c = ssh_cmd(host);
     c.arg(format!(r#""{bin}" --pipe"#));
-    // 원격 데몬·헬퍼 로그(stderr)는 백엔드 터미널로 — 로컬 spawn_daemon 의 로그 상속과 동일
-    c.stderr(Stdio::inherit());
+    // 헬퍼 stderr 는 relay 가 읽어 백엔드 로그로 흘리고 마지막 줄을 실패 사유로 쓴다 (lib.rs relay)
+    c.stderr(Stdio::piped());
     c.kill_on_drop(true);
     c.spawn().map_err(|e| format!("ssh 실행 실패: {e}"))
 }

@@ -14,6 +14,7 @@ import {
   openWebFolder,
   remoteHost,
   replaceAppSession,
+  type OpenMode,
   sessions,
   type SessionTab,
 } from './sessions';
@@ -169,10 +170,11 @@ export function backendApiUrl(path: string, query: Record<string, string> = {}):
  * 페이지에서 열기 흐름). 앱은 native 커맨드 open_folder_path invoke (검증·세션 등록은
  * native 소유 — sessions-changed 반향으로 탭이 생긴다), 웹은 front 세션 관리자가
  * ?folder= 연결을 하나 더 연다. mock 은 무동작.
- * opts.replace: 활성 탭이 비어 있지 않아도 대체한다 (VS Code 원격의 "현재 창에 연결"
- * 대응) — 새 탭을 만들어 활성화한 뒤 이전 탭을 닫는 순서라 빈 상태를 거치지 않는다.
- */
-export function openFolder(root: string, opts: { replace?: boolean } = {}): void {
+ * opts.mode: 'replace' 는 활성 탭이 비어 있지 않아도 대체한다 (VS Code 원격의 "현재 창에
+ * 연결" — 웹은 openWebFolder replace, 앱은 invoke 후 replaceAppSession). 'new' 는 활성 탭이
+ * 빈 세션이어도 남기고 새 탭을 더한다 (원격 탐색기의 "새 탭에 연결"). 생략은 기본 —
+ * 활성 빈 탭만 제자리 교체. */
+export function openFolder(root: string, opts: { mode?: OpenMode } = {}): void {
   // 원격 세션 안의 '폴더 열기' — 퀵인풋의 browseDir 는 원격 데몬을 탐색하므로 확정된
   // 절대 경로는 그 호스트의 경로다 (VS Code 원격 창의 Open Folder 와 동일). 세션 root 표기
   // (ssh://host/path)로 되돌려 relay 가 원격으로 해석하게 한다
@@ -184,19 +186,19 @@ export function openFolder(root: string, opts: { replace?: boolean } = {}): void
     // 빈 탭은 native 가 제자리 교체(replace id), 비어 있지 않은 탭의 대체는 invoke 뒤
     // 이전 탭을 닫는 front 뒷정리다 (native replace 는 root 없는 세션만 받는다)
     const prevId = sessions.activeId;
-    const emptyTarget = replaceTarget();
+    const emptyTarget = opts.mode === undefined ? replaceTarget() : undefined;
     // native 가 canonicalize·디렉토리 검증을 한다 — 잘못된 경로(오타·부재)는 reject 로
     // 오므로 알림으로 드러낸다 (경로 퀵인풋은 자동완성 없이도 타이핑 확정을 허용한다)
     void tauri.core
       .invoke('open_folder_path', { path: root, replace: emptyTarget })
       .then(() => {
-        if (opts.replace && emptyTarget === undefined) replaceAppSession(prevId, root);
+        if (opts.mode === 'replace' && emptyTarget === undefined) replaceAppSession(prevId, root);
       })
       .catch((e) => notify('error', `폴더를 열 수 없습니다: ${String(e)}`));
     return;
   }
   if (!(params.has('ws') || tkn !== null)) return;
-  openWebFolder(root, opts.replace ?? false);
+  openWebFolder(root, opts.mode);
 }
 
 /** OS 폴더 다이얼로그 열기 (앱 전용) — 팔레트 커맨드·퀵인풋의 두 번째 Ctrl+O 가

@@ -147,12 +147,12 @@ function basename(path: string): string {
               <span
                 class="action codicon codicon-arrow-right"
                 title="Connect in Current Tab"
-                @click.stop="connectHost(h.name, true)"
+                @click.stop="connectHost(h.name, 'replace')"
               />
               <span
                 class="action codicon codicon-empty-window"
                 title="Connect in New Tab"
-                @click.stop="connectHost(h.name, false)"
+                @click.stop="connectHost(h.name, 'new')"
               />
             </div>
           </div>
@@ -163,7 +163,7 @@ function basename(path: string): string {
               :key="p"
               class="row recent"
               :title="p"
-              @click.stop="openRecent(h.name, p, true)"
+              @click.stop="openRecent(h.name, p, 'replace')"
               @contextmenu="onRecentContextMenu($event, h, p)"
             >
               <span class="codicon type-icon codicon-folder" />
@@ -173,7 +173,7 @@ function basename(path: string): string {
                 <span
                   class="action codicon codicon-empty-window"
                   title="Open in New Tab"
-                  @click.stop="openRecent(h.name, p, false)"
+                  @click.stop="openRecent(h.name, p, 'new')"
                 />
               </div>
             </div>

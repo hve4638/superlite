@@ -154,7 +154,10 @@ async fn main() {
                     if cfg!(unix) {
                         let _ = std::fs::remove_file(&sock);
                     }
-                    eprintln!("superlight-daemon: 유휴 {grace}s — 종료");
+                    // 소켓을 지운 뒤에는 무조건 exit 까지 가야 한다 — eprintln! 은 stderr 가
+                    // 닫힌 파이프면 panic 해 여기서 멈춘다 (spawn_self_daemon 참조)
+                    use std::io::Write;
+                    let _ = writeln!(std::io::stderr(), "superlight-daemon: 유휴 {grace}s — 종료");
                     std::process::exit(0);
                 }
             }
@@ -246,11 +249,18 @@ async fn pipe_main() {
     };
     let (mut sock_r, mut sock_w) = tokio::io::split(stream);
     let (mut in_r, mut out_w) = (tokio::io::stdin(), tokio::io::stdout());
-    // 어느 방향이든 끝나면(EOF·에러) 프로세스 종료가 나머지를 정리한다
+    // 어느 방향이든 끝나면(EOF·에러) 즉시 프로세스 종료로 나머지를 정리한다.
+    // WHY: return 으로 런타임을 내리면 stdin 을 읽는 블로킹 스레드가 끝나길 기다린다 —
+    //      데몬이 먼저 끊은 경우(attach 실패) ssh 가 stdin 을 닫을 때까지 살아남고, relay 는
+    //      이 프로세스의 종료(EOF)를 기다려 서로 교착했다 (실측 2026-09-03)
     tokio::select! {
         _ = tokio::io::copy(&mut in_r, &mut sock_w) => {}
         _ = tokio::io::copy(&mut sock_r, &mut out_w) => {}
     }
+    // tokio Stdout 의 쓰기는 블로킹 스레드에서 끝난다 — flush 없이 exit 하면 데몬의 마지막
+    // 응답(attach 실패 사유)이 유실된다 (실측)
+    let _ = out_w.flush().await;
+    std::process::exit(0);
 }
 
 /// 데몬 본체 spawn (헬퍼 → 자기 자신을 인자 없이) — relay 의 spawn_daemon 과 같은 정책
@@ -258,8 +268,14 @@ fn spawn_self_daemon() {
     let Ok(bin) = std::env::current_exe() else { return };
     let mut cmd = std::process::Command::new(bin);
     // 이 프로세스의 stdout 은 ssh 채널(와이어)이다 — 상속되면 데몬 로그가 프로토콜을
-    // 오염시킨다 (데몬은 stderr 로만 쓰지만 fail-safe). stderr 는 ssh 를 타고 백엔드 로그로
+    // 오염시킨다 (데몬은 stderr 로만 쓰지만 fail-safe).
+    // WHY: stderr 도 상속하지 않는다 — 데몬은 이 헬퍼(ssh 세션)보다 오래 산다. ssh 가 끊긴
+    //      뒤 상속된 stderr 파이프에 eprintln! 하면 EPIPE 로 그 태스크가 panic 하는데, 유휴
+    //      종료 경로가 "소켓 unlink → 로그 → exit" 순이라 소켓만 지운 채 락을 쥔 프로세스가
+    //      영원히 남았다 (실측 2026-09-03: 이후 그 호스트의 모든 접속이 '데몬 기동 실패').
+    //      로그는 캐시 밑 파일로 — 실패 시 null
     cmd.stdout(std::process::Stdio::null());
+    cmd.stderr(daemon_log_file().map_or_else(std::process::Stdio::null, std::process::Stdio::from));
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
     #[cfg(windows)]
@@ -270,6 +286,15 @@ fn spawn_self_daemon() {
             let _ = child.wait();
         });
     }
+}
+
+/// 헬퍼가 띄운 데몬의 로그 파일 — 헬퍼 배치 디렉터리(relay ssh::ensure_remote_bin)와 같은
+/// 캐시 밑 `$HOME/.cache/code-superlight/daemon.log` (append)
+fn daemon_log_file() -> Option<std::fs::File> {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+    let dir = PathBuf::from(home).join(".cache").join("code-superlight");
+    std::fs::create_dir_all(&dir).ok()?;
+    std::fs::OpenOptions::new().append(true).create(true).open(dir.join("daemon.log")).ok()
 }
 
 fn acquire_lock(sock: &Path) -> Option<std::fs::File> {
@@ -394,19 +419,24 @@ async fn handle_conn(
     let (tx, mut rx) = unbounded_channel::<String>();
     let (btx, mut brx) = unbounded_channel::<Vec<u8>>();
     tokio::spawn(async move {
+        // 한쪽 채널이 닫혀도(연결 종료로 송신단 drop) 다른 쪽에 남은 응답은 다 쓰고 끝난다.
+        // WHY: 닫힌 쪽의 None 에서 바로 break 하면 attach 실패 응답처럼 종료 직전에 보낸
+        //      마지막 줄이 절반쯤 유실됐다 (두 송신단의 drop 순서 경합, 실측 2026-09-03)
+        let (mut rx_open, mut brx_open) = (true, true);
         loop {
             let ok = tokio::select! {
-                s = rx.recv() => match s {
+                s = rx.recv(), if rx_open => match s {
                     Some(mut s) => {
                         s.push('\n'); // serde_json 직렬화엔 생 개행이 없다 — 개행 = 프레임 경계
                         write_half.write_all(s.as_bytes()).await.is_ok()
                     }
-                    None => break,
+                    None => { rx_open = false; true }
                 },
-                b = brx.recv() => match b {
+                b = brx.recv(), if brx_open => match b {
                     Some(b) => write_half.write_all(&b).await.is_ok(),
-                    None => break,
+                    None => { brx_open = false; true }
                 },
+                else => break,
             };
             if !ok {
                 break;

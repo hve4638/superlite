@@ -4,10 +4,13 @@ fn main() {
   role: IPC 확보(락 승자만 — unix 는 unlink 후 socket bind, Windows 는 named pipe 인스턴스 루프) + 유휴 감시 태스크(연결 0 이고 detach 세션도 없어야 종료) + 세션 reaper + accept 루프. --pipe 인자면 데몬 본체 대신 pipe_main 헬퍼 모드
 }
 fn pipe_main() {
-  role: ssh 헬퍼 모드 — 백엔드가 `ssh host superlight-daemon --pipe` 로 원격(=이 머신)에 띄운다. 이 머신의 데몬 소켓에 접속(부재 시 자기 자신을 데몬으로 spawn)해 stdin/stdout 과 양방향 중계만 — 내용 해석 없음 (로컬 relay 의 daemon_conn+spawn 대응물, "헬퍼가 곧 원격의 데몬" 대칭의 접점). ssh 사망 = stdin EOF → 종료 → 데몬이 세션을 detach 로 돌리고 세션 grace 안의 재접속이 터미널을 이어받는다
+  role: ssh 헬퍼 모드 — 백엔드가 `ssh host superlight-daemon --pipe` 로 원격(=이 머신)에 띄운다. 이 머신의 데몬 소켓에 접속(부재 시 자기 자신을 데몬으로 spawn)해 stdin/stdout 과 양방향 중계만 — 내용 해석 없음 (로컬 relay 의 daemon_conn+spawn 대응물, "헬퍼가 곧 원격의 데몬" 대칭의 접점). ssh 사망 = stdin EOF → 종료 → 데몬이 세션을 detach 로 돌리고 세션 grace 안의 재접속이 터미널을 이어받는다. 어느 방향이든 끝나면 stdout flush 후 process::exit — 런타임 반환으로 내리면 stdin 블로킹 읽기가 끝나길 기다려 데몬이 먼저 끊은 경우(attach 실패) relay 와 교착한다
 }
 fn spawn_self_daemon() {
-  role: 헬퍼가 데몬 본체를 spawn (자기 자신, 인자 없이) — relay 의 spawn_daemon 과 같은 정책. stdout 은 null (상속되면 ssh 채널=와이어를 오염)
+  role: 헬퍼가 데몬 본체를 spawn (자기 자신, 인자 없이) — relay 의 spawn_daemon 과 같은 정책. stdout 은 null (상속되면 ssh 채널=와이어를 오염), stderr 는 daemon_log_file (ssh 세션보다 오래 사는 데몬이 끊긴 ssh 파이프에 eprintln 하면 EPIPE panic — 유휴 종료 경로가 소켓만 지운 채 락을 쥐고 남아 그 호스트의 모든 접속이 '데몬 기동 실패'가 됐다)
+}
+fn daemon_log_file() -> File? {
+  role: 헬퍼가 띄운 데몬의 로그 파일 — $HOME/.cache/code-superlight/daemon.log (append). 실패면 None (호출측이 null 로)
 }
 fn acquire_lock() {
   role: 단독 데몬 보장 — connect 검사 대신 OS 파일 락(File::try_lock, 검사→unlink→bind 는 원자적이지 않다)

@@ -289,9 +289,11 @@ function normRoot(root: string): string {
  *  같은 워크스페이스가 이미 열려 있으면 새 탭 대신 그 탭으로 포커스만 옮긴다.
  *  워크스페이스 정체성은 root 문자열이 전부다 — ssh://host/path 원격은 스킴·호스트가
  *  문자열에 포함돼 같은 경로라도 origin 이 다르면 별개 세션이 된다.
- *  replace: 확정 직전의 활성 탭을 새 탭으로 대체한다 (VS Code 원격의 "현재 창에 연결") —
- *  대상이 이미 열린 탭이라 포커스만 옮긴 경우에도 이전 탭은 닫는다. */
-export function openWebFolder(root: string, replace = false): void {
+ *  mode 'replace': 확정 직전의 활성 탭을 새 탭으로 대체한다 (VS Code 원격의 "현재 창에 연결")
+ *  — 대상이 이미 열린 탭이라 포커스만 옮긴 경우에도 이전 탭은 닫는다. 'new': 활성 탭이 빈
+ *  세션이어도 대체하지 않는다. 생략: 활성 빈 탭만 대체. */
+export type OpenMode = 'replace' | 'new';
+export function openWebFolder(root: string, mode?: OpenMode): void {
   const norm = normRoot(root);
   const prevId = sessions.activeId;
   const existing = sessions.list.find((t) => t.root !== null && normRoot(t.root) === norm);
@@ -299,12 +301,12 @@ export function openWebFolder(root: string, replace = false): void {
     // 이미 열린 워크스페이스 — 포커스만 이동, 활성 빈 탭이 있어도 그대로 남긴다 (앱과 동일).
     // 명시적 replace 만 이전 탭을 닫는다
     activateSession(existing.id);
-    if (replace && existing.id !== prevId) removeLocal(prevId);
+    if (mode === 'replace' && existing.id !== prevId) removeLocal(prevId);
     return;
   }
-  // 대체 대상: 활성 탭이 빈 세션이면(시작 페이지에서 열기 — 앱의 native replace 와 동일
-  // 의미) 또는 명시적 replace. 새 탭이 그 탭의 자리를 차지한다
-  const replaceId = replace || activeSessionEmpty() ? prevId : null;
+  // 대체 대상: 명시적 replace, 또는 기본 모드에서 활성 탭이 빈 세션(시작 페이지에서 열기 —
+  // 앱의 native replace 와 동일 의미). 새 탭이 그 탭의 자리를 차지한다
+  const replaceId = mode === 'replace' || (mode === undefined && activeSessionEmpty()) ? prevId : null;
   const id = genSessionId();
   const base = root.split('/').filter((s) => s !== '').pop() ?? root;
   addLocal({ id, name: tabLabel(root, base), root });

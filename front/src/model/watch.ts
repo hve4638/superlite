@@ -10,6 +10,7 @@ import type { FsChange, ThinBackend } from '../backend/types';
 import { ctx, viewOf } from './ctx';
 import { type createEditors, imageMime } from './editors';
 import { type createFiles, parentOf } from './files';
+import { notify } from './notifications';
 import type { createScm } from './scm';
 import type { createSearch } from './search';
 
@@ -156,6 +157,9 @@ export function createWatch(
     backend.onConnection?.((ok, error) => {
       connection.ok = ok;
       connection.error = error ?? null;
+      // 영구 실패는 알림으로도 — 원격 빈 세션(시작 페이지)은 탐색기 오류 줄이 없어 상태바
+      // 툴팁 말고는 사유를 볼 곳이 없었다
+      if (error) notify('error', `접속 실패: ${error}`);
       // 끊김 중의 fsChanges 는 이미 놓쳤다 — overflow 와 같은 전체 리프레시로 재동기화
       if (ok) fullRefresh();
     });
