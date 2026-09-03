@@ -1,5 +1,5 @@
 import type {
-  DirEntry, FileContent, FileSearchResult, FileStat, GitStatus, TerminalSession, ThinBackend,
+  DirEntry, FileContent, FileSearchResult, FileStat, GitLogItem, GitStatus, TerminalSession, ThinBackend,
   WorkspaceInfo, WriteResult,
 } from './types';
 
@@ -139,6 +139,11 @@ let HEAD: Record<string, string> = (() => {
   head['src/utils/format.ts'] = FORMAT_TS_HEAD;
   return head;
 })();
+/** 인덱스(스테이징 영역) — HEAD 에서 출발, stage/unstage 로 갱신, 커밋이 HEAD 로 승격 */
+let INDEX: Record<string, string> = { ...HEAD };
+const MOCK_LOG: GitLogItem[] = [
+  { hash: 'mock-0', subject: 'initial', author: 'fixture', date: '2 days ago' },
+];
 
 function delay<T>(v: T): Promise<T> {
   // WHY: 실제 백엔드는 네트워크 왕복이 있다. 0ms resolve 로도 마이크로태스크 경계가 생겨,
@@ -279,15 +284,19 @@ export class MockBackend implements ThinBackend {
   }
 
   gitStatus(): Promise<GitStatus> {
-    // 워킹트리(FILES) vs HEAD 를 매번 비교해 실제 git 처럼 동적으로 계산한다
+    // 실제 git 처럼 세 스냅샷을 비교한다 — HEAD vs INDEX 가 staged, INDEX vs FILES 가 unstaged
     const changes: GitStatus['changes'] = [];
-    for (const path of Object.keys(FILES)) {
-      if (!(path in HEAD)) changes.push({ path, kind: 'untracked' });
-      else if (FILES[path] !== HEAD[path]) changes.push({ path, kind: 'modified' });
-    }
-    for (const path of Object.keys(HEAD)) {
-      if (!(path in FILES)) changes.push({ path, kind: 'deleted' });
-    }
+    const diff = (from: Record<string, string>, to: Record<string, string>, staged: boolean) => {
+      for (const path of Object.keys(to)) {
+        if (!(path in from)) changes.push({ path, kind: staged ? 'added' : 'untracked', staged });
+        else if (to[path] !== from[path]) changes.push({ path, kind: 'modified', staged });
+      }
+      for (const path of Object.keys(from)) {
+        if (!(path in to)) changes.push({ path, kind: 'deleted', staged });
+      }
+    };
+    diff(HEAD, INDEX, true);
+    diff(INDEX, FILES, false);
     changes.sort((a, b) => a.path.localeCompare(b.path));
     return delay({ branch: 'main', head: `mock-${headSerial}`, dirty: changes.length > 0, changes });
   }
@@ -296,9 +305,48 @@ export class MockBackend implements ThinBackend {
     return delay(HEAD[path] ?? '');
   }
 
-  gitCommit(_message: string): Promise<void> {
-    HEAD = { ...FILES };
+  gitCommit(message: string): Promise<void> {
+    HEAD = { ...INDEX };
     headSerial += 1;
+    MOCK_LOG.unshift({ hash: `mock-${headSerial}`, subject: message, author: 'you', date: 'now' });
+    return delay(undefined);
+  }
+
+  gitStage(paths: string[]): Promise<void> {
+    for (const p of paths) {
+      if (p in FILES) INDEX[p] = FILES[p];
+      else delete INDEX[p];
+    }
+    return delay(undefined);
+  }
+
+  gitUnstage(paths: string[]): Promise<void> {
+    for (const p of paths) {
+      if (p in HEAD) INDEX[p] = HEAD[p];
+      else delete INDEX[p];
+    }
+    return delay(undefined);
+  }
+
+  gitDiscard(paths: string[], untracked: string[]): Promise<void> {
+    for (const p of paths) {
+      if (p in INDEX) FILES[p] = INDEX[p];
+      else delete FILES[p];
+    }
+    for (const p of untracked) delete FILES[p];
+    return delay(undefined);
+  }
+
+  gitLog(limit: number): Promise<GitLogItem[]> {
+    return delay(MOCK_LOG.slice(0, limit));
+  }
+
+  gitBranches(): Promise<string[]> {
+    return delay(['main', 'feature/mock']);
+  }
+
+  gitCheckout(_branch: string): Promise<void> {
+    // ponytail: mock 은 브랜치가 하나뿐 — 전환은 no-op
     return delay(undefined);
   }
 

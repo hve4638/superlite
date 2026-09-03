@@ -1,9 +1,10 @@
-import { files, visibleNodes, toggleDir, parentOf, refreshTree, collapseAll } from '../../model/files'
+import { files, visibleNodes, toggleDir, parentOf, refreshTree, collapseAll, revealPath } from '../../model/files'
 import { createFile, createDir, renameEntry, deleteEntry, undoFileOp, saveClipboardImage } from '../../model/fileops'
-import { editors, openFile, openFileAt } from '../../model/editors'
-import { scm, decorationFor, openChange, commit } from '../../model/scm'
+import { editors, activeTab, openFile, openFileAt } from '../../model/editors'
+import { scm, decorationFor, openChange, openChangeFile, commit, refreshScm, stage, unstage, requestDiscard, confirmDiscard, cancelDiscard, branches, checkout } from '../../model/scm'
 import { search, setQuery, toggleCase, toggleFileCollapsed, matchCount } from '../../model/search'
 import { workbench, openContextMenu } from '../../model/workbench'
+import { errText, notify } from '../../model/notifications'
 import { connection } from '../../model/watch'
 import { remote, refreshHosts, connectHost, openRecent, setHostState, setPaneOpen, RemoteHost } from '../../model/remote'
 import { sessions, activeSessionEmpty } from '../../model/sessions'
@@ -15,4 +16,4 @@ import { InlineNameInput } from '../widgets/InlineNameInput'
 import { ConfirmDialog } from '../widgets/ConfirmDialog'
 import { Sash } from '../widgets/Sash'
 
-role: 사이드바 뷰 — 탐색기(트리·파일 조작 UI — 고정 22px 행 가상 스크롤, 보이는 행만 DOM)·검색·SCM·원격 탐색기(FAVORITE·ALL 두 pane — 접힘은 전역 지속, ALL 은 끌어 조절; 호스트 행의 접속 액션, 우클릭 즐겨찾기·고정, 펼치면 최근 폴더 하위 행 — 클릭이 곧 접속). 뷰 상태와 동작은 각 model 모듈에 있다
+role: 사이드바 뷰 — 탐색기(트리·파일 조작 UI — 고정 22px 행 가상 스크롤, 보이는 행만 DOM, 활성 편집기 자동 reveal)·검색·SCM(Staged Changes/Changes 두 그룹 — 행·그룹 hover 액션으로 stage/unstage/discard, discard 는 ConfirmDialog, staged 가 없으면 커밋 버튼 비활성, Graph pane 은 최근 커밋 로그와 브랜치 전환 메뉴)·원격 탐색기(FAVORITE·ALL 두 pane — 접힘은 전역 지속, ALL 은 끌어 조절; 호스트 행의 접속 액션, 우클릭 즐겨찾기·고정, 펼치면 최근 폴더 하위 행 — 클릭이 곧 접속). 뷰 상태와 동작은 각 model 모듈에 있다

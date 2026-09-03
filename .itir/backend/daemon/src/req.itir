@@ -1,7 +1,7 @@
 // crate::err(main.rs) 참조 — crate:: 는 crate 루트(main.rs 디렉토리) 좌표 '.' 로 정규화된다
 import { err, wire_rel } from '.'
 
-role: RPC 요청 처리 — fs 읽기/쓰기(etag 낙관적 충돌 검사, readFile/writeFile 은 encoding=base64 이진 읽기/쓰기 겸용 — base64 읽기는 UTF-8 검증을 건너뛰고 크기 상한만 공유)·stat(내용 없는 경량 etag)·생성/이름변경/삭제, rg 검색, git 상태·커밋. readFile 의 크기 초과·이진(비 UTF-8)은 에러가 아니라 구조화된 unopenable 응답 — 프론트가 탭을 열고 안내 화면을 띄운다. readFile 대형 응답(4KB 이상)은 JSON 이 아니라 바이너리 payload(ReadOut::Payload, 와이어 v6)로 나간다 — 텍스트는 deflate-raw 압축, base64 요청분은 부풀림 없는 원본 바이트 (프레임 조립은 main.rs). 경로는 safe_join 관문 — 단 파일 단건(readFile/stat/writeFile)은 file_path 를 거쳐 절대 경로도 허용한다 (워크스페이스 밖 파일 열기, VS Code 파리티). excludes 는 VS Code 기본값 하드코딩 (설정 시스템 없음)
+role: RPC 요청 처리 — fs 읽기/쓰기(etag 낙관적 충돌 검사, readFile/writeFile 은 encoding=base64 이진 읽기/쓰기 겸용 — base64 읽기는 UTF-8 검증을 건너뛰고 크기 상한만 공유)·stat(내용 없는 경량 etag)·생성/이름변경/삭제, rg 검색, git 상태(staged/unstaged 분리)·스테이징·discard·커밋·로그·브랜치 (와이어 v8). readFile 의 크기 초과·이진(비 UTF-8)은 에러가 아니라 구조화된 unopenable 응답 — 프론트가 탭을 열고 안내 화면을 띄운다. readFile 대형 응답(4KB 이상)은 JSON 이 아니라 바이너리 payload(ReadOut::Payload, 와이어 v6)로 나간다 — 텍스트는 deflate-raw 압축, base64 요청분은 부풀림 없는 원본 바이트 (프레임 조립은 main.rs). 경로는 safe_join 관문 — 단 파일 단건(readFile/stat/writeFile)은 file_path 를 거쳐 절대 경로도 허용한다 (워크스페이스 밖 파일 열기, VS Code 파리티). excludes 는 VS Code 기본값 하드코딩 (설정 시스템 없음)
 
 // 쓰기 계열 RPC(write/create/rename/delete)의 직렬화 락 — etag 검사-쓰기 원자성의 근거
 val WRITE_LOCK
@@ -32,7 +32,13 @@ fn search() {
   role: rg --json 파싱 — 바이트 오프셋을 UTF-16 코드유닛으로 변환 (프론트 slice 좌표계)
 }
 fn git_status() {
-  role: porcelain v2 -z(NUL 구분) 파싱 — 경로 quote 없음, rename 은 새 경로만(원경로 토큰 소비), branch.oid → head (unborn 은 빈 문자열)
+  role: porcelain v2 -z -uall(NUL 구분, untracked 는 파일 단위) 파싱 — 경로 quote 없음, XY 를 인덱스(X, staged)·워킹트리(Y, unstaged) 항목으로 분리(둘 다 있으면 항목 둘, rename/copy 는 added), rename 은 새 경로만(원경로 토큰 소비), branch.oid → head (unborn 은 빈 문자열)
+}
+fn req_paths() {
+  role: 경로 배열 파라미터 — 각 경로를 safe_join 으로 검증만 하고 git 에는 상대 경로 그대로
+}
+fn git_paths_cmd() {
+  role: `git <prefix> -- <paths>` 실행 — gitStage(add -A)·gitUnstage(reset HEAD, unborn 은 rm --cached 강등) 의 공통 몸체. 빈 배열 no-op
 }
 fn run_rg() {
   role: rg 실행 — exit 1(무매치)도 성공 취급

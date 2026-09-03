@@ -12,7 +12,8 @@ const codeHost = ref<HTMLElement | null>(null);
 const diffHost = ref<HTMLElement | null>(null);
 
 const active = computed(() => props.group.tabs.find((t) => t.id === props.group.activeTabId) ?? null);
-const mode = computed(() => active.value?.kind ?? 'file');
+// 삭제 파일 탭(diff.deleted)은 diff 편집기가 아니라 코드 편집기에 HEAD 모델을 읽기 전용으로 올린다
+const mode = computed(() => (active.value?.kind === 'diff' && !active.value.deleted ? 'diff' : 'file'));
 
 let codeEditor: monaco.editor.IStandaloneCodeEditor | null = null;
 let diffEditor: monaco.editor.IStandaloneDiffEditor | null = null;
@@ -62,10 +63,23 @@ async function sync() {
   // 자체를 피해야 한다
   const doc = editors.docs.get(tab.path);
   if (doc?.unopenable !== undefined || doc?.image !== undefined) return;
+  if (tab.kind === 'diff' && tab.deleted) {
+    const ed = ensureCodeEditor();
+    const model = await originalModelFor(tab.path);
+    if (active.value?.id !== tab.id) return; // WHY: await 사이에 탭이 바뀌었을 수 있다
+    ed.updateOptions({ readOnly: true });
+    if (ed.getModel() !== model) ed.setModel(model);
+    if (editors.activeGroupId === props.group.id && editors.pendingFocus) {
+      editors.pendingFocus = false;
+      ed.focus();
+    }
+    return;
+  }
   if (tab.kind === 'file') {
     const ed = ensureCodeEditor();
     const model = modelFor(tab.path);
     model.updateOptions({ tabSize: indentOf(tab.path) });
+    ed.updateOptions({ readOnly: false }); // 삭제 파일 탭에서 돌아오는 경우
     if (ed.getModel() !== model) ed.setModel(model);
     consumeReveal(ed, tab.path);
     if (editors.activeGroupId === props.group.id) {

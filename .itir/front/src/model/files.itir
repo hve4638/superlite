@@ -33,6 +33,9 @@ export fn refreshTree() {
 export fn collapseAll() {
   role: 모두 접기 — 펼침 집합만 비운다. 로드된 자식은 유지되어 재펼침에 왕복이 없다
 }
+export fn revealPath(path) {
+  role: 조상 디렉토리를 차례로 로드·펼치고 해당 경로를 선택 — 활성 편집기 자동 reveal(VS Code explorer.autoReveal)의 몸체. 트리에 없는 경로는 닿는 데까지만
+}
 export fn visibleNodes() -> TreeNode[] {
   role: 펼침 상태 기준 평탄화 — 렌더링용
 }

@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { collapseAll, files, parentOf, refreshTree, visibleNodes, toggleDir, type TreeNode } from '../../model/files';
-import { editors, openFile } from '../../model/editors';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { collapseAll, files, parentOf, refreshTree, revealPath, visibleNodes, toggleDir, type TreeNode } from '../../model/files';
+import { activeTab, editors, openFile } from '../../model/editors';
 import { createDir, createFile, deleteEntry, renameEntry, saveClipboardImage, undoFileOp } from '../../model/fileops';
 import { decorationFor } from '../../model/scm';
 import { activeSessionEmpty } from '../../model/sessions';
@@ -254,6 +254,24 @@ onMounted(() => {
   treeRo.observe(el);
 });
 onBeforeUnmount(() => treeRo?.disconnect());
+
+// 활성 편집기를 트리에 드러낸다 (VS Code explorer.autoReveal). 탐색기가 나중에 열려도
+// immediate 로 그 시점의 활성 탭을 잡는다. 선택 행이 뷰포트 밖이면 스크롤한다
+watch(
+  () => activeTab()?.path ?? null,
+  async (path) => {
+    if (!path) return;
+    await revealPath(path);
+    const el = treeEl.value;
+    const i = rows.value.findIndex((r) => r.node?.path === path);
+    if (!el || i < 0) return;
+    const top = i * ROW_H;
+    if (top < el.scrollTop || top + ROW_H > el.scrollTop + el.clientHeight) {
+      el.scrollTop = Math.max(0, top - Math.floor(el.clientHeight / 2));
+    }
+  },
+  { immediate: true },
+);
 
 /** 행 밖(빈 영역) 클릭 판정 — 가상 스크롤 래퍼가 있어 .self 로는 잡히지 않는다 */
 function outsideRows(e: Event): boolean {

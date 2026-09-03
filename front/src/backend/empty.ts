@@ -9,6 +9,7 @@ import type {
   FileContent,
   FileSearchResult,
   FileStat,
+  GitLogItem,
   GitStatus,
   TerminalSession,
   ThinBackend,
@@ -61,6 +62,24 @@ export class EmptyBackend implements ThinBackend {
     return Promise.reject(new Error(NO_FOLDER));
   }
   gitCommit(): Promise<void> {
+    return Promise.reject(new Error(NO_FOLDER));
+  }
+  gitStage(): Promise<void> {
+    return Promise.reject(new Error(NO_FOLDER));
+  }
+  gitUnstage(): Promise<void> {
+    return Promise.reject(new Error(NO_FOLDER));
+  }
+  gitDiscard(): Promise<void> {
+    return Promise.reject(new Error(NO_FOLDER));
+  }
+  gitLog(): Promise<GitLogItem[]> {
+    return Promise.resolve([]);
+  }
+  gitBranches(): Promise<string[]> {
+    return Promise.resolve([]);
+  }
+  gitCheckout(): Promise<void> {
     return Promise.reject(new Error(NO_FOLDER));
   }
   // 생성 진입로(패널 자동 생성·커맨드)는 activeSessionEmpty 가드가 막는다 —

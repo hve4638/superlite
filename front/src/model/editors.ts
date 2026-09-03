@@ -23,6 +23,8 @@ export interface DiffTab {
   /** diff 의 modified 쪽은 워킹트리 파일 그 자체라 편집·저장이 가능하다 (VS Code 동일) */
   dirty: boolean;
   preview: boolean;
+  /** 워킹트리에서 지워진 파일 — diff 가 아니라 HEAD 내용을 읽기 전용 편집기로 보여 준다 (문서 없음, dirty 불가) */
+  deleted?: boolean;
 }
 
 export type Tab = FileTab | DiffTab;
@@ -140,7 +142,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
      *  (탭은 유지 — VS Code closeOnFileDelete=false. 앱 내 삭제는 closePathTabs 가 닫는다) */
     orphaned: new Set<string>(),
     /** 닫은 탭 복원 이력 (최근이 뒤) — Ctrl+Shift+T 가 pop 한다 */
-    recentlyClosed: [] as { kind: Tab['kind']; path: string }[],
+    recentlyClosed: [] as { kind: Tab['kind']; path: string; deleted?: boolean }[],
     /** 닫기 확인 대기 — dirty 문서의 마지막 탭을 닫을 때 Save/Don't Save/Cancel 대화상자
      *  (VS Code 동일 — 조용히 닫으면 버퍼가 몰래 살아남아 "닫았는데 편집이 남는" 혼동을 낳는다) */
     closeConfirm: null as { groupId: number; tabId: string; path: string } | null,
@@ -230,21 +232,26 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     editors.pendingReveal = { path, line };
   }
 
-  /** SCM 에서 diff 탭 열기 (original: HEAD, modified: 워킹트리) */
-  async function openDiff(path: string): Promise<void> {
-    let doc: Doc;
-    try {
-      doc = await ensureDoc(path);
-    } catch (e) {
-      notify('error', `Unable to open '${baseName(path)}': ${errText(e)}`);
-      return;
+  /** SCM 에서 diff 탭 열기 (original: HEAD, modified: 워킹트리).
+   *  deleted: 워킹트리에서 지워진 파일 — 워킹트리 문서가 없으므로 diff 대신 HEAD 내용을
+   *  읽기 전용 편집기로 보여 준다 (MonacoHost 가 분기). 문서를 만들지 않아 dirty·저장 경로가 없다 */
+  async function openDiff(path: string, opts?: { deleted?: boolean }): Promise<void> {
+    let dirty = false;
+    if (!opts?.deleted) {
+      try {
+        const doc = await ensureDoc(path);
+        dirty = doc.content !== doc.savedContent;
+      } catch (e) {
+        notify('error', `Unable to open '${baseName(path)}': ${errText(e)}`);
+        return;
+      }
     }
     const group = activeGroup();
     const id = `diff:${path}`;
     if (!group.tabs.some((t) => t.id === id)) {
       group.tabs.push({
-        kind: 'diff', id, path, name: `${baseName(path)} (Working Tree)`,
-        dirty: doc.content !== doc.savedContent, preview: false,
+        kind: 'diff', id, path, name: `${baseName(path)} (${opts?.deleted ? 'Deleted' : 'Working Tree'})`,
+        dirty, preview: false, deleted: opts?.deleted,
       });
     }
     group.activeTabId = id;
@@ -369,7 +376,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     }
     const tab = takeTab(groupId, tabId);
     if (!tab) return;
-    editors.recentlyClosed.push({ kind: tab.kind, path: tab.path });
+    editors.recentlyClosed.push({ kind: tab.kind, path: tab.path, deleted: tab.kind === 'diff' ? tab.deleted : undefined });
     if (editors.recentlyClosed.length > RECENTLY_CLOSED_CAP) editors.recentlyClosed.shift();
     collapseIfEmpty(groupId);
   }
@@ -402,7 +409,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
   async function reopenClosedEditor(): Promise<void> {
     const entry = editors.recentlyClosed.pop();
     if (!entry) return;
-    if (entry.kind === 'diff') await openDiff(entry.path);
+    if (entry.kind === 'diff') await openDiff(entry.path, { deleted: entry.deleted });
     else await openFile(entry.path);
   }
 
@@ -753,7 +760,8 @@ export const openFile = (
 ): Promise<boolean> => ctx().editors.openFile(path, opts);
 export const openFileAt = (path: string, line: number): Promise<void> =>
   ctx().editors.openFileAt(path, line);
-export const openDiff = (path: string): Promise<void> => ctx().editors.openDiff(path);
+export const openDiff = (path: string, opts?: { deleted?: boolean }): Promise<void> =>
+  ctx().editors.openDiff(path, opts);
 export const setActiveTab = (groupId: number, tabId: string): void =>
   ctx().editors.setActiveTab(groupId, tabId);
 export const pinTab = (groupId: number, tabId: string): void => ctx().editors.pinTab(groupId, tabId);

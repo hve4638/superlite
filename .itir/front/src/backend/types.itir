@@ -40,13 +40,31 @@ port ThinBackend {
     role: 파일·디렉토리 삭제 (디렉토리는 재귀, 휴지통 없음 — 안전장치는 프론트 confirm, undo 는 파일 한정)
   }
   fn gitStatus() -> GitStatus {
-    role: 브랜치 + HEAD 커밋 해시 + 워킹트리 변경 목록. head 는 diff original 캐시 무효화 키 — 앱 밖 커밋(터미널 git)도 잡는다
+    role: 브랜치 + HEAD 커밋 해시 + 변경 목록 (항목마다 staged 플래그 — 한 파일이 인덱스·워킹트리 양쪽에 변경이 있으면 항목 둘). head 는 diff original 캐시 무효화 키 — 앱 밖 커밋(터미널 git)도 잡는다
   }
   fn gitOriginalContent(path) -> content {
     role: diff 의 original 쪽 — HEAD 시점 내용
   }
   fn gitCommit(message) {
-    role: 스테이징 전체 커밋
+    role: 인덱스(staged)만 커밋 — 전체 커밋은 호출측이 gitStage 로 먼저 올린다
+  }
+  fn gitStage(paths) {
+    role: 파일들을 인덱스에 올린다 (삭제도 스테이징)
+  }
+  fn gitUnstage(paths) {
+    role: 파일들을 인덱스에서 내린다 (워킹트리 유지)
+  }
+  fn gitDiscard(paths, untracked) {
+    role: 워킹트리 변경 되돌리기 — paths 는 인덱스 내용으로 복원, untracked 는 파일 삭제. 파괴적 — 확인은 호출측
+  }
+  fn gitLog(limit) -> GitLogItem[] {
+    role: HEAD 부터 최근 커밋 (해시·제목·작성자·상대 시각). unborn/비 git 은 빈 배열
+  }
+  fn gitBranches() -> name[] {
+    role: 로컬 브랜치 이름 목록
+  }
+  fn gitCheckout(branch) {
+    role: 브랜치 전환 — 충돌 등 실패는 reject
   }
   fn createTerminal(cols, rows) -> TerminalSession {
     role: PTY 세션 생성 (동기 핸들, 데이터·셸 종료는 콜백 — onExit 는 셸 자연 종료에만 exit code 와 함께 발화(spawn 실패는 null), dispose 로 인한 정리에는 발화하지 않는다). onData 콜백은 done 을 함께 받는다 — 구독자(xterm)가 청크 처리를 마치면 호출해야 하는 렌더러 배압 신호 (WsBackend 가 ack 시점으로 쓴다, mock 은 생략)
@@ -72,6 +90,7 @@ export type FileSearchResult
 export type GitChangeKind
 export type GitChange
 export type GitStatus
+export type GitLogItem
 export type FsChange
 export type FileContent
 export type Unopenable

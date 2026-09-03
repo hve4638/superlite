@@ -14,6 +14,7 @@ import type {
   FileSearchResult,
   FileStat,
   FsChange,
+  GitLogItem,
   GitStatus,
   TerminalSession,
   ThinBackend,
@@ -378,6 +379,24 @@ export class WsBackend implements ThinBackend {
   }
   gitCommit(message: string): Promise<void> {
     return this.call('gitCommit', { message });
+  }
+  gitStage(paths: string[]): Promise<void> {
+    return this.call('gitStage', { paths });
+  }
+  gitUnstage(paths: string[]): Promise<void> {
+    return this.call('gitUnstage', { paths });
+  }
+  gitDiscard(paths: string[], untracked: string[]): Promise<void> {
+    return this.call('gitDiscard', { paths, untracked });
+  }
+  gitLog(limit: number): Promise<GitLogItem[]> {
+    return this.call('gitLog', { limit });
+  }
+  gitBranches(): Promise<string[]> {
+    return this.call('gitBranches');
+  }
+  gitCheckout(branch: string): Promise<void> {
+    return this.call('gitCheckout', { branch });
   }
 
   onFsChanges(cb: (changes: FsChange[], overflow: boolean) => void): void {

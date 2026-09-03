@@ -28,7 +28,7 @@ pub fn socket_path() -> PathBuf {
 ///    (텍스트는 deflate-raw 압축). 구버전 relay 는 0x00 프레임을 줄로 오독해 연결이 깨진다.
 /// 7: attach 에 watch=false 추가 (탐색 전용 attach — 재귀 워처 생략). 구버전 데몬은 미지
 ///    파라미터를 무시하고 원격 홈 전체에 워처를 걸어 빈 원격 세션이 조용히 무거워진다.
-const WIRE_VERSION: u32 = 7;
+const WIRE_VERSION: u32 = 8;
 
 /// 0700 전용 디렉터리를 만들어 그 안에 소켓을 둔다.
 #[cfg(unix)]

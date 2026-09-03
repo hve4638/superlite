@@ -1,10 +1,62 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
-import { scm, openChange, commit, CHANGE_LETTER, CHANGE_COLOR } from '../../model/scm';
+import {
+  scm, openChange, openChangeFile, commit, refreshScm, stage, unstage, requestDiscard, confirmDiscard,
+  cancelDiscard, branches, checkout, CHANGE_LETTER, CHANGE_COLOR, type ScmChange,
+} from '../../model/scm';
+import { openContextMenu } from '../../model/workbench';
+import { errText, notify } from '../../model/notifications';
 import FileIcon from '../widgets/FileIcon.vue';
+import ConfirmDialog from '../widgets/ConfirmDialog.vue';
 
 const inputEl = ref<HTMLTextAreaElement>();
 const placeholder = computed(() => `Message (Ctrl+Enter to commit on "${scm.branch}")`);
+
+const staged = computed(() => scm.changes.filter((c) => c.staged));
+/** staged 가 없으면 커밋 불가 — 버튼·헤더 체크·Ctrl+Enter 모두 막는다 */
+const canCommit = computed(() => staged.value.length > 0);
+const unstaged = computed(() => scm.changes.filter((c) => !c.staged));
+
+// VS Code git 확장의 discard 확인 문구 — untracked 는 파일 삭제라 DELETE 로 강조한다
+const discardMessage = computed(() => {
+  const list: ScmChange[] = scm.discardConfirm ?? [];
+  const untracked = list.filter((c) => c.kind === 'untracked').length;
+  if (list.length === 1) {
+    const c = list[0];
+    return c.kind === 'untracked'
+      ? { message: `Are you sure you want to DELETE '${c.name}'?`,
+          detail: 'This is IRREVERSIBLE! This file will be FOREVER LOST if you proceed.',
+          label: 'Delete File' }
+      : { message: `Are you sure you want to discard changes in '${c.name}'?`,
+          detail: 'This is IRREVERSIBLE! Your current working set will be FOREVER LOST.',
+          label: 'Discard Changes' };
+  }
+  return {
+    message: `Are you sure you want to discard ALL changes in ${list.length} files?`,
+    detail: untracked
+      ? `This will DELETE ${untracked} untracked file(s)! This is IRREVERSIBLE!`
+      : 'This is IRREVERSIBLE! Your current working set will be FOREVER LOST.',
+    label: 'Discard All Changes',
+  };
+});
+
+/** 브랜치 전환 — 라벨 아래에 브랜치 목록 메뉴 (현재 브랜치는 비활성) */
+async function pickBranch(e: MouseEvent): Promise<void> {
+  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  let names: string[];
+  try {
+    names = await branches();
+  } catch (err) {
+    notify('error', `Failed to list branches: ${errText(err)}`);
+    return;
+  }
+  if (!names.length) return;
+  openContextMenu(r.left, r.bottom + 4, names.map((name) => ({
+    label: name === scm.branch ? `${name} (current)` : name,
+    enabled: name !== scm.branch,
+    run: () => void checkout(name),
+  })));
+}
 
 // WHY: VS Code 는 SCM 뷰를 열면 커밋 입력에 포커스를 준다 — 레퍼런스 스크린샷의
 //      파란 focusBorder 상태가 기본 모습이므로 동일하게 재현한다.
@@ -18,9 +70,8 @@ onMounted(() => inputEl.value?.focus());
         <span class="twisty codicon codicon-chevron-down" />
         <span class="pane-title">Changes</span>
         <div class="pane-actions">
-          <span class="action codicon codicon-check" title="Commit" @click="commit()" />
-          <span class="action codicon codicon-refresh" title="Refresh" />
-          <span class="action codicon codicon-ellipsis" title="More Actions..." />
+          <span class="action codicon codicon-check" :class="{ disabled: !canCommit }" title="Commit" @click="canCommit && commit()" />
+          <span class="action codicon codicon-refresh" title="Refresh" @click="refreshScm()" />
         </div>
       </div>
       <div class="pane-body">
@@ -32,33 +83,58 @@ onMounted(() => inputEl.value?.focus());
               rows="1"
               wrap="off"
               spellcheck="false"
-              @keydown.ctrl.enter.prevent="commit()"
+              @keydown.ctrl.enter.prevent="canCommit && commit()"
             />
             <!-- WHY: textarea 네이티브 placeholder 는 ellipsis 가 안 돼서 (레퍼런스는 "··· 로 잘림) 오버레이로 그린다 -->
             <span v-if="!scm.commitMessage" class="placeholder">{{ placeholder }}</span>
-            <span class="sparkle codicon codicon-sparkle" title="Generate Commit Message with Copilot" />
           </div>
         </div>
         <div class="button-row">
-          <div class="commit-button">
-            <div class="btn-main" @click="commit()">
-              <span class="codicon codicon-check" />
-              <span>Commit</span>
-            </div>
-            <div class="btn-separator" />
-            <div class="btn-dropdown" title="More Actions...">
-              <span class="codicon codicon-chevron-down" />
-            </div>
+          <div class="commit-button" :class="{ disabled: !canCommit }" :title="canCommit ? '' : 'Stage changes to commit'" @click="canCommit && commit()">
+            <span class="codicon codicon-check" />
+            <span>Commit</span>
           </div>
         </div>
+        <template v-if="staged.length">
+          <div class="group-row">
+            <span class="twistie codicon codicon-chevron-down" />
+            <span class="group-label">Staged Changes</span>
+            <div class="group-actions">
+              <span class="action codicon codicon-remove" title="Unstage All Changes" @click.stop="unstage()" />
+            </div>
+            <span class="count-badge">{{ staged.length }}</span>
+          </div>
+          <div
+            v-for="c in staged"
+            :key="'s:' + c.path"
+            class="resource-row"
+            :title="c.path"
+            @click="openChange(c)"
+          >
+            <FileIcon :name="c.name" />
+            <span class="res-name">{{ c.name }}</span>
+            <span v-if="c.dir" class="res-desc">{{ c.dir }}</span>
+            <span class="letter" :style="{ color: `var(${CHANGE_COLOR[c.kind]})` }">
+              {{ CHANGE_LETTER[c.kind] }}
+            </span>
+            <div class="row-actions">
+              <span v-if="c.kind !== 'deleted'" class="action codicon codicon-go-to-file" title="Open File" @click.stop="openChangeFile(c)" />
+              <span class="action codicon codicon-remove" title="Unstage Changes" @click.stop="unstage([c])" />
+            </div>
+          </div>
+        </template>
         <div class="group-row">
           <span class="twistie codicon codicon-chevron-down" />
           <span class="group-label">Changes</span>
-          <span class="count-badge">{{ scm.changes.length }}</span>
+          <div class="group-actions">
+            <span class="action codicon codicon-discard" title="Discard All Changes" @click.stop="requestDiscard()" />
+            <span class="action codicon codicon-add" title="Stage All Changes" @click.stop="stage()" />
+          </div>
+          <span class="count-badge">{{ unstaged.length }}</span>
         </div>
         <div
-          v-for="c in scm.changes"
-          :key="c.path"
+          v-for="c in unstaged"
+          :key="'u:' + c.path"
           class="resource-row"
           :title="c.path"
           @click="openChange(c)"
@@ -71,8 +147,9 @@ onMounted(() => inputEl.value?.focus());
             {{ CHANGE_LETTER[c.kind] }}
           </span>
           <div class="row-actions">
-            <span class="action codicon codicon-discard" title="Discard Changes" @click.stop />
-            <span class="action codicon codicon-add" title="Stage Changes" @click.stop />
+            <span v-if="c.kind !== 'deleted'" class="action codicon codicon-go-to-file" title="Open File" @click.stop="openChangeFile(c)" />
+            <span class="action codicon codicon-discard" title="Discard Changes" @click.stop="requestDiscard([c])" />
+            <span class="action codicon codicon-add" title="Stage Changes" @click.stop="stage([c])" />
           </div>
         </div>
       </div>
@@ -82,32 +159,43 @@ onMounted(() => inputEl.value?.focus());
         <span class="twisty codicon codicon-chevron-down" />
         <span class="pane-title">Graph</span>
         <div class="pane-actions">
-          <span class="action ref-picker" title="History Item Reference">
+          <span class="action ref-picker" title="Checkout Branch..." @click="pickBranch">
             <span class="codicon codicon-git-branch" />
-            <span class="ref-picker-label">Auto</span>
+            <span class="ref-picker-label">{{ scm.branch || '(no branch)' }}</span>
           </span>
-          <span class="action codicon codicon-target" title="Reveal Current History Item" />
-          <span class="action codicon codicon-git-fetch" title="Fetch" />
-          <span class="action codicon codicon-repo-pull" title="Pull" />
-          <span class="action codicon codicon-cloud-upload" title="Publish Branch" />
-          <span class="action codicon codicon-refresh" title="Refresh" />
-          <span class="action codicon codicon-ellipsis" title="More Actions..." />
+          <span class="action codicon codicon-refresh" title="Refresh" @click="refreshScm()" />
         </div>
       </div>
       <div class="pane-body">
-        <div class="history-row">
+        <div
+          v-for="(item, i) in scm.log"
+          :key="item.hash"
+          class="history-row"
+          :class="{ current: i === 0 }"
+          :title="`${item.hash.slice(0, 7)} · ${item.author} · ${item.date}`"
+        >
           <svg class="graph" width="22" height="22" viewBox="0 0 22 22">
+            <line v-if="i > 0" x1="11" y1="0" x2="11" y2="7" />
             <circle cx="11" cy="11" r="4" />
+            <line v-if="i < scm.log.length - 1" x1="11" y1="15" x2="11" y2="22" />
           </svg>
-          <span class="hist-name">initial</span>
-          <span class="hist-desc">fixture</span>
-          <span class="ref-pill">
+          <span class="hist-name">{{ item.subject }}</span>
+          <span class="hist-desc">{{ item.author }}, {{ item.date }}</span>
+          <span v-if="i === 0 && scm.branch" class="ref-pill">
             <span class="codicon codicon-target" />
-            <span class="ref-name">main</span>
+            <span class="ref-name">{{ scm.branch }}</span>
           </span>
         </div>
       </div>
     </section>
+    <ConfirmDialog
+      v-if="scm.discardConfirm"
+      :message="discardMessage.message"
+      :detail="discardMessage.detail"
+      :confirm-label="discardMessage.label"
+      @confirm="confirmDiscard()"
+      @cancel="cancelDiscard()"
+    />
   </div>
 </template>
 
@@ -226,7 +314,7 @@ onMounted(() => inputEl.value?.focus());
 .placeholder {
   position: absolute;
   left: 6px;
-  right: 27px;
+  right: 6px;
   top: 3px;
   line-height: 18px;
   pointer-events: none;
@@ -235,64 +323,34 @@ onMounted(() => inputEl.value?.focus());
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.sparkle {
-  flex: none;
-  font-size: 16px;
-  padding: 2px;
-  margin: 0 3px 0 2px;
-  border-radius: 5px;
-  cursor: pointer;
-  color: var(--vscode-icon-foreground);
-}
-.sparkle:hover {
-  background: var(--vscode-toolbar-hoverBackground);
-}
 
-/* ── Commit 버튼 (spec: 행 36px, 버튼 24px, x 68~334, 우측 chevron 세그먼트) ── */
+/* ── Commit 버튼 (spec: 행 36px, 버튼 24px, x 68~334) ── */
 .button-row {
   padding: 6px 13px 6px 20px;
 }
 .commit-button {
   display: flex;
-  height: 24px;
-  border-radius: 2px;
-  overflow: hidden;
-  background: var(--vscode-button-background);
-  color: var(--vscode-button-foreground);
-  cursor: pointer;
-}
-.btn-main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
   align-items: center;
   justify-content: center;
   gap: 4px;
+  height: 24px;
+  border-radius: 2px;
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  cursor: pointer;
   white-space: nowrap;
 }
-.btn-main:hover {
+.commit-button:hover {
   background: var(--vscode-button-hoverBackground);
 }
-.btn-main .codicon {
-  font-size: 16px;
+/* VS Code button disabled: opacity .4, 클릭 불가 */
+.commit-button.disabled,
+.action.disabled {
+  opacity: 0.4;
+  cursor: default;
+  pointer-events: none;
 }
-.btn-separator {
-  flex: none;
-  width: 1px;
-  margin: 4px 0;
-  background: var(--vscode-button-separator);
-}
-.btn-dropdown {
-  flex: none;
-  width: 23px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.btn-dropdown:hover {
-  background: var(--vscode-button-hoverBackground);
-}
-.btn-dropdown .codicon {
+.commit-button .codicon {
   font-size: 16px;
 }
 
@@ -316,6 +374,19 @@ onMounted(() => inputEl.value?.focus());
 .group-label {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* 그룹 액션은 hover 시에만 (VS Code 동작) — 배지는 왼쪽으로 밀린다 */
+.group-actions {
+  display: none;
+  margin-left: auto;
+  align-items: center;
+  flex: none;
+}
+.group-row:hover .group-actions {
+  display: flex;
+}
+.group-row:hover .count-badge {
+  margin-left: 0;
 }
 /* monaco-count-badge: 18px 원형, 11px 텍스트 */
 .count-badge {
@@ -399,24 +470,29 @@ onMounted(() => inputEl.value?.focus());
 .graph {
   flex: none;
 }
-.graph circle {
+.graph circle,
+.graph line {
   fill: none;
   stroke: var(--vscode-scmGraph-historyItemRefColor);
   stroke-width: 2;
 }
-/* scm.css history-item-current: 이름 600 / 설명 500 */
 .hist-name {
-  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .hist-desc {
   margin-left: 0.5em;
   font-size: 0.9em;
-  font-weight: 500;
   color: var(--vscode-descriptionForeground);
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* scm.css history-item-current: 이름 600 / 설명 500 */
+.history-row.current .hist-name {
+  font-weight: 600;
+}
+.history-row.current .hist-desc {
+  font-weight: 500;
 }
 .ref-pill {
   flex: none;

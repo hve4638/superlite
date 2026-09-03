@@ -1,4 +1,4 @@
-//! RPC 요청 처리 — fs 읽기/쓰기(etag 낙관적 충돌 검사)·rg 검색·git 상태/커밋.
+//! RPC 요청 처리 — fs 읽기/쓰기(etag 낙관적 충돌 검사)·rg 검색·git 상태/스테이징/커밋/로그/브랜치.
 //! 모든 경로는 safe_join 관문을 지난다.
 
 use std::path::{Component, Path, PathBuf};
@@ -315,9 +315,61 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
                 Err(_) => Ok(json!("")),
             }
         }
+        // 인덱스(스테이징) 만 커밋 — 전체 커밋은 프론트가 gitStage(전부) 를 먼저 보낸다
         "gitCommit" => {
-            run(root, "git", &["add", "-A"]).await?;
             run(root, "git", &["commit", "-m", p["message"].as_str().unwrap_or("")]).await?;
+            Ok(Value::Null)
+        }
+        "gitStage" => git_paths_cmd(root, p, &["add", "-A", "--"]).await,
+        "gitUnstage" => {
+            // unborn HEAD 에서는 reset 이 실패한다 — 인덱스에서만 빼는 rm --cached 로 강등
+            match git_paths_cmd(root, p, &["reset", "-q", "HEAD", "--"]).await {
+                Ok(v) => Ok(v),
+                Err(_) => git_paths_cmd(root, p, &["rm", "--cached", "-r", "-q", "--"]).await,
+            }
+        }
+        // 워킹트리 변경 되돌리기 — 추적 파일은 인덱스 내용으로 복원, untracked 는 삭제.
+        // 파괴적 조작 — 확인 대화상자는 프론트 책임
+        "gitDiscard" => {
+            let tr = req_paths(root, p, "paths")?;
+            let ut = req_paths(root, p, "untracked")?;
+            if !tr.is_empty() {
+                let mut args = vec!["checkout", "-q", "--"];
+                args.extend(tr);
+                run(root, "git", &args).await?;
+            }
+            if !ut.is_empty() {
+                let mut args = vec!["clean", "-f", "-q", "--"];
+                args.extend(ut);
+                run(root, "git", &args).await?;
+            }
+            Ok(Value::Null)
+        }
+        "gitLog" => {
+            let n = p["limit"].as_u64().unwrap_or(50).to_string();
+            // %x1f 구분 — subject(%s) 는 한 줄이라 행 단위 파싱이 안전하다
+            let out = run(root, "git", &["log", "--format=%H%x1f%s%x1f%an%x1f%ar", "-n", &n]).await;
+            // unborn/비 git 은 빈 목록
+            let out = out.unwrap_or_default();
+            let items: Vec<Value> = out
+                .lines()
+                .filter_map(|l| {
+                    let mut f = l.split('\x1f');
+                    Some(json!({
+                        "hash": f.next()?, "subject": f.next()?,
+                        "author": f.next()?, "date": f.next()?,
+                    }))
+                })
+                .collect();
+            Ok(json!(items))
+        }
+        "gitBranches" => {
+            let out = run(root, "git", &["for-each-ref", "refs/heads", "--format=%(refname:short)"]).await?;
+            Ok(json!(out.lines().collect::<Vec<_>>()))
+        }
+        "gitCheckout" => {
+            let name = p["branch"].as_str().ok_or("branch 필요")?;
+            run(root, "git", &["checkout", "-q", name]).await?;
             Ok(Value::Null)
         }
         _ => Err(format!("unknown method: {method}")),
@@ -372,7 +424,8 @@ async fn search(root: &Path, p: &Value) -> Result<Value, String> {
 
 async fn git_status(root: &Path) -> Result<Value, String> {
     // WHY: -z(NUL 구분)라야 경로가 quote 없이 원문 그대로 나온다 — 비ASCII·따옴표·제어문자 모두.
-    let out = run(root, "git", &["status", "--porcelain=v2", "--branch", "-z"]).await?;
+    // -uall: 신규 디렉토리를 'dir/' 한 줄이 아니라 파일 단위로 — 파일별 stage/discard 의 단위
+    let out = run(root, "git", &["status", "--porcelain=v2", "--branch", "-uall", "-z"]).await?;
     let mut branch = String::new();
     let mut head = String::new();
     let mut changes = Vec::new();
@@ -387,17 +440,11 @@ async fn git_status(root: &Path) -> Result<Value, String> {
             head = if o == "(initial)" { String::new() } else { o.to_string() };
             continue;
         }
-        let (kind, path) = if let Some(rest) = entry.strip_prefix("? ") {
-            ("untracked", rest.to_string())
+        if let Some(rest) = entry.strip_prefix("? ") {
+            changes.push(json!({"path": rest, "kind": "untracked", "staged": false}));
         } else if entry.starts_with("1 ") || entry.starts_with("2 ") {
-            let xy = &entry[2..4];
-            let kind = if xy.contains('A') {
-                "added"
-            } else if xy.contains('D') {
-                "deleted"
-            } else {
-                "modified"
-            };
+            // XY: X 는 인덱스(staged) 쪽, Y 는 워킹트리(unstaged) 쪽 — 둘 다 있으면 두 항목
+            let xy = entry[2..4].as_bytes();
             // porcelain v2: '1' 은 9번째 필드부터 경로, '2'(rename) 는 score 가 껴서 10번째.
             // -z 의 rename 은 원경로가 다음 NUL 토큰으로 이어진다 — 새 경로만 취하고 소비한다.
             let n = if entry.starts_with("1 ") { 9 } else { 10 };
@@ -405,11 +452,17 @@ async fn git_status(root: &Path) -> Result<Value, String> {
             if entry.starts_with("2 ") {
                 entries.next();
             }
-            (kind, path)
-        } else {
-            continue;
-        };
-        changes.push(json!({"path": path, "kind": kind}));
+            for (i, staged) in [(0usize, true), (1, false)] {
+                let kind = match xy[i] {
+                    b'.' => continue,
+                    // rename/copy 는 인덱스에만 생긴다 — 새 경로가 added 로 보이는 것이 자연스럽다
+                    b'A' | b'R' | b'C' => "added",
+                    b'D' => "deleted",
+                    _ => "modified",
+                };
+                changes.push(json!({"path": path, "kind": kind, "staged": staged}));
+            }
+        }
     }
     Ok(json!({"branch": branch, "head": head, "dirty": !changes.is_empty(), "changes": changes}))
 }
@@ -476,6 +529,30 @@ async fn run(root: &Path, bin: &str, args: &[&str]) -> Result<String, String> {
 
 fn req_path(p: &Value) -> Result<&str, String> {
     p["path"].as_str().ok_or_else(|| "path 필요".into())
+}
+
+/// 경로 배열 파라미터 — 각 경로를 safe_join 으로 검증만 하고 git 에는 상대 경로를 그대로 넘긴다
+fn req_paths<'a>(root: &Path, p: &'a Value, key: &str) -> Result<Vec<&'a str>, String> {
+    let arr = p[key].as_array().ok_or_else(|| format!("{key} 필요"))?;
+    let mut out = Vec::with_capacity(arr.len());
+    for v in arr {
+        let path = v.as_str().ok_or_else(|| format!("{key}: 문자열 필요"))?;
+        safe_join(root, path)?;
+        out.push(path);
+    }
+    Ok(out)
+}
+
+/// `git <prefix...> -- <paths...>` — paths 파라미터 검증 후 실행. 빈 배열이면 no-op
+async fn git_paths_cmd(root: &Path, p: &Value, prefix: &[&str]) -> Result<Value, String> {
+    let paths = req_paths(root, p, "paths")?;
+    if paths.is_empty() {
+        return Ok(Value::Null);
+    }
+    let mut args = prefix.to_vec();
+    args.extend(paths);
+    run(root, "git", &args).await?;
+    Ok(Value::Null)
 }
 
 /// 루트 이탈 방지 — 렉시컬 검사에 더해 심링크를 해소한 실제 경로가 루트 안인지 확인한다.

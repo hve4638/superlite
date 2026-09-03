@@ -39,6 +39,16 @@ export type GitChangeKind = 'modified' | 'untracked' | 'deleted' | 'added';
 export interface GitChange {
   path: string;
   kind: GitChangeKind;
+  /** true 면 인덱스(staged) 쪽 변경. 한 파일이 staged·unstaged 양쪽에 있으면 항목이 둘이다 */
+  staged: boolean;
+}
+
+export interface GitLogItem {
+  hash: string;
+  subject: string;
+  author: string;
+  /** 상대 시각 문자열 (git %ar — "3 hours ago") */
+  date: string;
 }
 
 export interface GitStatus {
@@ -129,8 +139,20 @@ export interface ThinBackend {
   gitStatus(): Promise<GitStatus>;
   /** HEAD 시점 파일 내용 (diff 뷰의 original 쪽). untracked 면 빈 문자열. */
   gitOriginalContent(path: string): Promise<string>;
-  /** 전체 변경을 커밋 (git add -A && git commit). 성공 후 gitStatus 는 clean 이 된다. */
+  /** 인덱스(staged)만 커밋. 전체 커밋은 호출측이 gitStage 로 먼저 올린다 (VS Code smart commit). */
   gitCommit(message: string): Promise<void>;
+  /** 파일들을 인덱스에 올린다 (삭제도 스테이징). 빈 배열은 no-op */
+  gitStage(paths: string[]): Promise<void>;
+  /** 파일들을 인덱스에서 내린다 (워킹트리는 그대로) */
+  gitUnstage(paths: string[]): Promise<void>;
+  /** 워킹트리 변경 되돌리기 — paths 는 인덱스 내용으로 복원, untracked 는 파일 삭제. 파괴적 — 확인은 호출측 */
+  gitDiscard(paths: string[], untracked: string[]): Promise<void>;
+  /** HEAD 부터 최근 커밋 목록 (unborn/비 git 은 빈 배열) */
+  gitLog(limit: number): Promise<GitLogItem[]>;
+  /** 로컬 브랜치 이름 목록 */
+  gitBranches(): Promise<string[]>;
+  /** 브랜치 전환 (git checkout). 충돌 등 실패는 reject */
+  gitCheckout(branch: string): Promise<void>;
   createTerminal(cols: number, rows: number): TerminalSession;
   /**
    * 파일시스템 변경 푸시 구독 (외부 편집·터미널 작업 반영). overflow 면 changes 는 비어

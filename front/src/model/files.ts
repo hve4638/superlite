@@ -150,6 +150,18 @@ export function createFiles(backend: ThinBackend) {
   }
 
   /** 현재 펼침 상태 기준 flat 목록 (가상 스크롤 없이 단순 렌더) */
+  /** 경로를 트리에 드러낸다 — 조상 디렉토리를 차례로 로드·펼치고 선택한다 (VS Code explorer.autoReveal).
+   *  트리에 없는 경로(files.exclude·워크스페이스 밖)는 닿는 데까지만 펼치고 만다 */
+  async function revealPath(path: string): Promise<void> {
+    const parts = path.split('/');
+    for (let i = 1; i < parts.length; i++) {
+      const node = findNode(parts.slice(0, i).join('/'));
+      if (!node || node.kind !== 'directory') return;
+      if (!files.expanded.has(node.path)) await toggleDir(node);
+    }
+    if (findNode(path)) files.selectedPath = path;
+  }
+
   function visibleNodes(): TreeNode[] {
     const out: TreeNode[] = [];
     const walk = (nodes: TreeNode[]) => {
@@ -164,7 +176,7 @@ export function createFiles(backend: ThinBackend) {
 
   return {
     files, initFiles, toggleDir, refreshDir, loadedDirPaths,
-    refreshAllFiles, refreshTree, collapseAll, visibleNodes,
+    refreshAllFiles, refreshTree, collapseAll, visibleNodes, revealPath,
   };
 }
 
@@ -179,3 +191,4 @@ export const refreshAllFiles = (): Promise<void> => ctx().files.refreshAllFiles(
 export const refreshTree = (): Promise<void> => ctx().files.refreshTree();
 export const collapseAll = (): void => ctx().files.collapseAll();
 export const visibleNodes = (): TreeNode[] => ctx().files.visibleNodes();
+export const revealPath = (path: string): Promise<void> => ctx().files.revealPath(path);
