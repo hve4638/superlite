@@ -22,7 +22,7 @@ fn reap_sessions() {
   role: detach 후 grace 를 넘긴 세션 회수 — 터미널 kill 후 맵에서 제거
 }
 fn handle_conn() {
-  role: 연결 수명 — 라인 프레이밍 요청 디스패치(단일 writer 태스크로 응답 직렬화 — 텍스트 줄·바이너리 payload 이중 채널 select, 응답은 id 대응이라 채널 간 순서는 계약이 아니다) + attach 1회 규칙. readFile 은 반환형(ReadOut)이 달라 일반 경로와 분리 라우팅 — Payload 는 payload_frame(0x00 매직+4B BE 길이, 와이어 v6)으로 바이너리 채널에 싣는다. attach 에 session id 가 있으면 세션 재사용(터미널 생존·버퍼 flush), 없으면 연결과 함께 죽는 익명 세션. attach 의 watch:false(와이어 v7)는 탐색 전용 — 재귀 워처를 걸지 않는다 (원격 빈 세션이 홈을 탐색만 할 때). attach 응답의 resumed 가 세션 회수 여부를 프론트에 알린다. 종료 뒷정리(detach 전환·익명 세션 터미널 kill·대기 중 요청자 요청 에러 회신)와 연결 카운터 감소는 drop guard — panic 에도 보장돼 유휴 종료가 막히지 않는다. frontRequest 는 attach 검사 밖 — 요청자 연결은 attach 없이 요청·응답만 주고받고 끊는다
+  role: 연결 수명 — 라인 프레이밍 요청 디스패치(단일 writer 태스크로 응답 직렬화 — 텍스트 줄·바이너리 payload 이중 채널 select, 응답은 id 대응이라 채널 간 순서는 계약이 아니다) + attach 1회 규칙. readFile 은 반환형(ReadOut)이 달라 일반 경로와 분리 라우팅 — Payload 는 payload_frame(0x00 매직+4B BE 길이, 와이어 v6)으로 바이너리 채널에 싣는다. attach 에 session id 가 있으면 세션 재사용(터미널 생존·버퍼 flush), 없으면 연결과 함께 죽는 익명 세션. attach 의 watch:false(와이어 v7)는 탐색 전용 — 재귀 워처를 걸지 않는다 (원격 빈 세션이 홈을 탐색만 할 때). attach 응답의 resumed 가 세션 회수 여부를 프론트에 알린다. adoptTerminal(와이어 v10) — 같은 root 의 다른 세션이 소유한 터미널을 이 연결의 세션으로 옮긴다 (출처 세션 Arc 만 꺼내고 sessions 락을 놓은 뒤 term::adopt — 다른 창으로 끌어 옮긴 탭). 응답 있는 요청. 종료 뒷정리(detach 전환·익명 세션 터미널 kill·대기 중 요청자 요청 에러 회신)와 연결 카운터 감소는 drop guard — panic 에도 보장돼 유휴 종료가 막히지 않는다. frontRequest 는 attach 검사 밖 — 요청자 연결은 attach 없이 요청·응답만 주고받고 끊는다
 }
 fn err() {
   role: Display → String 에러 축약 (크레이트 공용)

@@ -1,7 +1,10 @@
-import { terminals, createTerminal, disposeTerminal, setActiveTerminal } from '../../model/terminal'
-import { allTerminals } from '../../model/sessions'
+import { terminals, createTerminal, disposeTerminal, setActiveTerminal, setTerminalSerializer } from '../../model/terminal'
+import { allTerminals, activeSessionEmpty, multiWindow, sessionRoot, sessions, detachTerminal, requestTabsMove, DND_TERMINAL } from '../../model/sessions'
+import { windowLabel } from '../../model/window'
+import { notify } from '../../model/notifications'
+import { pointerOutside } from '../dndUtil'
 import { isWorkbenchChord } from '../../model/commands'
 import { togglePanel } from '../../model/workbench'
 import { MONO_FONT_FAMILY, TERMINAL_FONT_SIZE, TERMINAL_LINE_HEIGHT } from '../../theme/fonts'
 
-role: 하단 패널 — 터미널 탭과 xterm 렌더링. PTY 수명주기는 model/terminal 이 소유
+role: 하단 패널 — 터미널 탭과 xterm 렌더링. PTY 수명주기는 model/terminal 이 소유. 창 이동(앱): 탭 행·제목 라벨을 끌어 창 밖(새 창)·다른 창(같은 root 세션)으로 옮긴다 — 출처·드롭 판정은 termDnd.ts 공유 모듈, xterm 버퍼 직렬화(SerializeAddon)는 TerminalPane 이 model 에 등록하고 넘어온 버퍼(restoreBuffer)는 xterm 을 열 때 먼저 그린다

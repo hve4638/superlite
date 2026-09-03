@@ -1,6 +1,6 @@
 import { workbench, openContextMenu, closeContextMenu, closeQuickInput, showViewlet, toggleSideBar, togglePanel } from '../model/workbench'
-import { inApp, appWindow, minimizeWindow, toggleMaximizeWindow, closeWindow } from '../model/window'
-import { sessions, sessionsEnabled, activateSession, closeSession, addEmptySession, browseBackend, moveSession, renameSession, isRemoteEmpty, remoteHost, SessionTab } from '../model/sessions'
+import { inApp, appWindow, minimizeWindow, toggleMaximizeWindow, closeWindow, windowLabel } from '../model/window'
+import { sessions, sessionsEnabled, activateSession, closeSession, addEmptySession, browseBackend, moveSession, renameSession, isRemoteEmpty, remoteHost, SessionTab, multiWindow, detachSession, detachSessionNearby, requestSessionMove, moveSessionToWindow, listWindows, DND_SESSION } from '../model/sessions'
 import { openFolder, openFolderDialog, openRootDefault } from '../model/host'
 import { editors, activeTab, openFile, indentOf, languageLabel, baseName, base64Bytes, confirmCloseSave, confirmCloseDiscard, confirmCloseCancel } from '../model/editors'
 import { files } from '../model/files'
@@ -20,4 +20,4 @@ import { Sash } from './widgets/Sash'
 import { ConflictToast } from './widgets/ConflictToast'
 import { NotificationToasts } from './widgets/NotificationToasts'
 
-role: Vue 표피 계층 — 상태·동작은 전부 model 에 있고 여기는 렌더링과 이벤트 연결만. 셸(타이틀바·액티비티바·사이드바·상태바)과 오버레이(QuickInput·ContextMenu)
+role: Vue 표피 계층 — 상태·동작은 전부 model 에 있고 여기는 렌더링과 이벤트 연결만. 셸(타이틀바·액티비티바·사이드바·상태바)과 오버레이(QuickInput·ContextMenu). 타이틀바 세션 탭의 창 이동(앱): 창 밖 드롭 = 새 창(detachSession — dragend 에서 dropEffect none + 포인터 창 밖 판정, dndUtil.pointerOutside), 다른 창 스트립 드롭 = 그 창이 출처에 requestSessionMove, 우클릭 메뉴 Move to New Window / Move to Window … (창 간 DnD 미동작 환경의 대체 경로)

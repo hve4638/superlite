@@ -8,6 +8,22 @@ export interface TerminalInstance {
   id: number;
   title: string;
   session: TerminalSession;
+  /** 다른 창에서 넘어온 xterm 버퍼(직렬화) — TerminalPane 이 xterm 을 열 때 먼저 그린다 */
+  restoreBuffer?: string;
+}
+
+/** 창 이동 핸드오프의 터미널 한 개 — term 은 백엔드(데몬) 쪽 id, buffer 는 xterm 직렬화 */
+export interface TerminalSnapshot {
+  term: number;
+  title: string;
+  buffer: string;
+}
+
+// xterm 버퍼 직렬화 seam — TerminalPane 이 등록한다 (model 은 xterm 을 모른다).
+// 세션 공용 슬롯 — 능력이지 세션 상태가 아니다 (editors 의 applyExternalEdit 과 같은 성격)
+let serializeBuffer: ((id: number) => string | null) | null = null;
+export function setTerminalSerializer(fn: (id: number) => string | null): void {
+  serializeBuffer = fn;
 }
 
 // WHY: 페이지 전역 카운터 — 터미널 id 가 세션을 넘어 유일해야 TerminalPane 의 xterm
@@ -27,8 +43,13 @@ export function createTerminals(backend: ThinBackend, workbenchM: ReturnType<typ
   });
 
   function createTerminal(): TerminalInstance {
-    const session = backend.createTerminal(80, 24);
-    const inst: TerminalInstance = { id: nextId++, title: 'bash', session };
+    return register(backend.createTerminal(80, 24), 'bash');
+  }
+
+  /** 목록 등록 + 활성화 — 생성과 인수(adopt)가 공유한다 */
+  function register(session: TerminalSession, title: string, restoreBuffer?: string): TerminalInstance {
+    const inst: TerminalInstance = { id: nextId++, title, session };
+    if (restoreBuffer) inst.restoreBuffer = restoreBuffer;
     // 셸이 스스로 종료(exit·crash)하면 탭도 닫는다 (VS Code 기본 동작). 실제 종료 코드가
     // 있으면(≠ null) 셸이 떴다는 뜻이라 코드와 무관하게 닫는다 — exit·Ctrl-D 는 $? 를
     // 물려받으므로 code 0 만 닫으면 실패한 명령 직후의 정상 종료가 유령 탭으로 남는다.
@@ -41,6 +62,42 @@ export function createTerminals(backend: ThinBackend, workbenchM: ReturnType<typ
     terminals.list.push(inst);
     terminals.activeId = inst.id;
     return inst;
+  }
+
+  function snapshotOf(t: TerminalInstance): TerminalSnapshot {
+    return { term: t.session.id, title: t.title, buffer: serializeBuffer?.(t.id) ?? '' };
+  }
+
+  /** 창 이동 핸드오프용 스냅샷 — 데몬 쪽 term id·제목·xterm 버퍼. id 를 주면 그 하나만 */
+  function snapshot(id?: number): TerminalSnapshot[] {
+    return terminals.list.filter((t) => id === undefined || t.id === id).map(snapshotOf);
+  }
+
+  /** 목록에서 빼되 데몬 터미널은 죽이지 않는다 — 다른 창의 세션이 이어받는다 (release).
+   *  나머지 뒷정리(활성 이양·마지막이면 패널 닫기)는 dispose 와 같다 */
+  function releaseTerminal(id: number): void {
+    const idx = terminals.list.findIndex((t) => t.id === id);
+    if (idx === -1) return;
+    const inst = terminals.list[idx];
+    inst.session.release?.();
+    inputBlocked.delete(inst.session.id);
+    terminals.list.splice(idx, 1);
+    if (terminals.activeId === id) {
+      terminals.activeId = terminals.list[terminals.list.length - 1]?.id ?? 0;
+    }
+    if (terminals.list.length === 0 && workbench.panelVisible) togglePanel();
+  }
+
+  /** 다른 창에서 넘어온 터미널 인수 — from 이 없으면 같은 세션(id 재-attach)의 기존 터미널,
+   *  있으면 같은 root 의 다른 세션 것을 데몬에서 옮겨 받는다 (와이어 v10). 백엔드가 인수를
+   *  지원하지 않으면(mock·empty) 무동작. 받은 터미널이 있으면 패널을 보인다 */
+  function adoptTerminals(snaps: TerminalSnapshot[], from?: string): void {
+    if (!backend.adoptTerminal) return;
+    for (const s of snaps) {
+      const session = backend.adoptTerminal(from ? { from: { session: from, term: s.term } } : { term: s.term });
+      register(session, s.title, s.buffer);
+    }
+    if (snaps.length > 0 && !workbench.panelVisible) togglePanel();
   }
 
   function disposeTerminal(id: number): void {
@@ -86,7 +143,7 @@ export function createTerminals(backend: ThinBackend, workbenchM: ReturnType<typ
     notify('warning', 'Terminal sessions were lost while disconnected');
   });
 
-  return { terminals, createTerminal, disposeTerminal, setActiveTerminal };
+  return { terminals, createTerminal, disposeTerminal, setActiveTerminal, snapshot, releaseTerminal, adoptTerminals };
 }
 
 // ---- 활성 세션 전달 shim

@@ -26,6 +26,10 @@
 //! 이 파일은 수명과 연결만 안다.
 //!
 //! ponytail: 같은 session id 동시 attach 는 tmux 식 탈취 (마지막 연결이 이벤트를 가져간다).
+//!
+//! 터미널 이동 (와이어 v10): adoptTerminal {from, fromTerm, term} — 같은 root 의 다른 세션이
+//! 소유한 터미널을 이 연결의 세션으로 옮긴다 (에디터·터미널 탭을 다른 창으로 끌어 옮기는
+//! app-tab-detach-window). 응답이 있는 요청이다 — 프론트가 완료 후 화면을 이어 그린다.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -508,6 +512,35 @@ async fn handle_conn(
             "createTerminal" | "termWrite" | "termResize" | "termAck" | "disposeTerminal" => {
                 let Some(s) = &cleanup.session else { continue };
                 term::handle_term(&method, &req["params"], &s.terms, &s.sink, &s.root, s.id.as_deref());
+            }
+            // 세션 간 터미널 이동 (와이어 v10) — 출처 세션은 맵에서 Arc 만 꺼내고 락을 놓은 뒤
+            // 옮긴다 (sessions → terms 락 중첩을 만들지 않는다). 같은 root 사이에서만 —
+            // 셸 cwd·와이어 경로가 root 기준이라 다른 root 로 옮기면 의미가 깨진다
+            "adoptTerminal" => {
+                let Some(s) = &cleanup.session else {
+                    // 응답 있는 요청 — 무응답이면 프론트 프로미스가 영구 대기한다
+                    let _ = tx.send(json!({"id": req["id"], "error": "attach 전 요청"}).to_string());
+                    continue;
+                };
+                let p = &req["params"];
+                let out = match (p["from"].as_str(), p["fromTerm"].as_u64(), p["term"].as_u64()) {
+                    (Some(from), Some(from_term), Some(term)) => {
+                        let src = sessions.lock().unwrap().get(from).cloned();
+                        match src {
+                            Some(src) if src.root == s.root => {
+                                term::adopt(&src.terms, from_term, &s.terms, term, &s.sink)
+                            }
+                            Some(_) => Err("세션 root 불일치".to_string()),
+                            None => Err("출처 세션 없음".to_string()),
+                        }
+                    }
+                    _ => Err("잘못된 인자".to_string()),
+                };
+                let msg = match out {
+                    Ok(()) => json!({"id": req["id"], "result": {"ok": true}}),
+                    Err(e) => json!({"id": req["id"], "error": e}),
+                };
+                let _ = tx.send(msg.to_string());
             }
             // readFile 은 대형 응답이 바이너리 payload 프레임을 탄다 (와이어 v6) — 반환형이
             // 달라 일반 경로와 분리 라우팅

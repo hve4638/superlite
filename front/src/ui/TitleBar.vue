@@ -7,6 +7,7 @@ import {
   minimizeWindow,
   toggleMaximizeWindow,
   closeWindow,
+  windowLabel,
 } from '../model/window';
 import {
   sessions,
@@ -18,8 +19,16 @@ import {
   renameSession,
   isRemoteEmpty,
   remoteHost,
+  multiWindow,
+  detachSession,
+  detachSessionNearby,
+  requestSessionMove,
+  moveSessionToWindow,
+  listWindows,
+  DND_SESSION,
   type SessionTab,
 } from '../model/sessions';
+import { pointerOutside } from './dndUtil';
 
 // 같은 이름(루트 basename)의 세션이 여럿이면 부모 디렉토리 힌트로 구분한다 (에디터 탭과 같은 규칙)
 const descriptions = computed(() => {
@@ -61,43 +70,103 @@ function openAddMenu(e: MouseEvent): void {
 }
 
 // 세션 탭 드래그 순서 이동 — 세션 탭끼리만 오가는 로컬 상태 (에디터 탭 DnD 와 무관).
-// dropIndex 는 표시 목록 기준 삽입 인덱스 — 삽입선 표시와 드롭 위치에 쓴다
+// dropIndex 는 표시 목록 기준 삽입 인덱스 — 삽입선 표시와 드롭 위치에 쓴다.
+// foreign = 다른 창에서 끌고 온 세션 탭 (dragover 중엔 dataTransfer 타입만 읽을 수 있다 —
+// 데이터는 drop 에서). 삽입선은 둘 다 같은 규칙으로 그린다
 const dragId = ref<string | null>(null);
 const dropIndex = ref<number | null>(null);
+const foreign = ref(false);
+/** 새 창의 타이틀바 탭(35px)이 포인터 아래 오도록 창을 올리는 오프셋 */
+const TAB_GRAB_Y = 17;
+const dragging = computed(() => dragId.value !== null || foreign.value);
+
+function isForeign(e: DragEvent): boolean {
+  return dragId.value === null && multiWindow() && (e.dataTransfer?.types.includes(DND_SESSION) ?? false);
+}
 
 function onTabDragStart(e: DragEvent, tab: SessionTab): void {
   // setData 는 Firefox 의 드래그 시작 요건 — 실제 식별은 dragId 로 한다
   e.dataTransfer?.setData('text/plain', tab.id);
+  // 다른 창의 탭 스트립이 출처를 알 수 있게 — 창 label + 세션 id
+  if (multiWindow()) e.dataTransfer?.setData(DND_SESSION, JSON.stringify({ window: windowLabel, id: tab.id }));
   if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
   dragId.value = tab.id;
 }
 
 // 탭 위 드래그 — 좌/우 절반 기준으로 삽입 지점 결정 (에디터 탭과 같은 규칙)
 function onTabDragOver(e: DragEvent, i: number): void {
-  if (!dragId.value) return;
+  if (isForeign(e)) foreign.value = true;
+  if (!dragging.value) return;
   e.preventDefault();
   if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
   dropIndex.value = e.clientX < rect.left + rect.width / 2 ? i : i + 1;
 }
 
-// 탭 사이 틈 — 탭 위에서 정한 삽입 지점을 유지한 채 드롭만 허용한다
+// 탭 사이 틈 — 탭 위에서 정한 삽입 지점을 유지한 채 드롭만 허용한다 (다른 창 탭은 끝에)
 function onStripDragOver(e: DragEvent): void {
-  if (!dragId.value) return;
+  if (isForeign(e)) {
+    foreign.value = true;
+    dropIndex.value ??= sessions.list.length;
+  }
+  if (!dragging.value) return;
   e.preventDefault();
   if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
 }
 
 function onStripDrop(e: DragEvent): void {
-  if (!dragId.value) return;
+  if (!dragging.value) return;
   e.preventDefault();
-  if (dropIndex.value !== null) moveSession(dragId.value, dropIndex.value);
+  if (dragId.value !== null) {
+    if (dropIndex.value !== null) moveSession(dragId.value, dropIndex.value);
+  } else {
+    // 다른 창의 세션 탭 병합 — 상태는 출처 창에 있으니 이동을 요청한다 (핸드오프는 출처가 만든다)
+    const raw = e.dataTransfer?.getData(DND_SESSION);
+    if (raw) {
+      const data = JSON.parse(raw) as { window: string; id: string };
+      if (data.window !== windowLabel) requestSessionMove(data.window, data.id, dropIndex.value ?? sessions.list.length);
+    }
+  }
+  endTabDrag();
+}
+
+// 출처 창의 dragend — 아무 드롭 존도 받지 않았고(dropEffect none) 포인터가 이 창 밖이면
+// 창 밖 드롭 = 새 창으로 분리. 다른 창의 스트립이 받았으면 그쪽이 이동을 요청해 온다
+function onTabDragEnd(e: DragEvent): void {
+  const id = dragId.value;
+  if (id !== null && multiWindow() && e.dataTransfer?.dropEffect === 'none' && pointerOutside(e)) {
+    // 새 창의 탭이 포인터 아래 오도록 살짝 왼쪽 위로
+    detachSession(id, e.screenX - 100, e.screenY - TAB_GRAB_Y);
+  }
   endTabDrag();
 }
 
 function endTabDrag(): void {
   dragId.value = null;
   dropIndex.value = null;
+  foreign.value = false;
+}
+
+// 대상 창에는 dragend 가 오지 않는다 — 다른 창의 탭이 스트립을 벗어나면 여기서 foreign 을
+// 풀어야 이후 무관한 드래그를 삼키지 않는다. 자식 요소 사이 이동은 leave 가 아니다
+function onStripDragLeave(e: DragEvent): void {
+  if ((e.currentTarget as HTMLElement).contains(e.relatedTarget as Node | null)) return;
+  dropIndex.value = null;
+  foreign.value = false;
+}
+
+/** 세션 탭 우클릭 — 창 이동 메뉴 (앱 전용). 창 간 DnD 가 안 되는 환경의 대체 경로이기도 하다 */
+function onTabContextMenu(e: MouseEvent, tab: SessionTab): void {
+  if (!multiWindow()) return; // 웹은 브라우저 기본 메뉴 그대로
+  e.preventDefault();
+  void listWindows().then((wins) => {
+    const others = wins.filter((w) => w.label !== windowLabel);
+    openContextMenu(e.clientX, e.clientY, [
+      { label: 'Move to New Window', run: () => detachSessionNearby(tab.id) },
+      ...(others.length ? [{ separator: true }] : []),
+      ...others.map((w) => ({ label: `Move to Window "${w.title}"`, run: () => moveSessionToWindow(tab.id, w.label) })),
+    ]);
+  });
 }
 
 // 탭 더블클릭 rename — 인라인 input 으로 교체, Enter/blur 확정·Esc 취소
@@ -131,7 +200,7 @@ function commitRename(): void {
         v-if="sessionsEnabled() && sessions.list.length"
         class="session-tabs"
         @dragover="onStripDragOver"
-        @dragleave="dropIndex = null"
+        @dragleave="onStripDragLeave($event)"
         @drop="onStripDrop"
       >
         <div
@@ -140,15 +209,16 @@ function commitRename(): void {
           class="session-tab"
           :class="{
             active: tab.id === sessions.activeId,
-            'drop-before': dragId !== null && dropIndex === i,
-            'drop-after': dragId !== null && dropIndex === i + 1 && i === sessions.list.length - 1,
+            'drop-before': dragging && dropIndex === i,
+            'drop-after': dragging && dropIndex === i + 1 && i === sessions.list.length - 1,
           }"
           :title="tab.root ?? undefined"
           :draggable="renamingId !== tab.id"
           @dragstart="onTabDragStart($event, tab)"
-          @dragend="endTabDrag()"
+          @dragend="onTabDragEnd($event)"
           @dragover="onTabDragOver($event, i)"
           @click="activateSession(tab.id)"
+          @contextmenu="onTabContextMenu($event, tab)"
           @dblclick="startRename(tab)"
           @mousedown.middle.prevent="closeSession(tab.id)"
         >

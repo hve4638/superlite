@@ -3,8 +3,11 @@ import { openQuickInput } from '../../model/workbench'
 import { FileIcon } from '../widgets/FileIcon'
 import { backend } from '../../model/host'
 import { scm } from '../../model/scm'
-import { setBeforeSessionSwitch, activeSessionEmpty } from '../../model/sessions'
+import { setBeforeSessionSwitch, activeSessionEmpty, multiWindow, sessionRoot, sessions, detachEditorTab, requestTabsMove, DND_EDITOR } from '../../model/sessions'
+import { windowLabel } from '../../model/window'
+import { notify } from '../../model/notifications'
+import { pointerOutside } from '../dndUtil'
 import { StartPage } from '../StartPage'
 import { EDITOR_FONT_SIZE, MONO_FONT_FAMILY } from '../../theme/fonts'
 
-role: 에디터 영역 — monaco 수명주기(monaco.ts)와 그룹/탭바/diff 렌더링(.vue — 삭제 파일 탭(DiffTab.deleted)은 diff 대신 코드 편집기에 HEAD 모델을 읽기 전용으로), 탭 드래그 이동/분리(진행 상태는 tabDnd.ts 모듈 상태로 공유). monaco 모델은 path 당 하나, 그룹 간 공유. 열 수 없는 문서(doc.unopenable)는 모델을 만들지 않고 편집기 자리에 사유 안내를 띄운다 (VS Code binary/large 안내 근사). 이미지 문서(doc.image)도 모델 없이 편집기 자리에 이미지 뷰어(ImageView.vue — 체커보드, 영역 전체 휠 줌(커서 지점 고정)·드래그 팬·더블클릭 fit 복귀)를 띄운다. 해상도·크기·배율 표시는 statusbar 몫 — ImageView 가 editors.imageView 를 세운다. 부팅 유휴 시간에 더미 에디터를 한 번 만들어 폰트 측정 캐시를 데운다 — 첫 파일 콜드 오픈의 고정 비용(에디터 생성)을 부팅으로 옮기는 프리웜. 실측값은 localStorage 에 영속화(VS Code editorFontInfo 동일 수법)해 재실행부터는 부팅 실측도 건너뛴다 — 복원값은 monaco 가 5초 뒤 백그라운드 재실측(untrusted 취급)
+role: 에디터 영역 — monaco 수명주기(monaco.ts)와 그룹/탭바/diff 렌더링(.vue — 삭제 파일 탭(DiffTab.deleted)은 diff 대신 코드 편집기에 HEAD 모델을 읽기 전용으로), 탭 드래그 이동/분리(진행 상태는 tabDnd.ts 모듈 상태로 공유). 창 간(앱): 탭을 창 밖에 놓으면 새 창(detachEditorTab), 다른 창의 탭바에 놓으면 그 창이 출처에 이동을 요청(requestTabsMove) — 같은 root 세션에만, dataTransfer 의 DND_EDITOR 타입으로 식별. monaco 모델은 path 당 하나, 그룹 간 공유. 열 수 없는 문서(doc.unopenable)는 모델을 만들지 않고 편집기 자리에 사유 안내를 띄운다 (VS Code binary/large 안내 근사). 이미지 문서(doc.image)도 모델 없이 편집기 자리에 이미지 뷰어(ImageView.vue — 체커보드, 영역 전체 휠 줌(커서 지점 고정)·드래그 팬·더블클릭 fit 복귀)를 띄운다. 해상도·크기·배율 표시는 statusbar 몫 — ImageView 가 editors.imageView 를 세운다. 부팅 유휴 시간에 더미 에디터를 한 번 만들어 폰트 측정 캐시를 데운다 — 첫 파일 콜드 오픈의 고정 비용(에디터 생성)을 부팅으로 옮기는 프리웜. 실측값은 localStorage 에 영속화(VS Code editorFontInfo 동일 수법)해 재실행부터는 부팅 실측도 건너뛴다 — 복원값은 monaco 가 5초 뒤 백그라운드 재실측(untrusted 취급)

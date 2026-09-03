@@ -11,10 +11,13 @@ export type EditorGroup
 export type LayoutNode
 export type LayoutBranch
 export type SplitSide
+export type Doc
+export type EditorsSnapshot
+export type TabHandoff
 export val editors
 
 export fn createEditors(backend) {
-  role: 세션별 에디터 모듈 생성 — 그룹·배치·문서·undo 이력이 팩토리 클로저에 산다
+  role: 세션별 에디터 모듈 생성 — 그룹·배치·문서·undo 이력이 팩토리 클로저에 산다. 창 이동(앱): snapshot/restore 는 세션 통째(그룹·배치·문서 버퍼 — JSON 왕복, undo·커서는 잃는다), takeTabForHandoff 는 탭 하나를 닫기 확인·이력 없이 떼어 탭+문서 버퍼로 만든다(마지막 참조면 버퍼·monaco 모델 폐기, 빈 그룹 접기), acceptTab 은 넘어온 탭을 그룹/index 에 붙인다 (이쪽에 같은 문서가 열려 있으면 이쪽 버퍼 유지, 버퍼 없는 탭은 디스크에서 열기)
 }
 export fn activeGroup() -> EditorGroup {
   role: 활성 에디터 그룹

@@ -13,6 +13,7 @@
     "@vscode/codicons": "0.0.46-24",
     "@vue/reactivity": "^3.5.41",
     "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-serialize": "^0.14.0",
     "@xterm/xterm": "^6.0.0",
     "monaco-editor": "^0.56.0",
     "vue": "^3.5.41"

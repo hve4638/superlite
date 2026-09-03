@@ -99,6 +99,9 @@ export interface TerminalSession {
   onExit(cb: (code: number | null) => void): void;
   resize(cols: number, rows: number): void;
   dispose(): void;
+  /** 로컬 핸들만 놓는다 — 데몬 터미널은 죽이지 않는다 (다른 창의 세션이 adoptTerminal 로
+   *  이어받는 탭 이동 전용). 옵셔널 — mock·empty 는 이동 대상이 아니다 */
+  release?(): void;
 }
 
 export interface ThinBackend {
@@ -154,6 +157,13 @@ export interface ThinBackend {
   /** 브랜치 전환 (git checkout). 충돌 등 실패는 reject */
   gitCheckout(branch: string): Promise<void>;
   createTerminal(cols: number, rows: number): TerminalSession;
+  /**
+   * 기존 데몬 터미널을 이 연결의 핸들로 잡는다 (탭을 다른 창으로 옮기기, 옵셔널 — WsBackend 만).
+   * term 만 주면 같은 세션이 이미 소유한 터미널(세션 탭 분리 — 같은 session id 재-attach)의
+   * 로컬 핸들 재구성, from 을 주면 같은 root 의 다른 세션이 소유한 터미널을 데몬에서 이 세션으로
+   * 옮긴다 (와이어 v10 adoptTerminal — 새 로컬 id 발급). 이동 실패는 onExit(null) 로 드러난다.
+   */
+  adoptTerminal?(opts: { term?: number; from?: { session: string; term: number } }): TerminalSession;
   /**
    * 파일시스템 변경 푸시 구독 (외부 편집·터미널 작업 반영). overflow 면 changes 는 비어
    * 있고 전체 리프레시가 필요하다. mock 은 미구현 — 구독 자체가 없으면 감시도 없다.

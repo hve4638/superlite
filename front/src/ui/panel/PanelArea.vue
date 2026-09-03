@@ -4,6 +4,7 @@ import { togglePanel } from '../../model/workbench';
 import { terminals, createTerminal, disposeTerminal } from '../../model/terminal';
 import { activeSessionEmpty } from '../../model/sessions';
 import TerminalPane from './TerminalPane.vue';
+import { onTermDragEnd, onTermDragStart, terminalDraggable } from './termDnd';
 
 type PanelTab = 'problems' | 'output' | 'debug' | 'terminal';
 
@@ -37,7 +38,13 @@ function killActiveTerminal() {
         </div>
       </div>
       <div v-if="activeTab === 'terminal'" class="title-actions">
-        <span class="single-tab">
+        <!-- 활성 터미널의 라벨 — 끌어서 다른 창으로/창 밖(새 창)으로 옮길 수 있다 (termDnd) -->
+        <span
+          class="single-tab"
+          :draggable="terminalDraggable() && terminals.activeId !== 0"
+          @dragstart="onTermDragStart($event, terminals.activeId)"
+          @dragend="onTermDragEnd($event)"
+        >
           <span class="codicon codicon-terminal-bash" />
           <span class="single-tab-label">bash</span>
         </span>

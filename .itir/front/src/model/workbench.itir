@@ -5,10 +5,11 @@ role: 셸 상태 — 사이드바/패널/뷰릿 토글, Quick Input, 컨텍스�
 
 export type ViewletId
 export type ContextMenuItem
+export type WorkbenchSnapshot
 export val workbench
 
 export fn createWorkbench(backend) {
-  role: 세션별 셸 상태 모듈 생성
+  role: 세션별 셸 상태 모듈 생성. snapshot/restore — 창 이동 핸드오프의 레이아웃 몫(사이드바·패널 크기·표시, 오버레이 제외)
 }
 export fn initWorkbench() {
   role: 워크스페이스 이름(타이틀 표시)·루트 절대 경로(OS 드롭 상대화용) 로드

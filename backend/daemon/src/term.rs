@@ -23,9 +23,50 @@ pub(crate) struct Term {
     child: Box<dyn portable_pty::Child + Send + Sync>,
     flow: Arc<Flow>,
     budget: Arc<InputBudget>,
+    /// 출력 경로 — 리더·쓰기 스레드가 매 전송마다 읽는다. adopt(세션 간 이동)가 갈아끼운다
+    route: Arc<Mutex<Route>>,
 }
 
 pub(crate) type Terms = Arc<Mutex<HashMap<u64, Term>>>;
+
+/// 터미널 이벤트가 나가는 곳 — (이 세션 안의 term id, 세션 sink, 소속 terms 맵).
+/// WHY: 스레드가 id·sink 를 값으로 잡으면 터미널을 다른 세션으로 옮길 수 없다 (와이어 v10
+///      adoptTerminal — 에디터·터미널 탭을 다른 창의 세션으로 끌어 옮기는 데 필요).
+///      한 겹 간접층으로 두고 전송 직전에 읽는다 — 락은 짧고 경합은 사실상 없다
+pub(crate) struct Route {
+    id: u64,
+    sink: Sink,
+    terms: Terms,
+}
+
+impl Route {
+    fn snapshot(r: &Arc<Mutex<Route>>) -> (u64, Sink) {
+        let g = r.lock().unwrap();
+        (g.id, g.sink.clone())
+    }
+}
+
+/// 터미널을 다른 세션으로 옮긴다 (와이어 v10 adoptTerminal) — from 의 from_id 를 떼어 to 의
+/// to_id 로 붙이고 출력 경로를 to 의 sink 로 돌린다. 배압 카운터는 리셋 — 받는 쪽 연결은
+/// 0 에서 세기 시작한다. root 일치 검사는 호출자(main) 몫.
+/// 락 순서: from → (놓고) route → (놓고) to. terms 락 아래에서 route 를 잡지 않는다
+pub(crate) fn adopt(from: &Terms, from_id: u64, to: &Terms, to_id: u64, to_sink: &Sink) -> Result<(), String> {
+    if to.lock().unwrap().contains_key(&to_id) {
+        return Err("term id 충돌".into());
+    }
+    let Some(t) = from.lock().unwrap().remove(&from_id) else {
+        return Err("출처 터미널 없음".into());
+    };
+    {
+        let mut r = t.route.lock().unwrap();
+        r.id = to_id;
+        r.sink = to_sink.clone();
+        r.terms = to.clone();
+    }
+    t.flow.reset();
+    to.lock().unwrap().insert(to_id, t);
+    Ok(())
+}
 
 // VS Code 터미널 flow control 상수 (terminalProcess) — 단위는 UTF-16 코드유닛
 // (프론트 data.length 와 일치시키려고 encode_utf16 으로 센다)
@@ -313,9 +354,10 @@ fn spawn_term(
     // 터미널별 쓰기 스레드 — Term drop(dispose·회수) 으로 채널이 닫히면 끝난다.
     // 막힌 write 중이라면 child kill 후 pty 쪽 에러로 풀린다
     let budget = InputBudget::new();
+    let route = Arc::new(Mutex::new(Route { id, sink, terms: terms.clone() }));
     let (input, input_rx) = std::sync::mpsc::channel::<String>();
     {
-        let (budget, sink) = (budget.clone(), sink.clone());
+        let (budget, route) = (budget.clone(), route.clone());
         std::thread::spawn(move || {
             while let Ok(data) = input_rx.recv() {
                 // 예산은 큐 적재량을 잰다 — 꺼낸 즉시 반환 (블로킹 write 중 보유는 청크 1개)
@@ -326,6 +368,7 @@ fn spawn_term(
                 // 소화량 통지 — 프론트 입력 배압 창이 이만큼 되돌아온다.
                 // WHY: 단위는 프론트 data.length 와 같은 UTF-16 (termAck 와 같은 이유)
                 let chars = data.encode_utf16().count() as u64;
+                let (id, sink) = Route::snapshot(&route);
                 sink_send(
                     &sink,
                     json!({"event": "termInputAck", "term": id, "chars": chars}).to_string(),
@@ -344,7 +387,7 @@ fn spawn_term(
     terms
         .lock()
         .unwrap()
-        .insert(id, Term { input, master: pty.master, child, flow: flow.clone(), budget });
+        .insert(id, Term { input, master: pty.master, child, flow: flow.clone(), budget, route: route.clone() });
     // WHY: portable-pty 의 reader 는 블로킹 — 전용 스레드에서 읽어 writer 채널로 넘긴다
     std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
@@ -360,6 +403,7 @@ fn spawn_term(
             if !text.is_empty() {
                 // WHY: 배압 단위는 프론트의 data.length(UTF-16)와 같아야 ack 가 상쇄된다
                 let chars = text.encode_utf16().count() as u64;
+                let (id, sink) = Route::snapshot(&route);
                 sink_send(&sink, json!({"event": "termData", "term": id, "data": text}).to_string(), true);
                 // 미ack 이 고수위를 넘으면 여기서 멈춘다 — PTY 커널 버퍼가 차면 셸도 멈춘다
                 flow.add_and_wait(chars);
@@ -367,6 +411,11 @@ fn spawn_term(
         }
         // read 종료 = 셸 자연 종료 또는 세션 회수(kill) — 맵에서 제거해 fd/좀비 누수를 막는다.
         // WHY: if let 스크루티니의 임시 가드는 블록 끝까지 산다 — kill/wait 를 락 밖에서
+        // 소속은 route 에서 읽는다 — adopt 로 다른 세션에 옮겨졌으면 그쪽 맵에서 빠져야 한다
+        let (id, sink, terms) = {
+            let r = route.lock().unwrap();
+            (r.id, r.sink.clone(), r.terms.clone())
+        };
         let removed = terms.lock().unwrap().remove(&id);
         // 자연 종료면 wait 가 exit code 를 준다 (이미 죽은 프로세스라 kill 은 무해).
         // dispose·회수 경로(맵에 없음)는 code 없이 — 프론트가 어차피 무시하는 termExit 다
@@ -418,6 +467,50 @@ mod tests {
         assert!(buf.iter().all(|(_, m)| m != "old-data"), "가장 오래된 termData 는 버려져야 한다");
         assert!(*bytes <= DETACH_BUFFER_MAX);
         assert_eq!(*bytes, buf.iter().map(|(_, m)| m.len()).sum::<usize>(), "바이트 정산 일치");
+    }
+
+    /// adopt — 실제 pty 를 한 세션(A)에서 다른 세션(B)으로 옮기면 이후 출력·입력 ack 가 B 의
+    /// sink 로 새 id 를 달고 나가고, A 의 맵에서는 사라진다 (와이어 v10 adoptTerminal 본체)
+    #[cfg(unix)]
+    #[test]
+    fn adopt_moves_term_and_reroutes_output() {
+        fn detached() -> Sink {
+            Arc::new(Mutex::new(SinkState::Detached(VecDeque::new(), 0)))
+        }
+        fn events(sink: &Sink) -> Vec<String> {
+            let g = sink.lock().unwrap();
+            let SinkState::Detached(buf, _) = &*g else { panic!("Detached 여야 한다") };
+            buf.iter().map(|(_, m)| m.clone()).collect()
+        }
+        let (terms_a, sink_a): (Terms, Sink) = (Terms::default(), detached());
+        let (terms_b, sink_b): (Terms, Sink) = (Terms::default(), detached());
+        std::env::set_var("SHELL", "/bin/sh");
+        spawn_term(1, 80, 24, Path::new("/"), None, terms_a.clone(), sink_a.clone()).expect("pty");
+        // A 에 이미 있는 id 로는 못 붙인다 / 없는 출처는 실패
+        assert!(adopt(&terms_a, 9, &terms_b, 7, &sink_b).is_err(), "없는 출처 터미널");
+        adopt(&terms_a, 1, &terms_b, 7, &sink_b).expect("adopt");
+        assert!(!terms_a.lock().unwrap().contains_key(&1), "출처 맵에서 빠져야 한다");
+        assert!(terms_b.lock().unwrap().contains_key(&7), "대상 맵에 새 id 로 있어야 한다");
+        // B 의 id 로 입력 → 셸 출력이 B sink 에 term 7 로 도착한다
+        handle_term("termWrite", &json!({"term": 7, "data": "echo adopted-ok\n"}), &terms_b, &sink_b, Path::new("/"), None);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let evs = events(&sink_b);
+            if evs.iter().any(|m| m.contains("\"term\":7") && m.contains("adopted-ok")) {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "B sink 에 출력이 와야 한다: {evs:?}");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(
+            events(&sink_a).iter().all(|m| !m.contains("adopted-ok")),
+            "옮긴 뒤의 출력은 A 로 가지 않는다"
+        );
+        // 정리 — 스레드가 회수되도록 kill (임시 가드를 지역변수 drop 전에 끝낸다)
+        let t = terms_b.lock().unwrap().remove(&7);
+        if let Some(t) = t {
+            kill_term(t);
+        }
     }
 }
 

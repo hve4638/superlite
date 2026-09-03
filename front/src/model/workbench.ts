@@ -4,6 +4,15 @@ import { ctx, viewOf } from './ctx';
 
 export type ViewletId = 'explorer' | 'search' | 'scm' | 'remote';
 
+/** 창 이동 핸드오프의 레이아웃 몫 — 부위 크기·표시 여부만 (오버레이는 나르지 않는다) */
+export interface WorkbenchSnapshot {
+  sideBarVisible: boolean;
+  sideBarWidth: number;
+  activeViewlet: ViewletId;
+  panelVisible: boolean;
+  panelHeight: number;
+}
+
 export interface ContextMenuItem {
   label?: string;
   keybinding?: string;
@@ -97,9 +106,18 @@ export function createWorkbench(backend: ThinBackend) {
     workbench.contextMenu.open = false;
   }
 
+  function snapshot(): WorkbenchSnapshot {
+    const { sideBarVisible, sideBarWidth, activeViewlet, panelVisible, panelHeight } = workbench;
+    return { sideBarVisible, sideBarWidth, activeViewlet, panelVisible, panelHeight };
+  }
+
+  function restore(s: WorkbenchSnapshot): void {
+    Object.assign(workbench, s);
+  }
+
   return {
     workbench, initWorkbench, toggleSideBar, showViewlet, togglePanel,
-    openQuickInput, closeQuickInput, openContextMenu, closeContextMenu,
+    openQuickInput, closeQuickInput, openContextMenu, closeContextMenu, snapshot, restore,
   };
 }
 

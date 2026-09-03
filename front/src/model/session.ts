@@ -6,14 +6,22 @@
  */
 import type { ThinBackend } from '../backend/types';
 import { activeCtx } from './ctx';
-import { createEditors } from './editors';
+import { createEditors, type EditorsSnapshot } from './editors';
 import { createFileops } from './fileops';
 import { createFiles } from './files';
 import { createScm } from './scm';
 import { createSearch } from './search';
-import { createTerminals } from './terminal';
+import { createTerminals, type TerminalSnapshot } from './terminal';
 import { createWatch } from './watch';
-import { createWorkbench } from './workbench';
+import { createWorkbench, type WorkbenchSnapshot } from './workbench';
+
+/** 세션 탭이 창을 옮길 때 나르는 front 상태 한 덩어리 (JSON 직렬화 가능). 연결·트리·SCM 은
+ *  새 창이 같은 session id 로 다시 붙어 스스로 로드한다 — 여기 없는 것은 재로드로 복원되는 것들 */
+export interface SessionSnapshot {
+  editors: EditorsSnapshot;
+  workbench: WorkbenchSnapshot;
+  terminals: TerminalSnapshot[];
+}
 
 export interface SessionCtx {
   backend: ThinBackend;
@@ -27,6 +35,11 @@ export interface SessionCtx {
   watch: ReturnType<typeof createWatch>;
   /** 초기 로드 (워크스페이스 정보·트리·SCM) + 감시 구독 — 멱등 (한 번만 실행) */
   init(): Promise<void>;
+  /** 창 이동 핸드오프 — 출처 창이 만든다 */
+  snapshot(): SessionSnapshot;
+  /** 창 이동 핸드오프 적용 — 새 창의 (같은 session id 로 붙은) 컨텍스트에 덮어쓴다.
+   *  터미널은 같은 세션 소유라 로컬 핸들만 재구성한다 (adoptTerminals, from 없음) */
+  restore(s: SessionSnapshot): void;
 }
 
 /** browseOnly: 원격 빈 세션 — 연결은 열되 트리·SCM 로드는 하지 않는다 (시작 페이지만,
@@ -55,6 +68,16 @@ export function createSessionCtx(backend: ThinBackend, browseOnly = false): Sess
             files.initFiles(),
             scm.refreshScm(),
           ]).then(() => watch.initWatch()))),
+    snapshot: () => ({
+      editors: editors.snapshot(),
+      workbench: workbench.snapshot(),
+      terminals: terminals.snapshot(),
+    }),
+    restore: (s) => {
+      workbench.restore(s.workbench);
+      editors.restore(s.editors);
+      terminals.adoptTerminals(s.terminals);
+    },
   };
   return sessionCtx;
 }

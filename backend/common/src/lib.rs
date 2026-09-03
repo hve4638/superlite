@@ -35,7 +35,10 @@ pub fn socket_path() -> PathBuf {
 ///    전달하고 requestReply 로 응답을 되돌린다 + PTY 에 SUPERLIGHT_SOCK·SUPERLIGHT_SESSION 주입.
 ///    구버전 데몬은 frontRequest 를 attach 전 요청으로 거부하고 환경변수도 없어 셸 심이 조용히
 ///    실패한다.
-const WIRE_VERSION: u32 = 9;
+/// 10: adoptTerminal 추가 — 같은 root 의 다른 세션이 소유한 터미널을 이 세션으로 옮긴다
+///    (탭을 다른 창으로 끌어 옮기기). 구버전 데몬은 미지 메서드를 일반 경로로 넘겨 에러로
+///    응답하므로 이동이 조용히 실패한다.
+const WIRE_VERSION: u32 = 10;
 
 /// 0700 전용 디렉터리를 만들어 그 안에 소켓을 둔다.
 #[cfg(unix)]

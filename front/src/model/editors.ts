@@ -47,7 +47,7 @@ export type LayoutNode = number | LayoutBranch;
 
 export type SplitSide = 'left' | 'right' | 'up' | 'down';
 
-interface Doc {
+export interface Doc {
   content: string;
   savedContent: string;
   /** savedContent 가 읽힌/쓰인 시점의 디스크 etag — 저장 시 낙관적 충돌 검사에 쓴다 */
@@ -61,6 +61,22 @@ interface Doc {
 }
 
 const RECENTLY_CLOSED_CAP = 20;
+
+/** 세션 탭 창 이동 핸드오프의 에디터 몫 — 그룹·배치·문서 버퍼 전부 (undo·커서는 잃는다) */
+export interface EditorsSnapshot {
+  groups: EditorGroup[];
+  layout: LayoutNode;
+  activeGroupId: number;
+  nextGroupId: number;
+  docs: [string, Doc][];
+}
+
+/** 에디터 탭 한 개의 창 이동 핸드오프 — 탭 + 그 문서 버퍼 (다른 탭이 같은 문서를 계속 보면
+ *  출처에도 남는다). doc null = 문서가 아직 로드되지 않았던 탭 — 받는 쪽이 디스크에서 연다 */
+export interface TabHandoff {
+  tab: Tab;
+  doc: Doc | null;
+}
 
 export function baseName(path: string): string {
   return path.slice(path.lastIndexOf('/') + 1);
@@ -704,12 +720,79 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     return Number.isFinite(min) ? min : 4;
   }
 
+  /** 세션 통째 창 이동용 스냅샷 — JSON 왕복 가능한 평범한 객체만 (Map 은 엔트리로) */
+  function snapshot(): EditorsSnapshot {
+    return {
+      groups: JSON.parse(JSON.stringify(editors.groups)) as EditorGroup[],
+      layout: JSON.parse(JSON.stringify(editors.layout)) as LayoutNode,
+      activeGroupId: editors.activeGroupId,
+      nextGroupId,
+      docs: [...editors.docs].map(([p, d]) => [p, { ...d }]),
+    };
+  }
+
+  /** 스냅샷을 이 세션에 덮어쓴다 — 새 창의 빈 세션에 쓰는 것이 전제 (기존 탭은 버린다).
+   *  monaco 모델은 doc 스냅샷에서 다시 만들어진다 (세션 전환과 같은 경로) */
+  function restore(s: EditorsSnapshot): void {
+    editors.groups = s.groups;
+    editors.layout = s.layout;
+    editors.activeGroupId = s.activeGroupId;
+    nextGroupId = Math.max(nextGroupId, s.nextGroupId);
+    editors.docs = new Map(s.docs);
+    editors.orphaned.clear();
+    editors.pendingFocus = true;
+  }
+
+  /** 탭 하나를 다른 창으로 보내기 위해 뗀다 — 닫기 확인·최근 닫은 탭 이력을 거치지 않는다
+   *  (닫는 게 아니라 옮기는 것). 같은 문서를 보는 마지막 탭이면 버퍼·monaco 모델도 여기서
+   *  버린다 (다음 열기는 디스크에서). 빠진 그룹은 접는다 */
+  function takeTabForHandoff(groupId: number, tabId: string): TabHandoff | null {
+    const tab = takeTab(groupId, tabId);
+    if (!tab) return null;
+    const doc = editors.docs.get(tab.path);
+    const refs = editors.groups.reduce((n, g) => n + g.tabs.filter((t) => t.path === tab.path).length, 0);
+    if (refs === 0) {
+      editors.docs.delete(tab.path);
+      editors.orphaned.delete(tab.path);
+      disposeModelsHook(tab.path);
+    }
+    collapseIfEmpty(groupId);
+    return { tab: { ...tab, preview: false }, doc: doc ? { ...doc } : null };
+  }
+
+  /** 다른 창에서 넘어온 탭을 받는다 — 문서 버퍼가 없던(로드 전) 탭은 디스크에서 연다.
+   *  이 세션이 같은 문서를 이미 열고 있으면 이쪽 버퍼를 유지한다 (같은 root 라 같은 파일 —
+   *  두 버퍼 중 하나는 잃는데, 받는 쪽이 보고 있던 것을 지킨다). 같은 탭이 이미 있으면 활성화만 */
+  function acceptTab(h: TabHandoff, groupId?: number, index?: number): void {
+    const group = (groupId !== undefined ? editors.groups.find((g) => g.id === groupId) : undefined) ?? activeGroup();
+    if (editors.docs.has(h.tab.path) && h.doc && h.doc.content !== h.doc.savedContent) {
+      // 넘어온 쪽이 미저장인데 이쪽 버퍼를 지킨다 — 조용히 버리지 않고 알린다
+      notify('warning', `Unsaved changes of '${baseName(h.tab.path)}' from the other window were discarded (already open here)`);
+    }
+    if (!editors.docs.has(h.tab.path)) {
+      if (!h.doc) {
+        void (h.tab.kind === 'diff' ? openDiff(h.tab.path) : openFile(h.tab.path, { groupId: group.id }));
+        return;
+      }
+      editors.docs.set(h.tab.path, h.doc);
+    }
+    const doc = editors.docs.get(h.tab.path)!;
+    const tab: Tab = { ...h.tab, dirty: doc.content !== doc.savedContent, preview: false };
+    if (!group.tabs.some((t) => t.id === tab.id)) {
+      group.tabs.splice(Math.min(index ?? group.tabs.length, group.tabs.length), 0, tab);
+    }
+    group.activeTabId = tab.id;
+    editors.activeGroupId = group.id;
+    editors.pendingFocus = true;
+  }
+
   return {
     editors, activeGroup, activeTab, openFile, openFileAt, openDiff, setActiveTab, pinTab,
     openFileSplit, closeTab, confirmCloseSave, confirmCloseDiscard, confirmCloseCancel,
     reopenClosedEditor, moveTabToGroup, moveTabSplit,
     splitActiveEditor, updateContent, setOrphaned, remapPaths, closePathTabs,
     reloadDocFromDisk, hasDirtyDocs, saveActive, overwriteConflict, revertConflict, indentOf,
+    snapshot, restore, takeTabForHandoff, acceptTab,
   };
 }
 

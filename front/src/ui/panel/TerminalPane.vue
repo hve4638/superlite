@@ -2,8 +2,9 @@
 import { watch } from 'vue';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { SerializeAddon } from '@xterm/addon-serialize';
 import '@xterm/xterm/css/xterm.css';
-import { terminals, createTerminal, setActiveTerminal } from '../../model/terminal';
+import { terminals, createTerminal, setActiveTerminal, setTerminalSerializer } from '../../model/terminal';
 import { activeSessionEmpty } from '../../model/sessions';
 import type { TerminalInstance } from '../../model/terminal';
 import { allTerminals } from '../../model/sessions';
@@ -15,11 +16,22 @@ interface Binding {
   el: HTMLDivElement;
   term: Terminal | null;
   fit: FitAddon | null;
+  /** 버퍼 직렬화 — 탭을 다른 창으로 옮길 때 스크롤백을 함께 나른다 */
+  serialize: SerializeAddon | null;
   /** xterm 이 열리기 전에 도착한 세션 출력 (mock 프롬프트 등) — 처리 완료(done) 콜백 동반 */
   pending: [string, (() => void) | undefined][];
 }
 
 const bindings = new Map<number, Binding>();
+
+// 창 이동 핸드오프의 버퍼 몫 — model 이 xterm 을 모르므로 여기서 등록한다.
+// 아직 열리지 않은(패널을 한 번도 안 연) 터미널은 pending 청크를 이어 붙여 넘긴다
+setTerminalSerializer((id) => {
+  const b = bindings.get(id);
+  if (!b) return null;
+  if (b.term && b.serialize) return b.serialize.serialize();
+  return b.pending.map(([chunk]) => chunk).join('');
+});
 
 // WHY: MockPty 는 생성 직후 microtask 로 프롬프트를 내보내므로 컴포넌트 mount 를 기다리면
 //      첫 출력이 유실된다. flush:'sync' 모듈 워처로 세션 생성 즉시 onData 를 배선해 버퍼링한다.
@@ -32,7 +44,7 @@ watch(
     const all = allTerminals();
     for (const inst of all) {
       if (bindings.has(inst.id)) continue;
-      const b: Binding = { el: document.createElement('div'), term: null, fit: null, pending: [] };
+      const b: Binding = { el: document.createElement('div'), term: null, fit: null, serialize: null, pending: [] };
       b.el.className = 'term-attach';
       // done — 렌더러 배압 신호. xterm 이 청크 처리를 마치면 호출해 WsBackend 가 ack 한다.
       // 열리기 전(pending)의 done 은 호출을 미뤄 ack 를 묶어둔다 — 배경 세션의 폭주 출력은
@@ -112,6 +124,15 @@ function terminalTheme() {
 
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, watch as watchEffectful } from 'vue';
+import {
+  foreignOver,
+  onTermDragEnd,
+  onTermDragLeave,
+  onTermDragOver,
+  onTermDragStart,
+  onTermDrop,
+  terminalDraggable,
+} from './termDnd';
 
 const bodyEl = ref<HTMLElement | null>(null);
 const hostEls = new Map<number, HTMLElement>();
@@ -136,6 +157,8 @@ function ensureOpened(inst: TerminalInstance) {
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
+  const serialize = new SerializeAddon();
+  term.loadAddon(serialize);
   term.attachCustomKeyEventHandler((e) => {
     // WHY: xterm 은 포커스 중 모든 키를 삼킨다 — 워크벤치 키바인딩(Ctrl+P, Ctrl+J 등)은
     //      xterm 처리를 건너뛰어 전역 디스패처로 버블시킨다 (VS Code commandsToSkipShell 동작)
@@ -163,12 +186,18 @@ function ensureOpened(inst: TerminalInstance) {
     return true;
   });
   term.open(b.el);
+  // 다른 창에서 넘어온 스크롤백 — 이후 출력보다 먼저 그린다 (한 번만)
+  if (inst.restoreBuffer) {
+    term.write(inst.restoreBuffer);
+    delete inst.restoreBuffer;
+  }
   for (const [chunk, done] of b.pending) term.write(chunk, done);
   b.pending.length = 0;
   term.onData((d) => inst.session.write(d));
   term.onResize(({ cols, rows }) => inst.session.resize(cols, rows));
   b.term = term;
   b.fit = fit;
+  b.serialize = serialize;
 }
 
 function fitActive() {
@@ -219,7 +248,14 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="terminal-pane">
+  <!-- 터미널 영역 전체가 다른 창 터미널의 드롭 존 (같은 root 세션에만 — termDnd) -->
+  <div
+    class="terminal-pane"
+    :class="{ 'drop-target': foreignOver }"
+    @dragover="onTermDragOver"
+    @dragleave="onTermDragLeave"
+    @drop="onTermDrop"
+  >
     <div ref="bodyEl" class="terminal-body">
       <div
         v-for="t in terminals.list"
@@ -235,6 +271,9 @@ onBeforeUnmount(() => {
         :key="t.id"
         class="tab-row"
         :class="{ active: t.id === terminals.activeId }"
+        :draggable="terminalDraggable()"
+        @dragstart="onTermDragStart($event, t.id)"
+        @dragend="onTermDragEnd($event)"
         @click="setActiveTerminal(t.id)"
       >
         <span class="codicon codicon-terminal" />
@@ -254,6 +293,10 @@ onBeforeUnmount(() => {
   flex: 1;
   min-width: 0;
   position: relative;
+}
+/* 다른 창의 터미널이 위에 있을 때 — 에디터 드롭 존과 같은 하이라이트 */
+.terminal-pane.drop-target {
+  box-shadow: inset 0 0 0 2px var(--vscode-focusBorder);
 }
 .term-host {
   position: absolute;

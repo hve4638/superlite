@@ -6,10 +6,14 @@ import { createWorkbench } from './workbench'
 role: 터미널 인스턴스 목록 — 세션 핸들 보유, 렌더링(xterm)은 UI 몫. 셸 자연 종료(onExit)와 데몬 세션 회수(onSessionLost) 시 죽은 터미널을 정리한다 (회수는 warning 알림 포함 — 회수 명단은 onSessionLost 가 주는 id 목록과 대조해, 끊김 중 만들어져 살아 있는 터미널은 남긴다). 입력 배압(onInputBlocked) 진입 시 warning 알림 — 터미널당 에피소드 1회로 중복 제거. 세션별 팩토리(createTerminals) + 활성 세션 전달 shim — backend 이벤트 구독이 팩토리 안에서 세션마다 이뤄진다 (WsBackend 콜백 슬롯은 인스턴스당 하나)
 
 export type TerminalInstance
+export type TerminalSnapshot
 export val terminals
 
 export fn createTerminals(backend, workbenchM) {
-  role: 세션별 터미널 모듈 생성 — 목록·배압 상태·이벤트 구독이 세션에 묶이고, 패널 토글은 같은 세션의 workbench 인스턴스로 간다. 터미널 id 카운터만 페이지 전역 — TerminalPane 의 xterm 바인딩 맵(id 키, 세션 전환에도 생존)이 세션 간 충돌하지 않게
+  role: 세션별 터미널 모듈 생성 — 목록·배압 상태·이벤트 구독이 세션에 묶이고, 패널 토글은 같은 세션의 workbench 인스턴스로 간다. 터미널 id 카운터만 페이지 전역 — TerminalPane 의 xterm 바인딩 맵(id 키, 세션 전환에도 생존)이 세션 간 충돌하지 않게. 창 이동(앱): snapshot(데몬 term id·제목·xterm 버퍼 — 직렬화는 setTerminalSerializer 로 UI 가 등록), releaseTerminal(목록에서만 빼고 데몬 터미널은 살림 — 받는 창이 이어받는다), adoptTerminals(from 없으면 같은 세션의 기존 터미널 로컬 핸들 재구성, 있으면 백엔드 adoptTerminal 로 다른 세션 것을 옮겨 받음 — 받으면 패널을 보인다)
+}
+export fn setTerminalSerializer(fn) {
+  role: xterm 버퍼 직렬화 seam 등록 (TerminalPane) — model 은 xterm 을 모른다. 세션 공용 슬롯 (능력이지 세션 상태가 아니다)
 }
 export fn createTerminal() -> TerminalInstance {
   role: 백엔드 PTY 세션 생성 + 목록 등록 + 활성화. 실제 종료 코드가 있는 죽음(code ≠ null)은 스스로 목록에서 빠지도록 onExit 배선 — spawn 실패(code null)만 탭을 유지해 에러 출력을 읽게 한다

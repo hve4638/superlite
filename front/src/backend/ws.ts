@@ -447,6 +447,19 @@ export class WsBackend implements ThinBackend {
     // 세션 회수 재연결에서 산 터미널로 분류된다
     this.termEpoch.set(term, this.opened ? this.connEpoch : this.connEpoch + 1);
     this.send({ method: 'createTerminal', params: { term, cols, rows } });
+    return this.termHandle(term);
+  }
+
+  /** 로컬 핸들 — createTerminal·adoptTerminal 이 공유한다 (id 만 다르다) */
+  private termHandle(term: number): TerminalSession {
+    const forget = () => {
+      this.termHandlers.delete(term);
+      this.termExitHandlers.delete(term);
+      this.termRecv.delete(term);
+      this.termEpoch.delete(term);
+      this.termSent.delete(term);
+      this.termInputQueue.delete(term);
+    };
     return {
       id: term,
       write: (data) => this.writeTerm(term, data),
@@ -455,13 +468,31 @@ export class WsBackend implements ThinBackend {
       resize: (c, r) => this.send({ method: 'termResize', params: { term, cols: c, rows: r } }),
       dispose: () => {
         this.send({ method: 'disposeTerminal', params: { term } });
-        this.termHandlers.delete(term);
-        this.termExitHandlers.delete(term);
-        this.termRecv.delete(term);
-        this.termEpoch.delete(term);
-        this.termSent.delete(term);
-        this.termInputQueue.delete(term);
+        forget();
       },
+      release: forget,
     };
+  }
+
+  adoptTerminal(opts: { term?: number; from?: { session: string; term: number } }): TerminalSession {
+    // 같은 세션의 기존 터미널 (세션 탭이 창을 옮겨 같은 id 로 재-attach) — 데몬에 보낼 것이
+    // 없다. 로컬 id 카운터를 그 위로 올려 새 터미널과 충돌하지 않게 한다
+    if (opts.from === undefined) {
+      const term = opts.term ?? this.nextTerm;
+      this.nextTerm = Math.max(this.nextTerm, term + 1);
+      this.termEpoch.set(term, this.opened ? this.connEpoch : this.connEpoch + 1);
+      return this.termHandle(term);
+    }
+    // 다른 세션(같은 root)의 터미널 — 데몬이 소유를 옮긴다 (와이어 v10). 새 로컬 id 를 발급해
+    // 이 세션의 기존 id 와 충돌하지 않게 한다. 실패(출처 세션 회수·root 불일치)는 onExit(null)
+    // 로 드러내 탭이 에러 상태로 남게 한다 (spawn 실패와 같은 표현)
+    const term = this.nextTerm++;
+    this.termEpoch.set(term, this.opened ? this.connEpoch : this.connEpoch + 1);
+    const handle = this.termHandle(term);
+    void this.call('adoptTerminal', { from: opts.from.session, fromTerm: opts.from.term, term }).catch((e) => {
+      this.termHandlers.get(term)?.(`\r\n[superlight: 터미널 이동 실패 — ${String((e as Error).message ?? e)}]\r\n`);
+      this.termExitHandlers.get(term)?.(null);
+    });
+    return handle;
   }
 }

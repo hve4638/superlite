@@ -2,6 +2,10 @@
 import { computed, ref } from 'vue';
 import type { EditorGroup, Tab } from '../../model/editors';
 import { closeTab, editors, moveTabToGroup, openFile, pinTab, setActiveTab, splitActiveEditor } from '../../model/editors';
+import { notify } from '../../model/notifications';
+import { DND_EDITOR, detachEditorTab, multiWindow, requestTabsMove, sessionRoot, sessions } from '../../model/sessions';
+import { windowLabel } from '../../model/window';
+import { pointerOutside } from '../dndUtil';
 import { editorDrag, endEditorDrag, startTabDrag } from './tabDnd';
 import FileIcon from '../widgets/FileIcon.vue';
 
@@ -45,49 +49,102 @@ function onClose(tabId: string) {
 function onDragStart(e: DragEvent, tab: Tab) {
   // setData 는 Firefox 의 드래그 시작 요건 — 실제 식별은 tabDrag 모듈 상태로 한다
   e.dataTransfer?.setData('text/plain', tab.id);
+  // 다른 창의 탭바가 출처(창·세션·root)를 알 수 있게 — root 가 같은 세션에만 붙일 수 있다
+  if (multiWindow()) {
+    e.dataTransfer?.setData(
+      DND_EDITOR,
+      JSON.stringify({ window: windowLabel, session: sessions.activeId, root: sessionRoot(sessions.activeId), groupId: props.group.id, tabId: tab.id }),
+    );
+  }
   if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
   startTabDrag(props.group.id, tab.id);
 }
 
-// 탭 드래그의 삽입 지점 (탭 인덱스 기준) — 삽입선 표시와 드롭 위치에 쓴다
+// 출처 창의 dragend — 아무 존도 받지 않았고 포인터가 창 밖이면 새 창으로 분리 (세션 탭과 같은 판정)
+function onDragEnd(e: DragEvent) {
+  if (editorDrag.kind === 'tab' && multiWindow() && e.dataTransfer?.dropEffect === 'none' && pointerOutside(e)) {
+    detachEditorTab(editorDrag.groupId, editorDrag.tabId, e.screenX - 100, e.screenY - 17);
+  }
+  dropIndex.value = null;
+  foreign.value = false;
+  endEditorDrag();
+}
+
+// 탭 드래그의 삽입 지점 (탭 인덱스 기준) — 삽입선 표시와 드롭 위치에 쓴다.
+// foreign = 다른 창에서 끌고 온 에디터 탭 (dragover 중엔 타입만 읽힌다)
 const dropIndex = ref<number | null>(null);
+const foreign = ref(false);
+const tabDragging = computed(() => editorDrag.kind === 'tab' || foreign.value);
+
+function isForeign(e: DragEvent): boolean {
+  return editorDrag.kind === 'none' && multiWindow() && (e.dataTransfer?.types.includes(DND_EDITOR) ?? false);
+}
 
 // 탭 위 드래그 — 좌/우 절반 기준으로 삽입 지점 결정 (VS Code 동일)
 function onTabDragOver(e: DragEvent, i: number) {
-  if (editorDrag.kind === 'none') return;
+  if (isForeign(e)) foreign.value = true;
+  if (editorDrag.kind === 'none' && !foreign.value) return;
   e.preventDefault();
   e.stopPropagation();
   if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
   // 파일 드롭은 끝에 붙인다 — 삽입선 없이 드롭만 받는다
-  if (editorDrag.kind !== 'tab') return;
+  if (!tabDragging.value) return;
   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
   dropIndex.value = e.clientX < rect.left + rect.width / 2 ? i : i + 1;
 }
 
-// 탭 밖 빈 영역 — 끝에 삽입. 다른 그룹의 탭, 같은 그룹의 순서 변경, 탐색기 파일 모두 받는다
+// 탭 밖 빈 영역 — 끝에 삽입. 다른 그룹의 탭, 같은 그룹의 순서 변경, 탐색기 파일, 다른 창의 탭 모두 받는다
 function onTabsDragOver(e: DragEvent) {
-  if (editorDrag.kind === 'none') return;
+  if (isForeign(e)) foreign.value = true;
+  if (editorDrag.kind === 'none' && !foreign.value) return;
   e.preventDefault();
   if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-  if (editorDrag.kind === 'tab') dropIndex.value = props.group.tabs.length;
+  if (tabDragging.value) dropIndex.value = props.group.tabs.length;
 }
 
 function onTabsDrop(e: DragEvent) {
-  if (editorDrag.kind === 'none') return;
+  if (editorDrag.kind === 'none' && !foreign.value) return;
   e.preventDefault();
-  if (editorDrag.kind === 'tab') {
+  if (foreign.value) {
+    onForeignDrop(e);
+  } else if (editorDrag.kind === 'tab') {
     moveTabToGroup(editorDrag.groupId, editorDrag.tabId, props.group.id, dropIndex.value ?? undefined);
   } else {
     void openFile(editorDrag.path, { groupId: props.group.id });
   }
   dropIndex.value = null;
+  foreign.value = false;
   endEditorDrag();
+}
+
+// 자식 요소 사이 이동은 leave 가 아니다 — 삽입선·foreign 이 깜빡이지 않게
+function onTabsDragLeave(e: DragEvent) {
+  if ((e.currentTarget as HTMLElement).contains(e.relatedTarget as Node | null)) return;
+  dropIndex.value = null;
+  foreign.value = false;
+}
+
+// 다른 창의 에디터 탭 병합 — 같은 root 의 세션에만 (와이어 경로가 root 상대). 상태는 출처
+// 창에 있으니 이동을 요청한다 (출처가 탭을 떼어 핸드오프를 보내온다)
+function onForeignDrop(e: DragEvent) {
+  const raw = e.dataTransfer?.getData(DND_EDITOR);
+  if (!raw) return;
+  const d = JSON.parse(raw) as { window: string; session: string; root: string | null; groupId: number; tabId: string };
+  if (d.window === windowLabel) return;
+  if (d.root === null || d.root !== sessionRoot(sessions.activeId)) {
+    notify('warning', 'Editor tabs can only be moved between windows of the same folder');
+    return;
+  }
+  requestTabsMove(d.window, { fromSession: d.session, editorTab: { groupId: d.groupId, tabId: d.tabId } }, {
+    toGroupId: props.group.id,
+    toIndex: dropIndex.value ?? undefined,
+  });
 }
 </script>
 
 <template>
   <div class="tabbar">
-    <div class="tabs" @dragover="onTabsDragOver" @dragleave="dropIndex = null" @drop="onTabsDrop">
+    <div class="tabs" @dragover="onTabsDragOver" @dragleave="onTabsDragLeave($event)" @drop="onTabsDrop">
       <div
         v-for="(tab, i) in group.tabs"
         :key="tab.id"
@@ -97,13 +154,13 @@ function onTabsDrop(e: DragEvent) {
           dirty: tab.dirty,
           preview: tab.preview,
           orphaned: editors.orphaned.has(tab.path),
-          'drop-before': editorDrag.kind === 'tab' && dropIndex === i,
-          'drop-after': editorDrag.kind === 'tab' && dropIndex === i + 1 && i === group.tabs.length - 1,
+          'drop-before': tabDragging && dropIndex === i,
+          'drop-after': tabDragging && dropIndex === i + 1 && i === group.tabs.length - 1,
         }"
         :title="tab.path"
         draggable="true"
         @dragstart="onDragStart($event, tab)"
-        @dragend="dropIndex = null; endEditorDrag()"
+        @dragend="onDragEnd($event)"
         @dragover="onTabDragOver($event, i)"
         @click="setActiveTab(group.id, tab.id)"
         @dblclick="pinTab(group.id, tab.id)"

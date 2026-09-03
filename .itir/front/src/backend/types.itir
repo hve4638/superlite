@@ -1,4 +1,4 @@
-role: ThinBackend 계약 — 와이어 프로토콜(백엔드 /ws JSON-RPC, v6 부터 대형 readFile 응답은 바이너리 payload 프레임 — 계약 표면(content=string)은 불변, 복원은 ws.ts 몫)의 TS 사영. 와이어 쪽 대응은 daemon/src 참조
+role: ThinBackend 계약 — 와이어 프로토콜(백엔드 /ws JSON-RPC, v6 부터 대형 readFile 응답은 바이너리 payload 프레임 — 계약 표면(content=string)은 불변, 복원은 ws.ts 몫. v10 adoptTerminal — 세션 간 터미널 이동)의 TS 사영. 와이어 쪽 대응은 daemon/src 참조
 
 port ThinBackend {
   role: 워크스페이스 파일·검색·git·터미널 접근 계약. 구현체 선택은 model/host 조립 지점 한 곳
@@ -68,6 +68,9 @@ port ThinBackend {
   }
   fn createTerminal(cols, rows) -> TerminalSession {
     role: PTY 세션 생성 (동기 핸들, 데이터·셸 종료는 콜백 — onExit 는 셸 자연 종료에만 exit code 와 함께 발화(spawn 실패는 null), dispose 로 인한 정리에는 발화하지 않는다). onData 콜백은 done 을 함께 받는다 — 구독자(xterm)가 청크 처리를 마치면 호출해야 하는 렌더러 배압 신호 (WsBackend 가 ack 시점으로 쓴다, mock 은 생략)
+  }
+  fn adoptTerminal(opts) -> TerminalSession {
+    role: 기존 데몬 터미널을 이 연결의 핸들로 잡는다 (옵셔널 — WsBackend 만, 탭을 다른 창으로 옮기기). term 만: 같은 세션이 소유한 터미널(세션 탭 분리 — 같은 session id 재-attach)의 로컬 핸들 재구성, 데몬 요청 없음. from: 같은 root 의 다른 세션이 소유한 터미널을 데몬에서 이 세션으로 옮긴다 (와이어 v10 adoptTerminal, 새 로컬 id 발급). 이동 실패는 onExit(null) 로 드러난다. TerminalSession.release 는 로컬 핸들만 놓는다 (데몬 터미널은 살림 — 받는 쪽이 adopt)
   }
   fn onFsChanges(cb) {
     role: 외부 파일 변경 배치 구독 (옵셔널 — mock 은 외부 변경이 없다)

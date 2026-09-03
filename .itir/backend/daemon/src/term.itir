@@ -4,7 +4,13 @@ import { err } from '.'
 role: PTY 터미널 — 생성·입출력·리사이즈·정리. 입력은 터미널별 쓰기 스레드로 넘겨 read 루프를 절대 막지 않는다 (배압으로 셸이 출력에서 막히면 pty 입력 큐도 차기 때문 — termAck 이 같은 read 루프라 블로킹 쓰기는 데드락). 출력은 연결이 아니라 세션의 sink 로 — 끊김 중엔 버퍼, 재접속 시 flush
 
 class Term {
-  role: PTY 한 벌 — 입력 채널(전용 쓰기 스레드), master, child 핸들, 입력 예산
+  role: PTY 한 벌 — 입력 채널(전용 쓰기 스레드), master, child 핸들, 입력 예산, 출력 경로(Route)
+}
+class Route {
+  role: 터미널 이벤트가 나가는 곳 — (세션 안의 term id, 세션 sink, 소속 terms 맵)의 간접층. 리더·쓰기 스레드가 매 전송마다 읽는다 — id·sink 를 값으로 잡으면 터미널을 다른 세션으로 옮길 수 없어서 (와이어 v10 adoptTerminal)
+}
+fn adopt() {
+  role: 터미널을 다른 세션으로 — from 의 from_id 를 떼어 to 의 to_id 로 붙이고 Route 를 to 의 sink 로 돌린다. 배압 카운터 리셋(받는 연결은 0 에서). 락 순서 from → route → to (terms 락 아래에서 route 를 잡지 않는다). root 일치는 호출자(main) 몫
 }
 class InputBudget {
   role: 입력 큐 안전판 — 터미널별·전역(데몬 전체) 바이트 상한의 원자 카운터. 프론트가 입력 배압 창을 지키면 거의 도달하지 않는다 (끊김 반복으로 창 리셋이 겹치면 도달 가능). 초과분 폐기는 에피소드당 한 번만 안내(dropping 플래그, 큐가 비면 해제) — 한 터미널의 폭주가 그 터미널에 갇히고 다른 터미널 입력은 정상 동작한다. Drop 시 잔여분을 전역 카운터에서 마저 빼 영구 누수를 닫는다
@@ -25,7 +31,7 @@ fn reset_flow() {
   role: 세션 전 터미널의 미ack 카운터 리셋 — 재접속 시 프론트 카운터와 함께 0 에서 재시작 (유실 프레임 몫의 영구 누적 방지)
 }
 fn spawn_term() {
-  role: PTY 생성 + 전용 리더 스레드 — 출력은 UTF-8 경계 분할로 termData 푸시, 셸 자연 종료 시 자기 정리. 자연 종료 termExit 에는 exit code 를 싣는다 (spawn 실패·dispose 경유는 code 없음). 셸 기본값은 $SHELL(unix) / COMSPEC(Windows). 환경변수 SUPERLIGHT_SOCK(이 데몬의 socket_path — common 의 우회 변수와 같은 이름이라 셸 안의 심·백엔드가 격리 인스턴스 포함 이 데몬에 붙는다)·SUPERLIGHT_SESSION(세션 id, 익명은 생략)을 주입한다 (와이어 v9) — 셸 심이 이 데몬·세션을 찾는 좌표, 원격에서는 원격 데몬 소켓. 쓰기 스레드는 셸에 쓴 몫을 termInputAck(UTF-16 단위 — 프론트 data.length 와 일치)로 통지한다 — 프론트 입력 배압 창의 반쪽
+  role: PTY 생성 + 전용 리더 스레드 — 출력은 UTF-8 경계 분할로 termData 푸시(id·sink 는 Route 에서 매번 읽음), 셸 자연 종료 시 자기 정리(소속 맵도 Route 기준 — adopt 로 옮겨졌으면 그쪽에서 빠진다). 자연 종료 termExit 에는 exit code 를 싣는다 (spawn 실패·dispose 경유는 code 없음). 셸 기본값은 $SHELL(unix) / COMSPEC(Windows). 환경변수 SUPERLIGHT_SOCK(이 데몬의 socket_path — common 의 우회 변수와 같은 이름이라 셸 안의 심·백엔드가 격리 인스턴스 포함 이 데몬에 붙는다)·SUPERLIGHT_SESSION(세션 id, 익명은 생략)을 주입한다 (와이어 v9) — 셸 심이 이 데몬·세션을 찾는 좌표, 원격에서는 원격 데몬 소켓. 쓰기 스레드는 셸에 쓴 몫을 termInputAck(UTF-16 단위 — 프론트 data.length 와 일치)로 통지한다 — 프론트 입력 배압 창의 반쪽
 }
 fn kill_term() {
   role: kill(unix SIGHUP / Windows TerminateProcess) + wait 를 스레드로 — read 루프를 안 막고 좀비를 안 남긴다
