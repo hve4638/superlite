@@ -49,7 +49,7 @@ function parentHint(root: string): string {
 }
 
 /** 드롭다운의 'Open Folder...' — 경로 입력 퀵인풋 (앱·웹 공통. OS 다이얼로그는
- *  Ctrl+Shift+O). + 자체는 빈 탭을 만든다 — 폴더 열기는 시작 페이지 또는 이 드롭다운에서 */
+ *  퀵인풋에서 Ctrl+O 한 번 더). + 자체는 빈 탭을 만든다 — 폴더 열기는 시작 페이지 또는 이 드롭다운에서 */
 function openFolderEntry(): void {
   openQuickInput('folder');
 }

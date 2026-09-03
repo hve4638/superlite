@@ -2,10 +2,11 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { closeQuickInput, workbench } from '../model/workbench';
 import { files } from '../model/files';
-import { commandList, type Command } from '../model/commands';
+import { commandList, isWorkbenchChord, type Command } from '../model/commands';
 import { editors, openFile } from '../model/editors';
-import { openFolder, openRootDefault } from '../model/host';
-import { browseBackend } from '../model/sessions';
+import { openFolder, openFolderDialog, openRootDefault } from '../model/host';
+import { inApp } from '../model/window';
+import { browseBackend, remoteHost, sessions } from '../model/sessions';
 import FileIcon from './widgets/FileIcon.vue';
 
 interface FileItem {
@@ -243,30 +244,17 @@ const openTarget = computed<string | null>(() => {
   return listing.names.includes(frag) ? listing.dir + frag : null;
 });
 
-/** Enter·OK 의 확정 대상 — 화살표로 고른 후보가 있으면 그 경로, 없으면 타이핑된 경로 */
-const confirmTarget = computed<string | null>(() => {
-  const it = focusedIndex.value >= 0 ? items.value[focusedIndex.value] : null;
-  if (it && it.kind === 'folder')
-    return it.up ? (isFsRoot(it.path) ? it.path : it.path.slice(0, -1)) : it.path;
-  return openTarget.value;
-});
-
-/** 입력창 표시 값 — 화살표 선택이 있으면 그 경로가 채워진다 (URL 바 자동완성 방식).
- *  필터(dirPart·fragment)는 타이핑된 query 기준이라 선택 중에도 목록이 안 흔들린다. */
-const displayValue = computed(() =>
-  isFolderMode.value && focusedIndex.value >= 0 ? (confirmTarget.value ?? query.value) : query.value,
-);
-
 function onInput(e: Event): void {
-  // 선택 중 타이핑 → 선택 해제·입력창 복귀. 채워진 표시 값에서 이어서 편집된다.
+  // 선택 중 타이핑 → 선택 해제·입력창 복귀. 목록 하이라이트는 입력창에 반영하지 않는다
+  // (입력창 값은 항상 타이핑 값 — 반영은 목록에서 Enter 로만).
   // normPath: Windows 경로 붙여넣기(C:\ 역슬래시)도 '/' 관례로 받아들인다
   focusedIndex.value = isFolderMode.value ? -1 : 0;
   query.value = normPath((e.target as HTMLInputElement).value);
 }
 
-// 확정 — 그 경로의 새 세션. 환경 분기(?folder= 이동 / Tauri native invoke)는 host.openFolder
+// 확정 — 입력창 경로의 새 세션. 환경 분기(?folder= 이동 / Tauri native invoke)는 host.openFolder
 function confirmOpen(): void {
-  const target = confirmTarget.value;
+  const target = openTarget.value;
   if (!target) return;
   closeQuickInput();
   openFolder(target);
@@ -289,12 +277,10 @@ function accept(it: Item): void {
 function moveFocus(dir: 1 | -1): void {
   const n = items.value.length;
   if (!n) return;
-  if (isFolderMode.value) {
-    // -1(입력창) ↔ 목록 순환 — 목록 끝을 지나면 입력창(타이핑 값 표시)으로 돌아온다
-    let next = focusedIndex.value + dir;
-    if (next < -1) next = n - 1;
-    else if (next >= n) next = -1;
-    focusedIndex.value = next;
+  // folder 모드: 입력창(-1)에서는 위·아래 모두 첫 항목으로 들어가고, 목록에 들어간 뒤에는
+  // 목록 안에서만 순환한다 — 입력창 복귀는 문자 키 입력(onInput)으로만
+  if (isFolderMode.value && focusedIndex.value < 0) {
+    focusedIndex.value = 0;
     return;
   }
   focusedIndex.value = (focusedIndex.value + dir + n) % n;
@@ -320,7 +306,8 @@ function onKeydown(e: KeyboardEvent): void {
       return;
     case 'Enter': {
       e.preventDefault();
-      // folder 모드 — 선택 중이면 자동완성만(그 경로로 진입해 계속 탐색), 입력창 상태면 확정 이동
+      // folder 모드 — 목록 선택 중이면 그 경로('/' 까지)를 입력창에 반영해 계속 탐색,
+      // 입력창 상태면 확정 이동
       if (isFolderMode.value) {
         const it = focusedIndex.value >= 0 ? items.value[focusedIndex.value] : null;
         if (it && it.kind === 'folder') query.value = it.up ? it.path : `${it.path}/`;
@@ -331,14 +318,12 @@ function onKeydown(e: KeyboardEvent): void {
       if (it) accept(it);
       return;
     }
-    case 'Tab': {
-      // folder 모드 셸식 완성 — 선택(없으면 첫 후보) 하위 디렉토리를 입력에 반영하고 계속 탐색
+    case 'Tab':
+      // folder 모드 — Tab·Shift+Tab 은 아래·위 방향키와 동일
       if (!isFolderMode.value) break;
       e.preventDefault();
-      const it = items.value[Math.max(focusedIndex.value, 0)];
-      if (it && it.kind === 'folder' && !it.up) query.value = `${it.path}/`;
+      moveFocus(e.shiftKey ? -1 : 1);
       return;
-    }
     case 'F1':
       if (isFolderMode.value) break;
       e.preventDefault();
@@ -350,6 +335,17 @@ function onKeydown(e: KeyboardEvent): void {
     // VS Code: 열린 상태의 Ctrl+Shift+P 는 커맨드 모드 전환, Ctrl+P 는 다음 항목 이동
     if (e.shiftKey) query.value = '>';
     else moveFocus(1);
+    return;
+  }
+  // 전파를 막은 워크벤치 키바인딩(Ctrl+O 등)은 브라우저 기본 동작(OS 파일 다이얼로그)도 막는다
+  if (isWorkbenchChord(e)) e.preventDefault();
+  // folder 모드에서 Ctrl+O 를 한 번 더 — 앱은 OS 폴더 다이얼로그로 넘어간다 (웹은 없음).
+  // 활성 세션이 원격(ssh://)이면 무시 — OS 다이얼로그는 로컬 폴더만 고르므로 의미가 없다
+  if (isFolderMode.value && inApp && e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'o') {
+    const active = sessions.list.find((t) => t.id === sessions.activeId);
+    if (active?.root && remoteHost(active.root) !== null) return;
+    closeQuickInput();
+    openFolderDialog();
   }
 }
 
@@ -393,7 +389,7 @@ function keyOf(it: Item): string {
       <div class="qi-inputbox">
         <input
           ref="inputEl"
-          :value="displayValue"
+          :value="query"
           type="text"
           spellcheck="false"
           autocomplete="off"
@@ -405,7 +401,7 @@ function keyOf(it: Item): string {
       <button
         v-if="isFolderMode"
         class="qi-ok"
-        :disabled="!confirmTarget"
+        :disabled="!openTarget"
         @mousedown.prevent
         @click="confirmOpen"
       >

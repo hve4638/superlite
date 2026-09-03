@@ -159,8 +159,9 @@ export function setupCommands(): void {
   }, 'ctrl+shift+t');
 
   // '폴더 열기' — Ctrl+O 는 모든 환경에서 경로 입력 퀵인풋을 연다 ("Open folder by path",
-  // VS Code 원격과 같은 방식 — 확정은 host.openFolder). 앱은 OS 다이얼로그를 Ctrl+Shift+O 로
-  // 병행 제공한다 (web-folder-open.md). mock 은 세션 개념이 없어 미등록.
+  // VS Code 원격과 같은 방식 — 확정은 host.openFolder). 앱은 퀵인풋이 열린 상태에서 Ctrl+O 를
+  // 한 번 더 누르면 OS 다이얼로그로 넘어간다 (QuickInput, web-folder-open.md). mock 은 세션
+  // 개념이 없어 미등록.
   if (sessionsEnabled()) {
     register({
       id: 'workbench.action.files.openFolder',
@@ -173,10 +174,9 @@ export function setupCommands(): void {
     register({
       id: 'workbench.action.files.openFolderDialog',
       title: 'File: Open Folder (OS Dialog)...',
-      keybinding: 'Ctrl+Shift+O',
       // host.openFolderDialog — 활성 빈 탭이면 그 자리를 교체하는 replace 판단 포함
       run: openFolderDialog,
-    }, 'ctrl+shift+o');
+    });
   }
 
   // 키 배정(사용자 확정): Ctrl+Tab = 워크스페이스 안 에디터 탭 넘기기, Ctrl+Shift+Tab =

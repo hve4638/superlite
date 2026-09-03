@@ -1,12 +1,11 @@
 <script setup lang="ts">
-import { inApp } from '../model/window';
 import { openQuickInput } from '../model/workbench';
 
 // 시작 페이지 — 루트 없는 빈 세션의 에디터 영역을 채운다 (ticket app-empty-session).
 // 폴더를 열면 이 빈 탭 자리가 워크스페이스 세션으로 교체된다 (host.openFolder 의 replace).
 
-/** 기본 열기 — 경로 입력 퀵인풋 ("Open folder by path", 앱·웹 공통). 앱은 OS
- *  다이얼로그도 Ctrl+Shift+O 로 병행 제공된다 (아래 힌트) */
+/** 기본 열기 — 경로 입력 퀵인풋 ("Open folder by path", 앱·웹 공통). 앱은 퀵인풋에서
+ *  Ctrl+O 를 한 번 더 누르면 OS 다이얼로그로 넘어간다 */
 function openDefault(): void {
   openQuickInput('folder');
 }
@@ -21,10 +20,6 @@ function openDefault(): void {
       <div class="hint-row">
         <span class="hint-label">Open folder by path</span>
         <span class="hint-key">Ctrl+O</span>
-      </div>
-      <div v-if="inApp" class="hint-row">
-        <span class="hint-label">Open folder (OS dialog)</span>
-        <span class="hint-key">Ctrl+Shift+O</span>
       </div>
     </div>
   </div>

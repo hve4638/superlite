@@ -139,7 +139,7 @@ export function openFolder(root: string, opts: { replace?: boolean } = {}): void
   openWebFolder(root, opts.replace ?? false);
 }
 
-/** OS 폴더 다이얼로그 열기 (앱 전용) — Ctrl+Shift+O 커맨드·시작 페이지·+ 드롭다운이
+/** OS 폴더 다이얼로그 열기 (앱 전용) — 팔레트 커맨드·퀵인풋의 두 번째 Ctrl+O 가
  *  공유한다. 활성 빈 탭의 교체 판단(replace)을 한 곳에 모은다 */
 export function openFolderDialog(): void {
   const tauri = (window as { __TAURI__?: TauriInvoke }).__TAURI__;
