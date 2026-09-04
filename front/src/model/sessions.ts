@@ -112,6 +112,19 @@ export function setBeforeSessionSwitch(fn: () => void): void {
   beforeSwitch = fn;
 }
 
+/** 백엔드 핸들 → 그 세션 탭의 root (강제 정리가 host 를 알아내는 경로). 없으면 null */
+export function rootOfBackend(backend: ThinBackend): string | null {
+  for (const [id, c] of ctxs) {
+    if (c.backend === backend) return sessions.list.find((t) => t.id === id)?.root ?? null;
+  }
+  return null;
+}
+
+/** 활성 세션 컨텍스트 (없으면 null) */
+export function activeSessionCtx(): SessionCtx | null {
+  return ctxs.get(sessions.activeId) ?? null;
+}
+
 /** ssh://host/path 또는 ssh://host root 의 host — 원격이 아니면 null */
 export function remoteHost(root: string): string | null {
   const m = /^ssh:\/\/([^/]+)(?:\/|$)/.exec(root);

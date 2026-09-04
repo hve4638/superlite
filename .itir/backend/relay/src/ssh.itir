@@ -30,8 +30,14 @@ fn ssh_cmd(host) {
 class RemoteInfo {
   role: 원격 기본 정보 — home·os(std OS 표기)·arch(std ARCH 표기). 데몬 바이너리 선택 키
 }
-fn probe_remote(host) -> info {
-  role: 접속마다 exec 한 번으로 $HOME·uname -s·uname -m 조회, darwin→macos·arm64→aarch64 정규화
+fn probe_remote(host, tx?) -> info {
+  role: 접속마다 exec 한 번으로 $HOME·uname -s·uname -m 조회, darwin→macos·arm64→aarch64 정규화. 단계 'ssh' 통보
+}
+export class StageTx {
+  role: 접속 단계 통보 채널 타입 — (단계, 부가 바이트 수) mpsc 송신자. relay 가 만들어 probe_remote·pipe_conn 에 넘긴다
+}
+fn stage(tx?, s, bytes?) {
+  role: 접속 단계 통보 (StageTx 채널, None 이면 무통보) — relay 가 프론트에 connectStage 이벤트로 흘린다 (ssh-connect-status)
 }
 fn expand_home(home, path) -> path {
   role: `/~`·`/~/sub` 표기를 원격 $HOME 절대 경로로 치환 (순수) — 프론트는 원격 홈을 모르므로 세션 root 에 '~' 를 적는다. '~' 가 아니면 그대로
@@ -39,9 +45,12 @@ fn expand_home(home, path) -> path {
 fn remote_daemon_bin(info) -> path {
   role: 원격 OS·arch 용 데몬 바이너리 — 로컬과 같으면 로컬 데몬, 다르면 형제 파일 superlight-daemon-<os>-<arch> (Windows 배포 세트가 musl 정적 linux-x86_64 데몬을 동봉 — build.sh). 없으면 파일명·위치를 담은 오류
 }
-fn ensure_remote_bin(host, info) -> remote_path {
-  role: 원격 헬퍼(=데몬 바이너리) 배치 보장 — $HOME/.cache/code-superlight/bin/<내용해시>/ 에 없으면 remote_daemon_bin 산출물을 ssh stdin 으로 업로드. 해시 키라 재빌드=재배포·빌드 혼용 없음
+fn ensure_remote_bin(host, info, tx?) -> remote_path {
+  role: 원격 헬퍼(=데몬 바이너리) 배치 보장 — $HOME/.cache/code-superlight/bin/<내용해시>/ 에 없으면 remote_daemon_bin 산출물을 ssh stdin 으로 업로드. 해시 키라 재빌드=재배포·빌드 혼용 없음. 단계 'helper'(존재 확인)·'upload'(bytes 동봉, 없을 때만) 통보
 }
-fn pipe_conn(host, info) -> child {
-  role: 원격 데몬 파이프 연결 — 배치 보장 후 `ssh host superlight-daemon --pipe` spawn. child 의 stdin/stdout 이 데몬 와이어 (relay 가 로컬 소켓 자리에 물린다). kill_on_drop — relay 종료 = ssh 종료 → 원격 데몬 세션 detach
+fn clean_remote(host) -> report {
+  role: 원격 문제 데몬 정리 — probe_remote → ensure_remote_bin → `ssh host superlight-daemon --clean` exec, stdout 반환. 헬퍼가 곧 원격의 데몬이므로 정리 명령도 같은 바이너리
+}
+fn pipe_conn(host, info, tx?) -> child {
+  role: 원격 데몬 파이프 연결 — 배치 보장 후 `ssh host superlight-daemon --pipe` spawn (단계 'daemon' 통보). child 의 stdin/stdout 이 데몬 와이어 (relay 가 로컬 소켓 자리에 물린다). kill_on_drop — relay 종료 = ssh 종료 → 원격 데몬 세션 detach
 }

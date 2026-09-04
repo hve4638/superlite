@@ -1,17 +1,26 @@
 import { ctx, viewOf } from './ctx'
-import { FsChange, ThinBackend } from '../backend/types'
+import { ConnectStage, FsChange, ThinBackend } from '../backend/types'
 import { createEditors, imageMime } from './editors'
 import { createFiles, parentOf } from './files'
 import { createScm } from './scm'
 import { createSearch } from './search'
+import { promptDaemonClean } from './daemon'
 
 role: 데몬 fsChanges 배치 소비 — 소비자별 고정 창 디바운스 (에디터 100ms · 탐색기 500ms · git 1000ms · 검색 250ms), 창 포커스 시 전체 리프레시 안전망. 연결 상태(재접속 재동기화)도 여기서 소비한다. 열린 문서의 삭제 이벤트는 실존 재검증(깨끗한 문서는 readFile 재로드 겸용, dirty 는 내용이 적용될 일이 없어 경량 stat)을 거쳐 orphan 표시로 잇는다 (가짜 삭제 이벤트 방어 — VS Code 동일). orphan 경로는 dirty 여도 후속 이벤트에 검사해 재생성 해제를 보장하고, 끊김 중 검사 실패는 orphan 으로 세우지 않는다. 세션별 팩토리(createWatch) — 이벤트가 자기 세션의 files·editors·scm·search 인스턴스에만 반영돼, 배경 세션의 변경이 활성 세션 상태를 오염시키지 않는다
 
-// 백엔드 연결 상태 — 상태바 표시용. 재연결 시 전체 리프레시로 끊김 중 놓친 변경을 재동기화
+// 백엔드 연결 상태 — 상태바 표시용. 재연결 시 전체 리프레시로 끊김 중 놓친 변경을 재동기화.
+// stage(원격 접속 진행 단계)·stageSince·uploadBytes·failedStage(실패한 단계 — 'ssh' 면 연결 자체 실패, 그 외는 연결 뒤 실패)
 export val connection
 
+export fn stageLabel(stage, bytes?) -> String {
+  role: 접속 단계 → 진행 표시 라벨 (상태바·시작 페이지 공용)
+}
+export fn failureLabel(stage?) -> String {
+  role: 실패 단계 → 실패 라벨 — ssh 연결 실패 / 원격 헬퍼 배치 실패 / 원격 데몬 기동 실패 / 단계 정보 없는 접속 실패
+}
+
 export fn createWatch(backend, editorsM, filesM, scmM, searchM) {
-  role: 세션별 감시 소비 모듈 생성 — 디바운스 소비자(누적 버퍼·타이머)가 세션마다 독립이다. initConnection(연결 상태 구독)은 초기 로드보다 먼저 호출된다 — 원격 ssh 실패는 첫 응답 자리에 close 4502 로 오므로 init 뒤 구독은 놓친다. connection.error = 재시도 무의미한 영구 실패 사유
+  role: 세션별 감시 소비 모듈 생성 — 디바운스 소비자(누적 버퍼·타이머)가 세션마다 독립이다. initConnection(연결 상태 구독)은 초기 로드보다 먼저 호출된다 — 원격 ssh 실패는 첫 응답 자리에 close 4502 로 오므로 init 뒤 구독은 놓친다. onConnectStage 구독도 같은 자리 (첫 단계 이벤트가 attach 응답보다 먼저). connection.error = 재시도 무의미한 영구 실패 사유, failedStage = 그때의 마지막 단계. 실패 알림은 단계별 라벨로 구분. 데몬 기동 단계 실패면 promptDaemonClean — 강제 정리는 사용자 승인 하에서만 (자동 정리 없음, ticket daemon-cleanup)
 }
 export fn initWatch() {
   role: onFsChanges 구독 + 포커스 안전망 등록 (onConnection 은 initConnection 이 먼저) (mock 은 구독 자체가 없어 no-op)

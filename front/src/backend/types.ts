@@ -104,6 +104,11 @@ export interface TerminalSession {
   release?(): void;
 }
 
+/** 원격 접속 단계 (relay 의 connectStage 이벤트) — ssh: 원격 정보 조회(인증 포함) → helper: 헬퍼
+ *  존재 확인 → upload: 헬퍼 업로드(없을 때만, bytes 동봉) → daemon: 원격 데몬 기동·attach 대기.
+ *  완료 신호는 따로 없다 — attach 응답 도달이 곧 완료. 로컬 세션은 이 이벤트가 오지 않는다 */
+export type ConnectStage = 'ssh' | 'helper' | 'upload' | 'daemon';
+
 export interface ThinBackend {
   workspace(): Promise<WorkspaceInfo>;
   /** path 디렉토리의 직계 엔트리. 정렬은 호출자 책임. */
@@ -175,6 +180,13 @@ export interface ThinBackend {
    */
   /** error: 재시도 무의미한 영구 실패의 사유 (원격 ssh 접속 실패 등) — 이때 connected=false 고정 */
   onConnection?(cb: (connected: boolean, error?: string) => void): void;
+  /** 원격 접속 단계 구독 (옵셔널 — WsBackend 만, 로컬 세션은 발화하지 않는다). null = 접속 완료
+   *  (attach 응답 도달). 실패(onConnection 의 error)는 마지막으로 받은 단계에서 난 것이다 —
+   *  구독자가 실패 단계를 기록한다 */
+  onConnectStage?(cb: (stage: ConnectStage | null, bytes?: number) => void): void;
+  /** 영구 실패(onConnection error) 뒤 사용자 주도 재접속 — 실패 전 상태로 돌아가 다시 연다.
+   *  (옵셔널 — WsBackend 만). 실패하지 않은 연결에는 무동작 */
+  reconnect?(): void;
   /**
    * 터미널 입력 배압 상태 구독 (옵셔널 — mock 은 즉시 소화라 미구현). 셸이 입력을 읽지
    * 않아 미소화 전송량이 창을 넘으면 (TerminalSession.id, true) — 이후 입력은 로컬 대기.

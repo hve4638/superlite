@@ -3,10 +3,12 @@ import { MockBackend } from '../backend/mock';
 import { WsBackend } from '../backend/ws';
 import type { ThinBackend } from '../backend/types';
 import { ctx, viewOf } from './ctx';
-import { notify } from './notifications';
+import { daemonClean } from './daemon';
+import { errText, notify } from './notifications';
 import type { SessionCtx } from './session';
 import {
   activateSession,
+  activeSessionCtx,
   activeSessionEmpty,
   bootSession,
   configureSessions,
@@ -14,6 +16,7 @@ import {
   openWebFolder,
   remoteHost,
   replaceAppSession,
+  rootOfBackend,
   type OpenMode,
   sessions,
   type SessionTab,
@@ -206,4 +209,37 @@ export function openFolder(root: string, opts: { mode?: OpenMode } = {}): void {
 export function openFolderDialog(): void {
   const tauri = (window as { __TAURI__?: TauriInvoke }).__TAURI__;
   void tauri?.core.invoke('open_folder', { replace: replaceTarget() });
+}
+
+/**
+ * 강제 정리 확인 — 승인 시 백엔드 POST /daemon/clean(host 는 실패 세션의 root 에서) 로
+ * `superlight-daemon --clean` 을 원격(로컬 세션이면 로컬)에서 실행하고, 결과를 알림으로 보인
+ * 뒤 그 세션을 재접속한다. 사용자 승인 없이는 아무것도 죽이지 않는다 (ticket daemon-cleanup)
+ */
+export async function confirmDaemonClean(): Promise<void> {
+  const backend = daemonClean.pending;
+  if (backend === null) return;
+  daemonClean.pending = null;
+  daemonClean.busy = true;
+  try {
+    const root = rootOfBackend(backend);
+    const host = root === null ? null : remoteHost(root);
+    const url = backendApiUrl('/daemon/clean', host === null ? {} : { host });
+    if (url === null) throw new Error('원격 미지원 환경');
+    const res = await fetch(url, { method: 'POST' });
+    const text = await res.text();
+    if (!res.ok) throw new Error(text || `HTTP ${res.status}`);
+    notify('info', `데몬 정리:\n${text.trim() || '(정리할 것 없음)'}`);
+    backend.reconnect?.();
+  } catch (e) {
+    notify('error', `데몬 정리 실패: ${errText(e)}`);
+  } finally {
+    daemonClean.busy = false;
+  }
+}
+
+/** 영구 실패 뒤 사용자 주도 재접속 (시작 페이지 Retry) — 활성 세션의 백엔드를 다시 연다 */
+export function retryActiveConnection(): void {
+  const c = activeSessionCtx();
+  c?.backend.reconnect?.();
 }

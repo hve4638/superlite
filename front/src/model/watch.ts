@@ -6,8 +6,9 @@
  * (워처는 이벤트를 놓칠 수 있다는 전제).
  */
 import { reactive } from '@vue/reactivity';
-import type { FsChange, ThinBackend } from '../backend/types';
+import type { ConnectStage, FsChange, ThinBackend } from '../backend/types';
 import { ctx, viewOf } from './ctx';
+import { promptDaemonClean } from './daemon';
 import { type createEditors, imageMime } from './editors';
 import { type createFiles, parentOf } from './files';
 import { notify } from './notifications';
@@ -149,17 +150,38 @@ export function createWatch(
     ok: true,
     /** 영구 실패 사유 (원격 ssh 접속 실패) — 재연결하지 않으며 탐색기가 진행 막대 대신 보인다 */
     error: null as string | null,
+    /** 원격 접속 진행 단계 — null 이면 접속 중이 아니다 (attach 응답 도달 또는 실패로 끝난다) */
+    stage: null as ConnectStage | null,
+    /** 현재 단계에 들어선 시각 (ms) — 오래 걸리는 단계의 경과 시간 힌트 */
+    stageSince: 0,
+    /** 영구 실패가 난 단계 — 'ssh' 면 연결 자체가 안 된 것, 그 외는 연결은 됐으나 그 뒤 실패 */
+    failedStage: null as ConnectStage | null,
+    /** upload 단계의 바이너리 크기 (진행 힌트) */
+    uploadBytes: null as number | null,
   });
 
   /** 연결 상태 구독 — 초기 로드보다 먼저 (원격 ssh 실패는 첫 readDir 응답 자리에 오므로,
-   *  init 완료 뒤에 구독하면 영원히 못 받는다) */
+   *  init 완료 뒤에 구독하면 영원히 못 받는다). 단계 구독도 같은 자리 — 첫 단계 이벤트가
+   *  attach 응답보다 먼저 온다 */
   function initConnection(): void {
+    backend.onConnectStage?.((stage, bytes) => {
+      connection.stage = stage; // null = attach 완료
+      connection.stageSince = Date.now();
+      connection.failedStage = null;
+      connection.uploadBytes = bytes ?? null;
+    });
     backend.onConnection?.((ok, error) => {
       connection.ok = ok;
       connection.error = error ?? null;
+      // 실패는 마지막으로 받은 단계에서 난 것 — 단계 이벤트가 없었으면(로컬·4403) null
+      connection.failedStage = error ? connection.stage : null;
+      connection.stage = null;
       // 영구 실패는 알림으로도 — 원격 빈 세션(시작 페이지)은 탐색기 오류 줄이 없어 상태바
-      // 툴팁 말고는 사유를 볼 곳이 없었다
-      if (error) notify('error', `접속 실패: ${error}`);
+      // 툴팁 말고는 사유를 볼 곳이 없었다. 단계별로 구분해 연결 자체 실패와 그 뒤 실패가 갈린다
+      if (error) notify('error', `${failureLabel(connection.failedStage)}: ${error}`);
+      // 데몬 기동 단계 실패 = 원격 데몬이 응답하지 않는다 (락만 쥔 좀비가 전형) — 강제 정리를
+      // 묻는다. 자동으로 정리하지 않는다
+      if (error && connection.failedStage === 'daemon') promptDaemonClean(backend);
       // 끊김 중의 fsChanges 는 이미 놓쳤다 — overflow 와 같은 전체 리프레시로 재동기화
       if (ok) fullRefresh();
     });
@@ -173,6 +195,35 @@ export function createWatch(
   }
 
   return { connection, initConnection, initWatch };
+}
+
+/** 접속 단계 → 진행 표시 라벨 (상태바·시작 페이지) */
+export function stageLabel(stage: ConnectStage, bytes: number | null): string {
+  switch (stage) {
+    case 'ssh':
+      return 'Connecting (ssh)…';
+    case 'helper':
+      return 'Checking remote helper…';
+    case 'upload':
+      return `Uploading helper${bytes !== null ? ` (${(bytes / (1024 * 1024)).toFixed(1)} MB)` : ''}…`;
+    case 'daemon':
+      return 'Starting remote daemon…';
+  }
+}
+
+/** 실패 단계 → 실패 라벨 — null 은 단계 정보 없는 실패(로컬·미등록 세션) */
+export function failureLabel(stage: ConnectStage | null): string {
+  switch (stage) {
+    case 'ssh':
+      return 'SSH 연결 실패';
+    case 'helper':
+    case 'upload':
+      return '원격 헬퍼 배치 실패';
+    case 'daemon':
+      return '원격 데몬 기동 실패';
+    default:
+      return '접속 실패';
+  }
 }
 
 // ---- 활성 세션 전달 shim

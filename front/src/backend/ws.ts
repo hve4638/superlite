@@ -8,7 +8,7 @@
  * (터미널·끊김 중 출력 버퍼)을 이어 붙인다. 끊김 중 요청은 큐에 남아 재연결 후 전송되고,
  * 끊기는 순간 진행 중이던 요청만 실패한다 (실행 여부 불명 — 네트워크 실패의 본질).
  */
-import type {
+import type { ConnectStage,
   DirEntry,
   FileContent,
   FileSearchResult,
@@ -79,6 +79,9 @@ export class WsBackend implements ThinBackend {
   private inputBlockedHandler: ((term: number, blocked: boolean) => void) | null = null;
   private fsHandler: ((changes: FsChange[], overflow: boolean) => void) | null = null;
   private connHandler: ((connected: boolean, error?: string) => void) | null = null;
+  private stageHandler: ((stage: ConnectStage | null, bytes?: number) => void) | null = null;
+  /** reconnect() 로 다시 여는 중 — 첫 연결이 실패했던 경우에도 onopen 이 연결 회복을 알리게 */
+  private retrying = false;
   private sessionLostHandler: ((deadTerms: number[]) => void) | null = null;
   private requestHandler: ((method: string, params: unknown) => Promise<unknown>) | null = null;
   /** 이번 연결이 재연결인가 — attach 응답(id 0)의 resumed 해석에 쓴다 */
@@ -123,7 +126,8 @@ export class WsBackend implements ThinBackend {
         for (const data of q) this.writeTerm(term, data);
       }
       // WHY: 재연결 알림은 큐 flush 뒤 — 구독자의 재동기화 요청이 밀린 요청을 앞지르지 않게
-      if (this.everOpened) this.connHandler?.(true);
+      if (this.everOpened || this.retrying) this.connHandler?.(true);
+      this.retrying = false;
       this.everOpened = true;
     };
     this.ws.onmessage = (ev) => {
@@ -136,6 +140,10 @@ export class WsBackend implements ThinBackend {
         msg = JSON.parse(String(ev.data));
       } catch {
         return; // 깨진 프레임 하나가 onmessage 를 터뜨리지 않게
+      }
+      if (msg.event === 'connectStage') {
+        this.stageHandler?.(msg.stage, typeof msg.bytes === 'number' ? msg.bytes : undefined);
+        return;
       }
       if (msg.event === 'termData') {
         // ack 는 렌더러가 이 청크를 실제로 처리한 뒤(done) — 도착 즉시 ack 하면 xterm
@@ -217,6 +225,7 @@ export class WsBackend implements ThinBackend {
       // 데몬이 세션을 회수한 것 — 끊김 이전 세대의 터미널만 죽었다.
       // 끊김 중 만든 터미널(현재 세대)은 큐 flush 로 새 세션에 살아 있으므로 제외
       if (msg.id === 0) {
+        this.stageHandler?.(null); // attach 응답 = 접속 단계 완료
         if (this.isReconnect && msg.result?.resumed !== true) {
           const dead = [...this.termEpoch]
             .filter(([, epoch]) => epoch < this.connEpoch)
@@ -316,6 +325,15 @@ export class WsBackend implements ThinBackend {
   }
 
   /** 세션 탭 닫기 등 의도적 종료 — 재연결을 멈추고 연결·대기 요청을 정리한다 */
+  /** 영구 실패(4403·4502) 뒤 사용자 주도 재접속 — disposed 를 풀고 다시 연다. 의도적 dispose
+   *  뒤에는 부르지 않는다 (세션 탭이 이미 없다) */
+  reconnect(): void {
+    if (!this.disposed) return;
+    this.disposed = false;
+    this.retrying = true;
+    this.connect();
+  }
+
   dispose(): void {
     this.disposed = true;
     for (const p of this.pending.values()) p.reject(new Error('세션이 닫혔다'));
@@ -423,6 +441,10 @@ export class WsBackend implements ThinBackend {
 
   onFsChanges(cb: (changes: FsChange[], overflow: boolean) => void): void {
     this.fsHandler = cb;
+  }
+
+  onConnectStage(cb: (stage: ConnectStage | null, bytes?: number) => void): void {
+    this.stageHandler = cb;
   }
 
   onConnection(cb: (connected: boolean, error?: string) => void): void {

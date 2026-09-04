@@ -43,6 +43,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
+mod clean;
 mod front;
 mod req;
 mod term;
@@ -100,6 +101,11 @@ async fn main() {
         pipe_main().await;
         return;
     }
+    // --clean: 문제 데몬 정리 모드 — 사용자가 앱에서 명시적으로 승인했을 때만 relay 가 부른다
+    if std::env::args().any(|a| a == "--clean") {
+        clean::clean_main();
+        return;
+    }
     let sock = superlight_common::socket_path();
     // WHY: 단독 보장은 파일 락으로 — connect 검사→unlink→bind 순서는 원자적이지 않아
     //      동시 기동 시 산 데몬의 소켓 파일을 다른 데몬이 지우는 race 가 있다.
@@ -137,32 +143,38 @@ async fn main() {
     // 연결 0 이 grace 만큼 지속되면 자진 종료 (백엔드 전멸 = 쓰는 사람 없음).
     // 단 detach 세션이 남아 있으면 버틴다 — 세션 grace(재접속 약속)가 유휴 종료에
     // 조용히 잘리지 않게. reaper 가 세션을 회수하고 나서야 유휴 카운트가 시작된다.
+    // 소켓 파일이 사라져도 종료 — 아무도 접속할 수 없는 프로세스는 락만 쥔 좀비다
+    // (unix 만 — named pipe 는 프로세스와 수명을 같이한다).
     // ponytail: 종료 직전 새 접속이 오는 race 는 백엔드의 접속 실패 → spawn 재시도가 흡수.
     //           handle_conn 이 panic 해도 detach 전환·연결 카운터 감소는 drop guard
     //           (ConnCleanup·ConnCount)가 보장한다 — 이 조건이 영구히 붙드는 일은 없다.
-    {
+    let watchdog = {
         let (conns, sock, sessions) = (conns.clone(), sock.clone(), sessions.clone());
         tokio::spawn(async move {
             let mut idle = 0u64;
             loop {
                 tokio::time::sleep(Duration::from_secs(1)).await;
-                let quiet =
-                    conns.load(Ordering::SeqCst) == 0 && sessions.lock().unwrap().is_empty();
+                if cfg!(unix) && !sock.exists() {
+                    log_line("superlight-daemon: 소켓 파일 사라짐 — 종료");
+                    std::process::exit(2);
+                }
+                // try_lock: 감시는 누구도 기다리지 않는다 — 다른 태스크가 세션 맵을 영원히 쥐면
+                // 여기서 멈춰 소켓 확인까지 못 하는 좀비가 된다. 못 잡으면 이번 초는 '조용하지
+                // 않음'으로 (유휴 카운트만 늦어진다)
+                let quiet = conns.load(Ordering::SeqCst) == 0
+                    && sessions.try_lock().is_ok_and(|s| s.is_empty());
                 idle = if quiet { idle + 1 } else { 0 };
                 if idle >= grace {
                     // 파일 정리는 unix 소켓만 — named pipe 는 프로세스 종료와 함께 사라진다
                     if cfg!(unix) {
                         let _ = std::fs::remove_file(&sock);
                     }
-                    // 소켓을 지운 뒤에는 무조건 exit 까지 가야 한다 — eprintln! 은 stderr 가
-                    // 닫힌 파이프면 panic 해 여기서 멈춘다 (spawn_self_daemon 참조)
-                    use std::io::Write;
-                    let _ = writeln!(std::io::stderr(), "superlight-daemon: 유휴 {grace}s — 종료");
+                    log_line(&format!("superlight-daemon: 유휴 {grace}s — 종료"));
                     std::process::exit(0);
                 }
             }
-        });
-    }
+        })
+    };
 
     // 세션 reaper — detach 된 세션의 터미널을 세션 grace 뒤 회수.
     // 데몬 자체가 유휴 종료하면 그때 함께 죽는다 (백엔드 제어 연결이 있는 한 안 죽는다)
@@ -180,42 +192,68 @@ async fn main() {
         });
     }
 
-    loop {
-        #[cfg(unix)]
-        let stream = match listener.accept().await {
-            Ok((s, _)) => s,
-            Err(_) => {
-                // fd 고갈처럼 지속되는 accept 에러에서 100% CPU 스핀 방지
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                continue;
-            }
-        };
-        // named pipe 는 인스턴스 단위 — 접속된 인스턴스를 연결에 넘기고 다음 것을 만든다
+    // accept 루프
+    {
+        let (conns, sessions) = (conns.clone(), sessions.clone());
         #[cfg(windows)]
-        let stream = {
-            if listener.connect().await.is_err() {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                continue;
-            }
-            // 재생성 실패는 이번 접속만 포기 (unix accept 에러와 같은 정책) —
-            // 접속된 인스턴스도 drop 되므로 클라이언트의 재시도 루프가 흡수한다
-            let Ok(next) = tokio::net::windows::named_pipe::ServerOptions::new().create(&sock)
-            else {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                continue;
-            };
-            std::mem::replace(&mut listener, next)
-        };
-        let conns = conns.clone();
-        let sessions = sessions.clone();
-        conns.fetch_add(1, Ordering::SeqCst);
+        let sock = sock.clone();
         tokio::spawn(async move {
-            // 감소는 drop guard 로 — handle_conn 이 panic 하면 이 뒤 코드는 실행되지 않아
-            // 카운터가 새고, 유휴 종료(연결 0 판정)가 영구히 막힌다
-            let _count = ConnCount(conns);
-            handle_conn(stream, sessions).await;
+            #[cfg(windows)]
+            let mut listener = listener;
+            loop {
+                #[cfg(unix)]
+                let stream = match listener.accept().await {
+                    Ok((s, _)) => s,
+                    Err(_) => {
+                        // fd 고갈처럼 지속되는 accept 에러에서 100% CPU 스핀 방지
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        continue;
+                    }
+                };
+                // named pipe 는 인스턴스 단위 — 접속된 인스턴스를 연결에 넘기고 다음 것을 만든다
+                #[cfg(windows)]
+                let stream = {
+                    if listener.connect().await.is_err() {
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        continue;
+                    }
+                    // 재생성 실패는 이번 접속만 포기 (unix accept 에러와 같은 정책) —
+                    // 접속된 인스턴스도 drop 되므로 클라이언트의 재시도 루프가 흡수한다
+                    let Ok(next) =
+                        tokio::net::windows::named_pipe::ServerOptions::new().create(&sock)
+                    else {
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        continue;
+                    };
+                    std::mem::replace(&mut listener, next)
+                };
+                let conns = conns.clone();
+                let sessions = sessions.clone();
+                conns.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    // 감소는 drop guard 로 — handle_conn 이 panic 하면 이 뒤 코드는 실행되지 않아
+                    // 카운터가 새고, 유휴 종료(연결 0 판정)가 영구히 막힌다
+                    let _count = ConnCount(conns);
+                    handle_conn(stream, sessions).await;
+                });
+            }
         });
     }
+
+    // WHY: 프로세스 수명 = 유휴 감시 태스크 수명. 종료(exit)를 부르는 곳이 그 태스크 하나라,
+    //      그것만 panic 으로 죽고 나머지(accept·reaper)가 살아남으면 락은 쥔 채 아무도 못
+    //      끝내는 좀비가 된다 (실측 2026-09-03: 종료 경로의 eprintln! 이 EPIPE panic).
+    //      어떤 이유로든 감시가 끝나면 프로세스 전체를 내린다
+    let _ = watchdog.await;
+    let _ = std::fs::remove_file(&sock);
+    std::process::exit(1);
+}
+
+/// 종료·감시 경로의 로그 — 실패를 무시한다. eprintln! 은 stderr 가 닫힌 파이프면 panic 해
+/// exit 까지 못 간다
+fn log_line(s: &str) {
+    use std::io::Write;
+    let _ = writeln!(std::io::stderr(), "{s}");
 }
 
 /// ssh 헬퍼 모드 — 백엔드가 `ssh host superlight-daemon --pipe` 로 원격(=이 머신)에
@@ -298,9 +336,18 @@ fn daemon_log_file() -> Option<std::fs::File> {
 }
 
 fn acquire_lock(sock: &Path) -> Option<std::fs::File> {
-    let f = std::fs::File::create(superlight_common::lock_path(sock)).ok()?;
+    let f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(superlight_common::lock_path(sock))
+        .ok()?;
     // WouldBlock 이든 다른 실패든 물러난다 (fail-closed)
-    f.try_lock().is_ok().then_some(f)
+    f.try_lock().ok()?;
+    // 보유자 pid — `--clean` 이 좀비(락은 쥐고 소켓은 없음)를 지목하는 유일한 근거.
+    // 락을 쥔 뒤에만 쓴다 (밀려난 후보가 산 데몬의 pid 를 덮지 않게). 실패해도 데몬은 뜬다
+    let _ = std::fs::write(superlight_common::pid_path(sock), std::process::id().to_string());
+    Some(f)
 }
 
 /// 세션 재사용 또는 신규 등록. 재접속이면 끊김 중 쌓인 이벤트를 flush 하고 sink 를 새

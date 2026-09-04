@@ -383,10 +383,21 @@ pub struct RemoteInfo {
     pub arch: String,
 }
 
-pub async fn probe_remote(host: &str) -> Result<RemoteInfo, String> {
+/// 접속 단계 통보 채널 — relay 가 프론트에 connectStage 이벤트로 흘린다 (ssh-connect-status).
+/// (단계, 부가 바이트 수 — upload 만). None 이면 통보 없음 (clean_remote 등)
+pub type StageTx = tokio::sync::mpsc::UnboundedSender<(&'static str, Option<u64>)>;
+
+fn stage(tx: Option<&StageTx>, s: &'static str, bytes: Option<u64>) {
+    if let Some(tx) = tx {
+        let _ = tx.send((s, bytes));
+    }
+}
+
+pub async fn probe_remote(host: &str, tx: Option<&StageTx>) -> Result<RemoteInfo, String> {
     if !host_ok(host) {
         return Err("잘못된 host".into());
     }
+    stage(tx, "ssh", None);
     let out = run_ssh(host, r#"printf '%s
 ' "$HOME" "$(uname -s)" "$(uname -m)""#, b"").await?;
     if !out.status.success() {
@@ -446,12 +457,13 @@ fn remote_daemon_bin(info: &RemoteInfo) -> Result<PathBuf, String> {
 /// 다른 빌드끼리 섞이지 않는다 (와이어 버전 대조가 필요 없어진다).
 /// 반환: 원격 셸이 해석할 경로 식 ("$HOME/..." — 원격 홈 경로를 이쪽에서 모른다).
 /// 올리는 바이너리는 원격 OS·아키텍처에 맞춘다 (remote_daemon_bin).
-async fn ensure_remote_bin(host: &str, info: &RemoteInfo) -> Result<String, String> {
+async fn ensure_remote_bin(host: &str, info: &RemoteInfo, tx: Option<&StageTx>) -> Result<String, String> {
     let bin = remote_daemon_bin(info)?;
     let data = std::fs::read(&bin)
         .map_err(|e| format!("데몬 바이너리 읽기 실패 {}: {e}", bin.display()))?;
     let dir = format!("$HOME/.cache/code-superlight/bin/{:016x}", fnv64(&data));
     let target = format!("{dir}/superlight-daemon");
+    stage(tx, "helper", None);
     // 존재 검사와 업로드를 나눈다 — 한 번에 하면 이미 있을 때도 stdin 으로 바이너리를 다
     // 보내게 된다 (원격이 안 읽으면 전송이 어중간히 끊긴다). ControlMaster 덕에 두 번째
     // exec 는 왕복 하나 값이다.
@@ -460,6 +472,7 @@ async fn ensure_remote_bin(host: &str, info: &RemoteInfo) -> Result<String, Stri
         if probe.status.code() != Some(1) {
             return Err(ssh_err(&probe)); // exit 1 은 "없음", 그 외(255 등)는 접속 실패
         }
+        stage(tx, "upload", Some(data.len() as u64));
         // $$(원격 셸 pid)로 임시명 충돌 방지 — 동시 접속 둘이 같은 파일을 쓰지 않게
         let up = format!(
             r#"mkdir -p "{dir}" && cat > "{target}.$$" && chmod +x "{target}.$$" && mv "{target}.$$" "{target}""#
@@ -477,17 +490,33 @@ async fn ensure_remote_bin(host: &str, info: &RemoteInfo) -> Result<String, Stri
 /// 반환된 child 의 stdin/stdout 이 데몬 와이어다 (relay 가 로컬 소켓 자리에 물린다).
 /// kill_on_drop: relay 종료 = ssh 종료 → 원격 --pipe 가 EOF 로 물러나고 원격 데몬은
 /// 세션을 detach 로 돌린다 (재접속 약속은 원격 데몬의 세션 grace 가 지킨다).
-pub async fn pipe_conn(host: &str, info: &RemoteInfo) -> Result<Child, String> {
+pub async fn pipe_conn(host: &str, info: &RemoteInfo, tx: Option<&StageTx>) -> Result<Child, String> {
     if !host_ok(host) {
         return Err("잘못된 host".into());
     }
-    let bin = ensure_remote_bin(host, info).await?;
+    let bin = ensure_remote_bin(host, info, tx).await?;
+    stage(tx, "daemon", None);
     let mut c = ssh_cmd(host);
     c.arg(format!(r#""{bin}" --pipe"#));
     // 헬퍼 stderr 는 relay 가 읽어 백엔드 로그로 흘리고 마지막 줄을 실패 사유로 쓴다 (lib.rs relay)
     c.stderr(Stdio::piped());
     c.kill_on_drop(true);
     c.spawn().map_err(|e| format!("ssh 실행 실패: {e}"))
+}
+
+/// 원격 문제 데몬 정리 — 헬퍼 배치 보장 후 `ssh host superlight-daemon --clean`. 헬퍼가
+/// 곧 원격의 데몬이므로 정리 명령도 같은 바이너리다. 반환은 --clean 의 stdout
+pub async fn clean_remote(host: &str) -> Result<String, String> {
+    if !host_ok(host) {
+        return Err("잘못된 host".into());
+    }
+    let info = probe_remote(host, None).await?;
+    let bin = ensure_remote_bin(host, &info, None).await?;
+    let out = run_ssh(host, &format!(r#""{bin}" --clean"#), b"").await?;
+    if !out.status.success() {
+        return Err(format!("원격 정리 실패: {}", ssh_err(&out)));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 /// FNV-1a 64 — 배치 디렉터리 키용 내용 해시. 비적대적 용도(캐시 무효화)라 충분하고

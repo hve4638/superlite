@@ -55,6 +55,12 @@ export fn renameSession(id, name) {
 export fn moveSession(id, to) {
   role: 세션 탭 순서 이동 (드래그) — to 는 표시 목록 기준 삽입 인덱스. 앱은 순서의 단일 출처인 native 레지스트리에 invoke(move_session) 로 위임하고 sessions-changed 반향을 reconcile 이 따라간다. 웹은 로컬 목록을 직접 재배열한다
 }
+export fn rootOfBackend(backend) -> String? {
+  role: 백엔드 핸들 → 그 세션 탭의 root — 강제 정리가 원격 host 를 알아내는 경로
+}
+export fn activeSessionCtx() -> SessionCtx? {
+  role: 활성 세션 컨텍스트 (없으면 null)
+}
 export fn remoteHost(root) -> String? {
   role: ssh://host/path 또는 ssh://host root 의 host — 원격이 아니면 null (탭 라벨·원격 세션 안 폴더 열기 판정)
 }

@@ -9,6 +9,8 @@ import {
   confirmCloseCancel,
 } from '../model/editors';
 import { sessions } from '../model/sessions';
+import { cancelDaemonClean, daemonClean } from '../model/daemon';
+import { confirmDaemonClean } from '../model/host';
 import TitleBar from './TitleBar.vue';
 import ActivityBar from './ActivityBar.vue';
 import SideBar from './SideBar.vue';
@@ -106,6 +108,15 @@ onBeforeUnmount(() => window.removeEventListener('resize', onWindowResize));
       @confirm="confirmCloseSave()"
       @secondary="confirmCloseDiscard()"
       @cancel="confirmCloseCancel()"
+    />
+    <!-- 원격 데몬 기동 실패 → 강제 정리 확인 (승인 없이는 아무것도 죽이지 않는다, ticket daemon-cleanup) -->
+    <ConfirmDialog
+      v-if="daemonClean.pending !== null"
+      message="원격 데몬이 응답하지 않습니다. 강제 정리할까요?"
+      detail="락을 쥔 채 응답하지 않는 데몬을 종료하고 잔재 파일을 지운 뒤 다시 접속합니다. 그 데몬의 터미널이 있었다면 함께 종료됩니다. 정상 응답하는 데몬과 다른 버전의 데몬은 건드리지 않습니다."
+      confirm-label="강제 정리"
+      @confirm="confirmDaemonClean()"
+      @cancel="cancelDaemonClean()"
     />
     <!-- VS Code 처럼 토스트는 우하단 한 스택 — 새 알림이 아래, 충돌 토스트가 있으면 맨 아래 -->
     <div class="toast-stack">

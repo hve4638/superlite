@@ -85,7 +85,8 @@ pub async fn serve(listener: TcpListener, roots: SessionRoots, token: Option<Str
     let mut app = Router::new()
         .route("/ws", get(ws_handler))
         .route("/ssh/hosts", get(hosts_handler))
-        .route("/ssh/state", axum::routing::post(state_handler));
+        .route("/ssh/state", axum::routing::post(state_handler))
+        .route("/daemon/clean", axum::routing::post(clean_handler));
     if let Some(dist) = &dist {
         app = app.fallback_service(ServeDir::new(dist));
     }
@@ -266,6 +267,38 @@ async fn state_handler(
     })
 }
 
+/// POST /daemon/clean?host= — 문제 데몬 정리 (`superlight-daemon --clean`). host 가 없으면
+/// 로컬 데몬 바이너리를 직접, 있으면 ssh 로 원격에서 실행한다. 프론트가 "데몬 기동 실패"
+/// 뒤 사용자 승인을 받은 경우에만 부른다 — 자동으로 부르는 곳은 없다 (사용자 결정
+/// 2026-09-04: 강제 종료는 명시적 승인 하에서만). 응답 본문은 --clean 의 stdout 그대로
+async fn clean_handler(
+    State(app): State<App>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Response {
+    if !authed(&app, &query, &headers) {
+        return cors(StatusCode::FORBIDDEN.into_response());
+    }
+    let result = match query.get("host").filter(|h| !h.is_empty()) {
+        Some(host) => ssh::clean_remote(host).await,
+        None => clean_local().await,
+    };
+    cors(match result {
+        Ok(report) => report.into_response(),
+        Err(e) => (StatusCode::BAD_GATEWAY, e).into_response(),
+    })
+}
+
+async fn clean_local() -> Result<String, String> {
+    let bin = daemon_bin_path()?;
+    let out = tokio::process::Command::new(&bin)
+        .arg("--clean")
+        .output()
+        .await
+        .map_err(|e| format!("데몬 정리 실행 실패 {}: {e}", bin.display()))?;
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
 async fn ws_handler(
     State(app): State<App>,
     Query(query): Query<std::collections::HashMap<String, String>>,
@@ -397,6 +430,8 @@ async fn relay(ws: WebSocket, target: Target, session: Option<String>) {
     // _child: 원격 ssh subprocess 의 수명 앵커 — relay 종료(drop)가 곧 ssh kill 이다
     let mut remote: Option<(String, bool)> = None;
     let mut stderr_last: Option<Arc<Mutex<String>>> = None;
+    // 원격 접속 중에 프론트가 보낸 요청 — attach 줄 뒤에 순서대로 보낸다
+    let mut early_lines: Vec<String> = Vec::new();
     let (read_half, mut write_half, root_str, _child): (
         DaemonRead,
         DaemonWrite,
@@ -415,18 +450,53 @@ async fn relay(ws: WebSocket, target: Target, session: Option<String>) {
             // — 재시도는 사용자 몫(탭 다시 접속), 상세는 로그로
             // 경로 없는 ssh://host 는 원격 빈 세션 — 홈에 attach 하되 탐색 전용(watch:false)
             let browse_only = path.is_empty();
-            let conn = async {
-                let info = ssh::probe_remote(&host).await?;
-                let path = ssh::expand_home(&info.home, if browse_only { "/~" } else { &path });
-                Ok::<_, String>((ssh::pipe_conn(&host, &info).await?, path))
+            // 접속 단계를 프론트에 흘린다 — {"event":"connectStage","stage":ssh|helper|upload|daemon}
+            // (데몬 와이어 밖 relay 자체 이벤트, WIRE_VERSION 불변). 접속은 별도 태스크 — 그동안
+            // 프론트 Close 를 감지해 긴 업로드 중 탭 닫기가 ssh 를 바로 끊게 하고(태스크 abort =
+            // child drop = kill), 프론트 Text 요청은 attach 뒤에 보내도록 모아 둔다
+            let (stage_tx, mut stage_rx) = tokio::sync::mpsc::unbounded_channel();
+            let conn = {
+                let (host, path) = (host.clone(), path.clone());
+                tokio::spawn(async move {
+                    let info = ssh::probe_remote(&host, Some(&stage_tx)).await?;
+                    let path = ssh::expand_home(&info.home, if browse_only { "/~" } else { &path });
+                    Ok::<_, String>((ssh::pipe_conn(&host, &info, Some(&stage_tx)).await?, path))
+                })
             };
+            let mut early: Vec<String> = Vec::new();
+            loop {
+                tokio::select! {
+                    s = stage_rx.recv() => match s {
+                        Some((stage, bytes)) => {
+                            let mut ev = json!({"event": "connectStage", "stage": stage});
+                            if let Some(b) = bytes {
+                                ev["bytes"] = json!(b);
+                            }
+                            if ws_tx.send(Message::Text(ev.to_string().into())).await.is_err() {
+                                conn.abort();
+                                return;
+                            }
+                        }
+                        None => break, // 접속 태스크 종료 (송신자 drop)
+                    },
+                    m = ws_rx.next() => match m {
+                        Some(Ok(Message::Text(t))) => early.push(t.to_string()),
+                        Some(Ok(Message::Close(_))) | None | Some(Err(_)) => {
+                            conn.abort();
+                            return;
+                        }
+                        _ => {}
+                    },
+                }
+            }
             let (mut child, path) = match conn.await {
-                Ok(v) => v,
-                Err(e) => {
+                Ok(Ok(v)) => v,
+                Ok(Err(e)) => {
                     eprintln!("backend: ssh {host} 연결 실패: {e}");
                     close_with(&mut ws_tx, &mut ws_rx, 4502, &e).await;
                     return;
                 }
+                Err(_) => return,
             };
             let (r, w) = (child.stdout.take().unwrap(), child.stdin.take().unwrap());
             // 헬퍼·원격 데몬의 stderr — 백엔드 로그로 흘리면서 마지막 줄을 남긴다: attach 전에
@@ -445,6 +515,7 @@ async fn relay(ws: WebSocket, target: Target, session: Option<String>) {
             });
             stderr_last = Some(last);
             remote = Some((host, browse_only));
+            early_lines = early;
             (Box::new(r), Box::new(w), path, Some(child))
         }
     };
@@ -461,6 +532,11 @@ async fn relay(ws: WebSocket, target: Target, session: Option<String>) {
     let record_host = remote.and_then(|(h, b)| (!b).then_some(h));
     if write_line(&mut write_half, &attach.to_string()).await.is_err() {
         return;
+    }
+    for l in early_lines {
+        if l.contains('\n') || write_line(&mut write_half, &l).await.is_err() {
+            return;
+        }
     }
     // 첫 프레임 = attach 응답 (데몬은 attach 전 다른 응답을 내지 않는다). 여기서 실패가
     // 드러나면 — 데몬이 에러를 돌려주고 끊거나(경로 부재 등), 응답 전에 EOF(원격 헬퍼의

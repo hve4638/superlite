@@ -84,6 +84,14 @@ pub fn lock_path(sock: &Path) -> PathBuf {
     }
 }
 
+/// 락 보유 데몬의 pid 파일 — 락 파일과 나란히 (`daemon-<N>.pid`). 락을 쥔 쪽만 쓴다.
+/// WHY: 락 파일 자체에 pid 를 적지 않는다 — Windows 의 배타 락(LockFileEx)은 다른 프로세스의
+///      읽기까지 막아 `--clean` 이 보유자를 알 수 없고, unix 는 락 없이 열어도 되지만 두
+///      플랫폼이 한 규칙을 쓰는 쪽이 낫다. 락 없이 열리는 별도 파일이면 어느 쪽에서든 읽힌다
+pub fn pid_path(sock: &Path) -> PathBuf {
+    lock_path(sock).with_extension("pid")
+}
+
 /// Windows 의 canonicalize 는 verbatim(`\\?\C:\...`) 경로를 준다 — verbatim 은 Win32 경로
 /// 파싱('/'→'\' 변환 포함)을 통째로 꺼서, '/' 구분 와이어 상대경로와 join 하면
 /// ERROR_INVALID_NAME 이 되고 자식 프로세스 cwd 로도 못 쓴다. 드라이브 경로만 벗긴다.

@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { activeTab, base64Bytes, editors, indentOf, languageLabel } from '../model/editors';
 import { scm } from '../model/scm';
-import { connection } from '../model/watch';
+import { connection, stageLabel, failureLabel } from '../model/watch';
 
 // diff 탭도 path 를 가지므로 kind 무관하게 파일 정보를 표시한다 (VS Code 동일)
 const fileTab = computed(() => activeTab());
@@ -17,6 +17,25 @@ const image = computed(() => {
   return { view: editors.imageView.get(t.path), size: base64Bytes(data) };
 });
 
+// 접속 진행 중 경과 시간 힌트 — 1초 틱 (헬퍼 업로드처럼 오래 걸리는 단계용)
+const now = ref(Date.now());
+let tick: ReturnType<typeof setInterval> | null = null;
+onMounted(() => {
+  tick = setInterval(() => (now.value = Date.now()), 1000);
+});
+onBeforeUnmount(() => {
+  if (tick !== null) clearInterval(tick);
+});
+/** 원격 표시등 라벨 — 접속 단계 진행 중 / 영구 실패(단계 구분) / 실제 재연결 */
+const remoteLabel = computed(() => {
+  if (connection.stage !== null) {
+    const secs = Math.max(0, Math.floor((now.value - connection.stageSince) / 1000));
+    return `${stageLabel(connection.stage, connection.uploadBytes)}${secs >= 3 ? ` ${secs}s` : ''}`;
+  }
+  if (connection.error !== null) return failureLabel(connection.failedStage);
+  return 'Reconnecting…';
+});
+
 /** 파일 크기 표기 — VS Code 상태바와 같은 단위 자동 선택 */
 function fmtSize(bytes: number): string {
   if (bytes < 1024) return `${bytes}B`;
@@ -29,14 +48,17 @@ function fmtSize(bytes: number): string {
   <div class="statusbar">
     <div class="statusbar-left">
       <!-- 끊김 중엔 VS Code 원격 표시등처럼 offline 색 + 라벨 (재연결은 WsBackend 가 자동으로) -->
+      <!-- 접속 단계 진행 중(초기 접속)은 Reconnecting 이 아니라 단계 라벨 — 초기 접속과 실제 재연결을 구분한다 -->
+      <!-- 진행 중은 오류색이 아니라 원격 표시등 기본색 + 회전 아이콘 — 빨간색은 실패·끊김에만 -->
       <div
         class="statusbar-item remote"
-        :class="{ offline: !connection.ok }"
-        :title="connection.ok ? 'Open a Remote Window' : connection.error ?? 'Reconnecting…'"
+        :class="{ offline: !connection.ok && connection.stage === null, connecting: connection.stage !== null }"
+        :title="connection.stage !== null ? remoteLabel : connection.ok ? 'Open a Remote Window' : connection.error ?? 'Reconnecting…'"
       >
-        <span class="codicon codicon-remote" />
-        <!-- 영구 실패(원격 ssh)는 재연결하지 않는다 — Reconnecting 대신 실패 표시 -->
-        <span v-if="!connection.ok">{{ connection.error ? 'Connection failed' : 'Reconnecting…' }}</span>
+        <span v-if="connection.stage !== null" class="codicon codicon-loading codicon-modifier-spin" />
+        <span v-else class="codicon codicon-remote" />
+        <!-- 영구 실패(원격 ssh)는 재연결하지 않는다 — Reconnecting 대신 실패 단계 표시 -->
+        <span v-if="!connection.ok || connection.stage !== null">{{ remoteLabel }}</span>
       </div>
       <div v-if="scm.branch" class="statusbar-item" :title="`${scm.branch} (Git)`">
         <span class="codicon codicon-source-control" />
@@ -119,6 +141,10 @@ function fmtSize(bytes: number): string {
 }
 .statusbar-item .codicon {
   font-size: 14px;
+}
+.statusbar-item.connecting {
+  background: var(--vscode-statusBarItem-remoteBackground, #16825d);
+  color: var(--vscode-statusBarItem-remoteForeground, #ffffff);
 }
 .statusbar-item.offline {
   background: var(--vscode-statusBarItem-offlineBackground, #6c1717);

@@ -6,6 +6,9 @@ export fn socket_path() -> PathBuf {
 export fn lock_path(sock) -> PathBuf {
   role: 데몬 단독 보장용 락 파일 경로 — IPC 주소에서 파생해 SUPERLIGHT_SOCK 우회(격리 인스턴스)가 락에도 전파된다. Windows 의 pipe 이름은 파일 경로가 아니라 평탄화해 %TEMP% 밑에 둔다
 }
+export fn pid_path(sock) -> PathBuf {
+  role: 락 보유 데몬의 pid 파일 경로 — 락 파일과 나란히 (daemon-<N>.pid). 락을 쥔 쪽만 쓴다. 락 파일 자체에 적지 않는 이유: Windows 배타 락은 다른 프로세스의 읽기까지 막아 --clean 이 보유자를 알 수 없다
+}
 export fn plain(p: PathBuf) -> PathBuf {
   role: Windows canonicalize 의 verbatim(\\?\) 접두사 제거 — verbatim 은 Win32 의 '/' 변환을 꺼서 와이어 상대경로 join·자식 cwd 를 깨뜨린다. 드라이브 경로만, unix 는 항등
 }
