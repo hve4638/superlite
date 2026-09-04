@@ -38,7 +38,7 @@ export fn activateSession(id) {
   role: 탭 전환 — front 소유. beforeSwitch 훅 후 activeCtx 교체, shim·UI 가 따라온다
 }
 export fn closeSession(id) {
-  role: 탭 닫기 = 세션 종료(kill 의미). 앱은 native invoke(레지스트리 제거·저장·방송), 웹은 로컬 제거·연결 dispose. 마지막 탭을 닫으면 빈 세션으로 대체한다 (앱은 native, 웹은 로컬 — 탭 0 은 없다, 앱 종료는 창 X). 데몬 터미널은 연결 끊김 → grace 후 회수
+  role: 탭 닫기 = 세션 종료(kill 의미). 앱은 native invoke(레지스트리 제거·저장·방송), 웹은 로컬 제거·연결 dispose. 마지막 탭을 닫으면 앱은 native 가 그 창을 닫고(마지막 창이면 앱 종료, 2026-09-05 개정), 웹은 창을 닫을 수 없어 로컬 빈 세션으로 대체한다. 데몬 터미널은 연결 끊김 → grace 후 회수
 }
 export fn addEmptySession() {
   role: 탭 추가(+) 기본 동작 — 루트 없는 빈 세션 탭을 만든다 (2026-09-01 확장: 폴더 선택 없이 빈 탭 먼저, 시작 페이지에서 열기로 이어진다). 앱은 native invoke(open_empty_session — 레지스트리 등록·방송 반향), 웹은 로컬 추가. mock 은 무동작
@@ -72,13 +72,19 @@ export fn genSessionId() -> String {
 }
 export type OpenMode
 export fn openWebFolder(root, mode?) {
-  role: 웹 '폴더 열기' 확정 — 새 세션 탭 생성·활성화 (host.openFolder 가 부른다). 같은 워크스페이스(꼬리 '/' 정규화 root 문자열 — ssh://host/path 원격은 스킴·호스트가 문자열에 포함돼 (origin, path) 정체성이 그대로 성립)가 이미 열려 있으면 새 탭 대신 그 탭으로 포커스 이동 (빈 탭은 남는다, 명시적 replace 면 이전 탭 닫음). 대체 대상 = 명시적 mode 'replace'(VS Code 원격 "현재 창에 연결") 또는 mode 생략 시 활성 탭이 빈 세션(앱의 native replace 와 동일 의미) — mode 'new' 는 빈 탭도 남긴다 — 새 탭이 그 자리를 차지하고 이전 탭은 활성화 후 제거 (빈 상태 없음). 원격 탭 라벨은 "이름 [호스트]"
+  role: 웹 '폴더 열기' 확정 — 새 세션 탭 생성·활성화 (host.openFolder 가 부른다). 같은 워크스페이스(꼬리 '/' 정규화 root 문자열 — ssh://host/path 원격은 스킴·호스트가 문자열에 포함돼 (origin, path) 정체성이 그대로 성립)가 이미 열려 있으면 새 탭 대신 그 탭으로 포커스 이동 (빈 탭은 남는다. 명시적 replace 면 이전 탭을 닫되 이전 탭이 빈 세션(Welcome)이면 남긴다 — 2026-09-05 사용자 지시). 대체 대상 = 명시적 mode 'replace'(VS Code 원격 "현재 창에 연결") 또는 mode 생략 시 활성 탭이 빈 세션(앱의 native replace 와 동일 의미) — mode 'new' 는 빈 탭도 남기고 새 탭을 배경에 열어 현재 탭이 활성으로 남는다 (2026-09-05) — 새 탭이 그 자리를 차지하고 이전 탭은 활성화 후 제거 (빈 상태 없음). 원격 탭 라벨은 "이름 [호스트]"
+}
+export fn openInBackground(root) {
+  role: 앱 '새 탭에 연결'(mode 'new')의 포커스 유지 예약 — native 는 활성 탭을 모르므로 front 가 "이 root(normRoot) 가 새로 나타나면 활성화하지 않는다"를 집합에 적어 두고 reconcile 이 소비한다. 대상이 이미 열려 있어 session-focus 만 오면 그때 지운다. 못 맞추면 종전대로 활성화 — 안전한 실패
+}
+export fn cancelBackground(root) {
+  role: openInBackground 예약 취소 — open_folder_path reject 시 host.openFolder 가 부른다
 }
 export fn replaceAppSession(prevId, newRoot) {
   role: 앱 '현재 탭 대체' 뒷정리 — open_folder_path invoke 뒤 이전 활성 탭을 close_session (native replace 는 빈 세션만 제자리 교체). 같은 워크스페이스 재열기(포커스 이동만)면 root 문자열 대조로 건너뛴다
 }
 export fn initSessions() {
-  role: 앱 전용 — list_sessions 초기 동기화(뒤이어 take_handoff — 분리로 생긴 새 창의 부팅 전 핸드오프) + sessions-changed·session-focus·handoff-available·session-move-request·tabs-move-request 구독 — 구독은 전부 이 창 label 을 target 으로 등록한다 (Tauri 의 target 없는 listen 은 Any 라 native 가 emit_to 로 다른 창에 보낸 이벤트까지 받는다 — 창마다 다른 sessions-changed 가 모든 창에 도달해 서로의 목록으로 reconcile 이 뒤집히는 사고의 원인이었다). reconcile 은 추가분에 컨텍스트를 만들고(새 탭 = 활성) 제거분을 폐기하며 순서는 native 를 따른다. session-focus 는 이미 열린 워크스페이스 재열기 시 native 의 포커스 이동 지시다
+  role: 앱 전용 — list_sessions 초기 동기화(뒤이어 take_handoff — 분리로 생긴 새 창의 부팅 전 핸드오프) + sessions-changed·session-focus·handoff-available·session-move-request·tabs-move-request 구독 — 구독은 전부 이 창 label 을 target 으로 등록한다 (Tauri 의 target 없는 listen 은 Any 라 native 가 emit_to 로 다른 창에 보낸 이벤트까지 받는다 — 창마다 다른 sessions-changed 가 모든 창에 도달해 서로의 목록으로 reconcile 이 뒤집히는 사고의 원인이었다). reconcile 은 추가분에 컨텍스트를 만들고(새 탭 = 활성 — openInBackground 예약분은 예외) 제거분을 폐기하며 순서는 native 를 따른다. session-focus 는 이미 열린 워크스페이스 재열기 시 native 의 포커스 이동 지시다
 }
 export fn multiWindow() -> Bool {
   role: 창 간 탭 이동이 가능한 환경인가 — 앱이고 창 label 이 있다 (UI 가 창 밖 드롭·이동 메뉴를 켠다)

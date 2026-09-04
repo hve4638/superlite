@@ -241,21 +241,28 @@ fn emit_sessions(app: &tauri::AppHandle, state: &AppState) {
     // 저장이 방송보다 앞 — front 가 반향을 받고 list_recents 를 부르면 이미 갱신돼 있다
     record_bundles(state);
     for label in app.webview_windows().keys() {
-        let _ = app.emit_to(label.as_str(), "sessions-changed", infos_for(state, label));
+        let infos = infos_for(state, label);
+        // 세션 0 개인 창은 닫히는 중(close_if_empty) — 빈 목록을 보내면 front 가 활성 세션
+        // 없는 상태를 잠깐 그리므로 보내지 않는다
+        if infos.is_empty() {
+            continue;
+        }
+        let _ = app.emit_to(label.as_str(), "sessions-changed", infos);
     }
 }
 
-/// 세션 0 개가 된 창은 빈 세션으로 남긴다 — 탭 닫기·분리·병합 모두 이 규칙을 탄다
-/// (창은 각각 독립된 하나 — 닫히는 건 X 로만). 호출자가 sessions·windows 락을 잡지 않은 상태여야 한다
-fn ensure_nonempty(state: &AppState, label: &str) {
-    let mut list = state.sessions.lock().unwrap();
-    let mut windows = state.windows.lock().unwrap();
-    if list.iter().any(|(id, _)| windows.get(id).map(String::as_str) == Some(label)) {
+/// 세션 0 개가 된 창은 닫는다 — 탭 닫기·분리·병합 모두 이 규칙을 탄다 (2026-09-05 개정,
+/// ticket convenience-features: 종전엔 빈 세션으로 남겼다). 마지막 창이면 Tauri 기본대로 앱이
+/// 종료된다 — 묶음 이력(state.json)은 레지스트리 변경마다 이미 저장돼 있어 종료 훅이 필요 없다.
+/// 남은 정리(핸드오프·focused)는 Destroyed → drop_window. 호출자가 sessions·windows 락을 잡지
+/// 않은 상태여야 한다
+fn close_if_empty(app: &tauri::AppHandle, state: &AppState, label: &str) {
+    if state.windows.lock().unwrap().values().any(|w| w == label) {
         return;
     }
-    let id = rand_hex();
-    windows.insert(id.clone(), label.to_string());
-    list.push((id, None));
+    if let Some(w) = app.get_webview_window(label) {
+        let _ = w.close();
+    }
 }
 
 /// 창 소속 제거 — 창 X(Destroyed) 가 그 창의 세션들을 레지스트리에서 뺀다 (재-attach 차단 →
@@ -530,10 +537,10 @@ fn list_sessions(state: tauri::State<AppState>, window: tauri::WebviewWindow) ->
 /// 탭 닫기 = 세션 종료(kill 의미) — 레지스트리에서 제거해 재-attach 를 차단한다.
 /// front 가 그 세션의 WS 연결을 끊으면 데몬 detach → 세션 grace 후 터미널 회수
 /// (즉시 kill 와이어는 없다 — grace 지연 회수 수용, docs/ticket/app-session-tabs).
-/// 그 창의 마지막 탭이면 앱·창을 닫는 대신 루트 없는 빈 세션(시작 페이지)으로 대체한다
-/// (창은 각각 독립된 하나 — 종료는 창 X 로만).
+/// 그 창의 마지막 탭이면 그 창을 닫는다 (close_if_empty — 보조 창은 그 창만, 마지막 창이면
+/// 앱 종료). async: 창을 닫는 커맨드도 build_window 와 같은 이유로 메인 스레드를 피한다
 #[tauri::command]
-fn close_session(app: tauri::AppHandle, window: tauri::WebviewWindow, id: String) {
+async fn close_session(app: tauri::AppHandle, window: tauri::WebviewWindow, id: String) {
     let state = app.state::<AppState>();
     if owned_by(&state, &id, window.label()).is_err() {
         return;
@@ -546,10 +553,10 @@ fn close_session(app: tauri::AppHandle, window: tauri::WebviewWindow, id: String
         list.remove(i);
         state.windows.lock().unwrap().remove(&id)
     };
-    if let Some(label) = label {
-        ensure_nonempty(&state, &label);
-    }
     emit_sessions(&app, &state);
+    if let Some(label) = label {
+        close_if_empty(&app, &state, &label);
+    }
 }
 
 /// 핸드오프 적재 + 대상 창에 도착 알림. 아직 로드 전인 새 창은 이벤트를 못 듣지만 부팅 후
@@ -562,7 +569,7 @@ fn deliver_handoff(app: &tauri::AppHandle, state: &AppState, to: &str, handoff: 
 /// 세션 탭을 새 창으로 분리 — 드롭 지점(x, y 논리 좌표)에 창을 만들고 세션의 소속을 옮긴다.
 /// 출처 창은 sessions-changed 로 그 세션을 잃고(연결 dispose → 데몬 detach), 새 창이 같은
 /// session id 로 attach 해 터미널을 이어받는다 (tmux 식 재-attach). front 상태는 handoff.
-/// 출처 창이 비면 빈 세션으로 남긴다
+/// 출처 창이 비면 새 창이 생긴 뒤 그 창을 닫는다 (창 생성 실패 시 출처 창이 남아 있어야 한다)
 /// 호출 창이 그 세션의 소유자인지 — 창 밖 드롭과 다른 창 드롭이 겹쳐 두 경로가 같은 세션을
 /// 옮기려 할 때, 이미 떠난 세션에 대한 늦은 요청을 구조적으로 거절한다 (dropEffect 전파를
 /// 신뢰하지 않는다). 다른 창의 세션을 닫거나 옮기는 것도 막는다
@@ -591,11 +598,9 @@ async fn detach_session(
         let _list = state.sessions.lock().unwrap();
         state.windows.lock().unwrap().insert(id.clone(), label.clone());
     }
-    ensure_nonempty(&state, &from);
     deliver_handoff(&app, &state, &label, handoff);
     if let Err(e) = build_window(&app, &state, &label, Some((x, y))) {
-        // 롤백 — 생기지 않은 창 소속으로 세션이 사라지지 않게 되돌린다. 출처 창에 생긴 빈
-        // 세션은 방송으로 함께 정리된다 (그 창엔 원 세션이 남으니 빈 탭 하나가 덤으로 남는다 — 수용)
+        // 롤백 — 생기지 않은 창 소속으로 세션이 사라지지 않게 되돌린다
         {
             let _list = state.sessions.lock().unwrap();
             state.windows.lock().unwrap().insert(id.clone(), from.clone());
@@ -605,14 +610,15 @@ async fn detach_session(
         return Err(format!("창 생성 실패: {e}"));
     }
     emit_sessions(&app, &state);
+    close_if_empty(&app, &state, &from);
     Ok(())
 }
 
 /// 세션 탭을 다른(살아 있는) 창으로 병합 — 소속을 옮기고 그 창의 to_index 위치에 넣는다.
 /// 출처 창이 자기 상태를 직렬화해 부른다 (대상 창의 드롭은 forward 로 출처에 요청만 한다).
-/// 출처 창이 비면 빈 세션으로 남긴다
+/// 출처 창이 비면 그 창을 닫는다 (close_if_empty)
 #[tauri::command]
-fn move_session_to_window(
+async fn move_session_to_window(
     app: tauri::AppHandle,
     window: tauri::WebviewWindow,
     id: String,
@@ -650,9 +656,9 @@ fn move_session_to_window(
         list.insert(at, item);
         from
     };
-    ensure_nonempty(&state, &from);
     deliver_handoff(&app, &state, &to_window, handoff);
     emit_sessions(&app, &state);
+    close_if_empty(&app, &state, &from);
     if let Some(w) = app.get_webview_window(&to_window) {
         let _ = w.set_focus();
     }
@@ -993,7 +999,7 @@ fn main() {
             forget_bundle,
             open_bundle
         ])
-        // 창 X = 그 창의 세션만 정리 (다른 창은 영향 없음). 포커스 추적은 두 번째 실행의 대상 창
+        // 창 닫힘(X·close_if_empty) = 그 창의 세션만 정리 (다른 창은 영향 없음). 포커스 추적은 두 번째 실행의 대상 창
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::Destroyed => {
                 let app = window.app_handle();
@@ -1131,6 +1137,12 @@ mod tests {
         assert_eq!(b.len(), 2);
         // 같은 집합 다른 순서 — 기존을 앞으로 당길 뿐
         note_bundle(&mut b, paths(&["/c", "/a", "/b"]));
+        assert_eq!(b[0], paths(&["/a", "/b", "/c"]));
+        assert_eq!(b.len(), 2);
+        // 마지막 탭까지 닫아 창이 닫히는 경로(1 개 → 0 개) — 이력은 그대로 남는다. 종료 훅 없이
+        // 변경마다 저장하므로 마지막 창이 닫혀 앱이 종료돼도 이 상태가 state.json 에 있다
+        note_bundle(&mut b, paths(&["/a"]));
+        note_bundle(&mut b, Vec::new());
         assert_eq!(b[0], paths(&["/a", "/b", "/c"]));
         assert_eq!(b.len(), 2);
     }

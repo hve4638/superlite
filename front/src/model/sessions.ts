@@ -214,11 +214,12 @@ export function activateSession(id: string): void {
 }
 
 /** 탭 닫기 = 세션 종료(kill 의미) — 연결을 끊으면 데몬이 grace 후 터미널을 회수한다.
- *  마지막 탭을 닫으면 빈 세션으로 대체한다 (탭 0 은 없다 — 앱 종료는 창 X). */
+ *  마지막 탭: 앱은 그 창을 닫고(마지막 창이면 앱 종료), 웹은 창을 닫을 수 없어 빈 세션으로
+ *  대체한다 (2026-09-05, ticket convenience-features). */
 export function closeSession(id: string): void {
   if (env.kind === 'app') {
     // native 가 레지스트리 제거·지속 저장 후 sessions-changed 로 알린다 (reconcile 이 정리).
-    // 마지막 탭이면 native 가 빈 세션으로 대체한다 (앱 종료는 창 X)
+    // 마지막 탭이면 native 가 이 창을 닫는다 (방송 없음 — 페이지가 통째로 사라진다)
     void tauri?.core.invoke('close_session', { id });
     return;
   }
@@ -308,18 +309,21 @@ function normRoot(root: string): string {
  *  워크스페이스 정체성은 root 문자열이 전부다 — ssh://host/path 원격은 스킴·호스트가
  *  문자열에 포함돼 같은 경로라도 origin 이 다르면 별개 세션이 된다.
  *  mode 'replace': 확정 직전의 활성 탭을 새 탭으로 대체한다 (VS Code 원격의 "현재 창에 연결")
- *  — 대상이 이미 열린 탭이라 포커스만 옮긴 경우에도 이전 탭은 닫는다. 'new': 활성 탭이 빈
- *  세션이어도 대체하지 않는다. 생략: 활성 빈 탭만 대체. */
+ *  — 대상이 이미 열린 탭이라 포커스만 옮긴 경우에도 이전 탭은 닫되, 이전 탭이 빈 세션(Welcome)
+ *  이면 남긴다 (2026-09-05 사용자 지시 — 앱의 native 제자리 교체와 같은 의미). 'new': 활성
+ *  탭이 빈 세션이어도 대체하지 않고, 새 탭은 배경에서 열려 현재 탭이 활성으로 남는다 (이미
+ *  열린 대상은 포커스 이동). 생략: 활성 빈 탭만 대체. */
 export type OpenMode = 'replace' | 'new';
 export function openWebFolder(root: string, mode?: OpenMode): void {
   const norm = normRoot(root);
   const prevId = sessions.activeId;
+  const prevEmpty = activeSessionEmpty();
   const existing = sessions.list.find((t) => t.root !== null && normRoot(t.root) === norm);
   if (existing) {
     // 이미 열린 워크스페이스 — 포커스만 이동, 활성 빈 탭이 있어도 그대로 남긴다 (앱과 동일).
-    // 명시적 replace 만 이전 탭을 닫는다
+    // 명시적 replace 만 이전 탭을 닫는다 — 빈 탭은 예외
     activateSession(existing.id);
-    if (mode === 'replace' && existing.id !== prevId) removeLocal(prevId);
+    if (mode === 'replace' && existing.id !== prevId && !prevEmpty) removeLocal(prevId);
     return;
   }
   // 대체 대상: 명시적 replace, 또는 기본 모드에서 활성 탭이 빈 세션(시작 페이지에서 열기 —
@@ -333,8 +337,25 @@ export function openWebFolder(root: string, mode?: OpenMode): void {
     const [tab] = sessions.list.splice(from, 1);
     sessions.list.splice(sessions.list.findIndex((t) => t.id === replaceId), 0, tab);
   }
-  activateSession(id);
+  // 'new' 는 배경에서 연다 — 현재 탭이 활성으로 남는다 (2026-09-05 사용자 지시)
+  if (mode !== 'new') activateSession(id);
   if (replaceId !== null) removeLocal(replaceId);
+}
+
+/** 앱 '새 탭에 연결'(mode 'new')의 포커스 유지 — native 는 활성 탭을 모르므로 front 가
+ *  "이 root 가 새로 나타나면 활성화하지 않는다"를 예약한다. reconcile 이 소비하고,
+ *  대상이 이미 열려 있어 session-focus 만 오면 그때 지운다. 대조는 root 문자열(normRoot) —
+ *  못 맞추면 종전대로 활성화되는 안전한 실패다 */
+const backgroundRoots = new Set<string>();
+export function openInBackground(root: string): void {
+  backgroundRoots.add(normRoot(root));
+}
+export function cancelBackground(root: string): void {
+  backgroundRoots.delete(normRoot(root));
+}
+function consumeBackground(id: string): boolean {
+  const root = sessions.list.find((t) => t.id === id)?.root;
+  return root != null && backgroundRoots.delete(normRoot(root));
 }
 
 /** 앱 '현재 탭 대체' 열기의 뒷정리 — open_folder_path invoke 뒤 이전 활성 탭을 닫는다
@@ -365,7 +386,7 @@ function reconcile(list: SessionTab[]): void {
     const prev = sessions.list.find((t) => t.id === n.id);
     return { ...n, name: prev?.name ?? n.name };
   });
-  if (added) activateSession(added);
+  if (added && !consumeBackground(added)) activateSession(added);
 }
 
 export function initSessions(): void {
@@ -380,7 +401,11 @@ export function initSessions(): void {
     flushPendingHandoffs();
   });
   // 이미 열린 워크스페이스를 다시 열었을 때 — native 가 새 탭 대신 포커스 이동을 지시한다
-  listenHere('session-focus', (e) => activateSession(e.payload as string));
+  listenHere('session-focus', (e) => {
+    const id = e.payload as string;
+    consumeBackground(id);
+    activateSession(id);
+  });
   listenHere('handoff-available', () => takeHandoffs());
   listenHere('session-move-request', (e) =>
     onSessionMoveRequest(e.payload as { id: string; toWindow: string; toIndex: number }),

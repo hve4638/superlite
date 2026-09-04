@@ -11,8 +11,10 @@ import {
   activeSessionCtx,
   activeSessionEmpty,
   bootSession,
+  cancelBackground,
   configureSessions,
   genSessionId,
+  openInBackground,
   openWebFolder,
   remoteHost,
   replaceAppSession,
@@ -175,8 +177,8 @@ export function backendApiUrl(path: string, query: Record<string, string> = {}):
  * ?folder= 연결을 하나 더 연다. mock 은 무동작.
  * opts.mode: 'replace' 는 활성 탭이 비어 있지 않아도 대체한다 (VS Code 원격의 "현재 창에
  * 연결" — 웹은 openWebFolder replace, 앱은 invoke 후 replaceAppSession). 'new' 는 활성 탭이
- * 빈 세션이어도 남기고 새 탭을 더한다 (원격 탐색기의 "새 탭에 연결"). 생략은 기본 —
- * 활성 빈 탭만 제자리 교체. */
+ * 빈 세션이어도 남기고 새 탭을 배경에 더한다 — 현재 탭이 활성으로 남는다 (원격 탐색기의
+ * "새 탭에 연결", 2026-09-05). 생략은 기본 — 활성 빈 탭만 제자리 교체. */
 export function openFolder(root: string, opts: { mode?: OpenMode } = {}): void {
   // 원격 세션 안의 '폴더 열기' — 퀵인풋의 browseDir 는 원격 데몬을 탐색하므로 확정된
   // 절대 경로는 그 호스트의 경로다 (VS Code 원격 창의 Open Folder 와 동일). 세션 root 표기
@@ -189,7 +191,11 @@ export function openFolder(root: string, opts: { mode?: OpenMode } = {}): void {
     // 빈 탭은 native 가 제자리 교체(replace id), 비어 있지 않은 탭의 대체는 invoke 뒤
     // 이전 탭을 닫는 front 뒷정리다 (native replace 는 root 없는 세션만 받는다)
     const prevId = sessions.activeId;
-    const emptyTarget = opts.mode === undefined ? replaceTarget() : undefined;
+    // 'replace' 도 활성 탭이 비어 있으면 native 제자리 교체를 쓴다 — 대상이 이미 열려 있어
+    // native 가 포커스만 옮기면 교체 슬롯은 건드리지 않으므로 Welcome 탭이 남는다 (2026-09-05)
+    const emptyTarget = opts.mode === 'new' ? undefined : replaceTarget();
+    // 'new' 는 배경 열기 — sessions-changed 가 invoke 응답보다 먼저 올 수 있어 예약이 앞선다
+    if (opts.mode === 'new') openInBackground(root);
     // native 가 canonicalize·디렉토리 검증을 한다 — 잘못된 경로(오타·부재)는 reject 로
     // 오므로 알림으로 드러낸다 (경로 퀵인풋은 자동완성 없이도 타이핑 확정을 허용한다)
     void tauri.core
@@ -197,7 +203,10 @@ export function openFolder(root: string, opts: { mode?: OpenMode } = {}): void {
       .then(() => {
         if (opts.mode === 'replace' && emptyTarget === undefined) replaceAppSession(prevId, root);
       })
-      .catch((e) => notify('error', `폴더를 열 수 없습니다: ${String(e)}`));
+      .catch((e) => {
+        cancelBackground(root);
+        notify('error', `폴더를 열 수 없습니다: ${String(e)}`);
+      });
     return;
   }
   if (!(params.has('ws') || tkn !== null)) return;

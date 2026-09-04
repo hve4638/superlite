@@ -1,4 +1,4 @@
-role: 앱 기동 — 127.0.0.1:0 bind 로 포트 충돌 원천 차단, 기동마다 새 랜덤 토큰(외부 브라우저의 /ws 접근 차단), 별도 스레드 tokio 런타임에서 relay serve(세션 레지스트리 모드), initialization_script 로 __SUPERLIGHT_WS__·__SUPERLIGHT_SESSIONS__(그 창의 부팅 세션 목록)·__SUPERLIGHT_OPEN_ROOT__(빈 세션 Open Folder 시작 경로)·__SUPERLIGHT_WINDOW__(창 label) 주입. 세션 레지스트리(session id → Option root, 순서 = 탭 순서)는 여기(native)가 소유한다 — decision/workspace-session-tabs.md. root 가 None 인 엔트리는 루트 없는 빈 세션(시작 페이지 탭, ticket app-empty-session) — 백엔드 연결 없이 front 에만 그려지고, 폴더를 열면 그 자리가 워크스페이스 세션으로 교체된다. 창은 여럿일 수 있다 (2026-09-03 개정, ticket app-tab-detach-window — VS Code 창을 여러 개 띄우듯 탭을 창 밖으로 끌어 새 창): 프로세스는 하나, 창마다 웹뷰 페이지가 별도라 front 상태·WS 연결은 창 단위 독립. native 는 세션마다 소속 창 label 을 함께 들고(windows 맵, relay 는 sessions Vec 만 본다) list_sessions·sessions-changed 를 창 단위로 보낸다 — 어느 탭이 활성인지는 여전히 모른다. 창은 각각 독립된 하나: 세션 0 개가 된 창은 빈 세션으로 남고(ensure_nonempty), 창이 사라지는 경로는 X 만이며 X 는 그 창의 세션만 정리한다(drop_window). 마지막 창의 X 가 앱 종료 (Tauri 기본). 탭 이동의 front 상태는 JSON 핸드오프 — 출처 창이 만들고 native 는 내용을 모른 채 전달만 한다 (큐 handoffs + take_handoff / 살아 있는 창엔 forward). single-instance — 프로세스는 1개, 두 번째 실행은 argv·cwd 를 첫 프로세스에 넘기고 종료한다. 시작은 항상 빈 세션이다 — 마지막 워크스페이스 자동 복원은 하지 않는다 (2026-09-02 사용자 결정 — app-restore-last-workspace 원복). 명시 argv 로 준 폴더만 연다. 대신 state.json(app_data_dir, version 2 — decision/state-persistence.md, ticket start-page-recents)에 최근 연 폴더 MRU(recents)와 세션 묶음(한 창에 함께 열려 있던 root 집합, bundles) 이력을 native 가 소유·갱신하고, 시작 페이지가 list_recents 로 보여 사용자가 명시적으로 다시 연다(open_folder_path·open_bundle)
+role: 앱 기동 — 127.0.0.1:0 bind 로 포트 충돌 원천 차단, 기동마다 새 랜덤 토큰(외부 브라우저의 /ws 접근 차단), 별도 스레드 tokio 런타임에서 relay serve(세션 레지스트리 모드), initialization_script 로 __SUPERLIGHT_WS__·__SUPERLIGHT_SESSIONS__(그 창의 부팅 세션 목록)·__SUPERLIGHT_OPEN_ROOT__(빈 세션 Open Folder 시작 경로)·__SUPERLIGHT_WINDOW__(창 label) 주입. 세션 레지스트리(session id → Option root, 순서 = 탭 순서)는 여기(native)가 소유한다 — decision/workspace-session-tabs.md. root 가 None 인 엔트리는 루트 없는 빈 세션(시작 페이지 탭, ticket app-empty-session) — 백엔드 연결 없이 front 에만 그려지고, 폴더를 열면 그 자리가 워크스페이스 세션으로 교체된다. 창은 여럿일 수 있다 (2026-09-03 개정, ticket app-tab-detach-window — VS Code 창을 여러 개 띄우듯 탭을 창 밖으로 끌어 새 창): 프로세스는 하나, 창마다 웹뷰 페이지가 별도라 front 상태·WS 연결은 창 단위 독립. native 는 세션마다 소속 창 label 을 함께 들고(windows 맵, relay 는 sessions Vec 만 본다) list_sessions·sessions-changed 를 창 단위로 보낸다 — 어느 탭이 활성인지는 여전히 모른다. 창은 각각 독립된 하나: 세션 0 개가 된 창은 닫히고(close_if_empty — 2026-09-05 개정, ticket convenience-features. 종전엔 빈 세션으로 남겼다), 창 닫힘(X·close_if_empty)은 그 창의 세션만 정리한다(drop_window). 마지막 창이 닫히면 앱 종료 (Tauri 기본) — 묶음 이력은 레지스트리 변경마다 저장돼 종료 훅이 없다. 탭 이동의 front 상태는 JSON 핸드오프 — 출처 창이 만들고 native 는 내용을 모른 채 전달만 한다 (큐 handoffs + take_handoff / 살아 있는 창엔 forward). single-instance — 프로세스는 1개, 두 번째 실행은 argv·cwd 를 첫 프로세스에 넘기고 종료한다. 시작은 항상 빈 세션이다 — 마지막 워크스페이스 자동 복원은 하지 않는다 (2026-09-02 사용자 결정 — app-restore-last-workspace 원복). 명시 argv 로 준 폴더만 연다. 대신 state.json(app_data_dir, version 2 — decision/state-persistence.md, ticket start-page-recents)에 최근 연 폴더 MRU(recents)와 세션 묶음(한 창에 함께 열려 있던 root 집합, bundles) 이력을 native 가 소유·갱신하고, 시작 페이지가 list_recents 로 보여 사용자가 명시적으로 다시 연다(open_folder_path·open_bundle)
 
 fn main() {
   role: listener bind·토큰 생성 → 세션 레지스트리 생성 → relay 스레드 기동 → single-instance 플러그인 등록(두 번째 실행 수신 → open_second_instance) → 커맨드 등록(open_folder·open_folder_path·open_empty_session·list_sessions·close_session·move_session·detach_session·move_session_to_window·detach_tabs·forward·take_handoff·list_windows) → 창 이벤트(Destroyed → drop_window, Focused → focused 갱신) → setup 에서 초기 세션 등록(명시 argv 폴더 하나, 없으면 루트 없는 빈 세션 — 소속 main) 후 첫 창("main") 생성(build_window) — 주입 목록이 완전하도록 등록이 창 생성보다 앞선다
@@ -28,7 +28,7 @@ fn list_sessions() {
   role: Tauri command — 호출한 창의 세션 탭 목록(id·이름·root) 응답. front 세션 관리자의 초기 동기화, 이후 갱신은 sessions-changed 이벤트
 }
 fn close_session() {
-  role: Tauri command — 탭 닫기 = 세션 종료(kill 의미). 레지스트리 제거·방송으로 재-attach 차단, front 가 그 세션의 WS 연결을 끊으면 데몬 detach → 세션 grace 후 터미널 회수 (즉시 kill 와이어는 없다 — grace 지연 회수 수용). 그 창의 마지막 탭이면 창·앱을 닫는 대신 루트 없는 빈 세션으로 대체한다 (ensure_nonempty — 창은 각각 독립, 종료는 창 X 로만)
+  role: Tauri command — 탭 닫기 = 세션 종료(kill 의미). 레지스트리 제거·방송으로 재-attach 차단, front 가 그 세션의 WS 연결을 끊으면 데몬 detach → 세션 grace 후 터미널 회수 (즉시 kill 와이어는 없다 — grace 지연 회수 수용). 그 창의 마지막 탭이면 그 창을 닫는다 (close_if_empty — 보조 창은 그 창만, 마지막 창이면 앱 종료). async — 창을 닫는 커맨드도 메인 스레드를 피한다
 }
 fn move_session() {
   role: Tauri command — 세션 탭 드래그 순서 이동 (같은 창 안). 순서의 단일 출처는 레지스트리이므로 재배열(move_in_window)도 native 가 하고, 방송으로 front 가 따라온다
@@ -40,10 +40,10 @@ fn move_in_window() {
   role: 한 창 안에서의 순서 이동 — 전체 목록에서 그 창 소속만 뽑아 move_entry 로 재배열하고 같은 자리들에 되쓴다 (다른 창 엔트리의 위치는 그대로). to 는 그 창의 표시 목록 기준
 }
 fn detach_session() {
-  role: Tauri command — 세션 탭을 새 창으로 분리. 드롭 지점에 새 창(label w<n>)을 만들고 세션의 소속을 옮긴다. 출처 창은 sessions-changed 로 그 세션을 잃고(연결 dispose → 데몬 detach), 새 창이 같은 session id 로 attach 해 터미널을 이어받는다 (tmux 식 재-attach, 데몬 무변경). front 상태는 handoff — 새 창 label 의 큐에 적재(deliver_handoff), 새 창이 부팅 후 take_handoff 로 가져간다. 출처 창이 비면 빈 세션으로 남긴다. 창 생성 실패는 소속·핸드오프를 되돌린다(롤백)
+  role: Tauri command — 세션 탭을 새 창으로 분리. 드롭 지점에 새 창(label w<n>)을 만들고 세션의 소속을 옮긴다. 출처 창은 sessions-changed 로 그 세션을 잃고(연결 dispose → 데몬 detach), 새 창이 같은 session id 로 attach 해 터미널을 이어받는다 (tmux 식 재-attach, 데몬 무변경). front 상태는 handoff — 새 창 label 의 큐에 적재(deliver_handoff), 새 창이 부팅 후 take_handoff 로 가져간다. 출처 창이 비면 새 창 생성 뒤 그 창을 닫는다(close_if_empty). 창 생성 실패는 소속·핸드오프를 되돌린다(롤백)
 }
 fn move_session_to_window() {
-  role: Tauri command — 세션 탭을 다른(살아 있는) 창으로 병합. 소속을 옮기고 그 창 소속 엔트리들 사이의 to_index 자리에 넣는다 (넘치면 그 창의 마지막 뒤). 출처 창이 자기 상태를 직렬화해 부른다 — 대상 창의 드롭은 forward 로 출처에 요청만 한다 (핸드오프는 항상 출처가 만든다). 핸드오프 적재 + handoff-available, 대상 창 포커스. 출처 창이 비면 빈 세션으로 남긴다
+  role: Tauri command — 세션 탭을 다른(살아 있는) 창으로 병합. 소속을 옮기고 그 창 소속 엔트리들 사이의 to_index 자리에 넣는다 (넘치면 그 창의 마지막 뒤). 출처 창이 자기 상태를 직렬화해 부른다 — 대상 창의 드롭은 forward 로 출처에 요청만 한다 (핸드오프는 항상 출처가 만든다). 핸드오프 적재 + handoff-available, 대상 창 포커스. 출처 창이 비면 그 창을 닫는다(close_if_empty). async — 창을 닫는 커맨드는 메인 스레드를 피한다
 }
 fn detach_tabs() {
   role: Tauri command — 에디터·터미널 탭을 새 창으로 분리. 같은 root 의 새 세션(새 id)을 새 창에 만든다 — open_workspace 의 "이미 열림 → 포커스" 규칙을 의도적으로 건너뛴다 (같은 워크스페이스의 두 번째 세션이 목적). 핸드오프(객체가 아니면 거절 — Value IndexMut 패닉 방지)에 toSession 을 채워 새 창이 어느 세션에 붙일지 알게 한다. 창 생성 실패는 세션·핸드오프를 되돌린다(롤백 — front 는 떼어 둔 탭을 복원). 터미널은 그 새 창이 adoptTerminal(와이어 v10)로 출처 세션에서 가져간다
@@ -96,11 +96,11 @@ fn list_windows() {
 fn owned_by() {
   role: 호출 창이 그 세션의 소유자인지 검사 — 창 밖 드롭과 다른 창 드롭이 겹쳐 두 경로가 같은 세션을 옮기려 할 때 늦은 요청을 구조적으로 거절한다 (dropEffect 전파를 신뢰하지 않는다). close_session·move_session·detach_session·move_session_to_window 가 쓴다 — 다른 창의 세션은 닫거나 옮길 수 없다
 }
-fn ensure_nonempty() {
-  role: 세션 0 개가 된 창에 루트 없는 빈 세션을 세운다 — 탭 닫기·분리·병합이 모두 이 규칙을 탄다 (창은 각각 독립된 하나, 닫히는 건 X 로만)
+fn close_if_empty() {
+  role: 세션 0 개가 된 창을 닫는다 — 탭 닫기·분리·병합이 모두 이 규칙을 탄다 (2026-09-05 개정, 종전 ensure_nonempty 는 빈 세션으로 남겼다). 마지막 창이면 Tauri 기본대로 앱 종료. 남은 정리는 Destroyed → drop_window. 분리는 새 창 생성이 성공한 뒤에만 부른다 (실패 롤백 시 출처 창이 남아야 한다)
 }
 fn drop_window() {
-  role: 창 X(Destroyed) — 그 창 소속 세션을 레지스트리에서 빼고(재-attach 차단 → 데몬 grace 후 회수) 대기 핸드오프도 버린다. focused 가 그 창이었으면 살아 있는 창으로 되돌린다 (두 번째 실행이 유령 세션을 만들지 않게). 다른 창은 영향 없음
+  role: 창 닫힘(Destroyed — X 또는 close_if_empty) — 그 창 소속 세션을 레지스트리에서 빼고(재-attach 차단 → 데몬 grace 후 회수) 대기 핸드오프도 버린다. focused 가 그 창이었으면 살아 있는 창으로 되돌린다 (두 번째 실행이 유령 세션을 만들지 않게). 다른 창은 영향 없음
 }
 fn new_window_label() {
   role: 분리 창 label 발급 — w1, w2 … (첫 창은 main)
@@ -118,7 +118,7 @@ fn infos_for() {
   role: 한 창의 세션 탭 목록 — 레지스트리 순서 중 그 창 소속만. 부팅 주입·list_sessions·sessions-changed payload 공용
 }
 fn emit_sessions() {
-  role: 레지스트리 변경을 창마다 자기 몫의 목록으로 sessions-changed 방송(emit_to) — 각 창의 front 세션 관리자가 reconcile 한다. 방송 전에 record_bundles 로 묶음 이력을 저장한다 (front 가 반향 후 list_recents 를 부르면 이미 갱신돼 있게)
+  role: 레지스트리 변경을 창마다 자기 몫의 목록으로 sessions-changed 방송(emit_to) — 각 창의 front 세션 관리자가 reconcile 한다. 세션 0 개인 창(닫히는 중)은 건너뛴다 — 빈 목록을 보내면 front 가 활성 없는 상태를 잠깐 그린다. 방송 전에 record_bundles 로 묶음 이력을 저장한다 (front 가 반향 후 list_recents 를 부르면 이미 갱신돼 있게)
 }
 fn attach_os_drop() {
   role: (Windows 전용) OS 파일/폴더 드롭 수신 — WebView2 WebMessageReceived 에 핸들러 추가 등록 (멀티캐스트라 wry IPC 와 공존, 부속 객체 유무로 우리 메시지를 구분). 창마다 등록한다 (build_window). front 가 postMessageWithAdditionalObjects 로 넘긴 File 객체에서 절대 경로를 읽고 (FileSystemHandle 은 런타임이 null 로 넣어 못 쓴다 — 실측), 종류는 경로를 직접 stat 해 판별한다. 디렉토리면 그 창에 open_workspace 로 새 세션 탭 (폴더 열기 계열과 의미 통일), 파일이면 절대 경로 목록을 PostWebMessageAsJson 으로 DOM 에 반환 (루트 상대화·열기 판단은 front 몫). 경로는 드롭 객체에서 나온다 — front 의 문자열 경로 지목은 open_folder_path 통로로만 (web-folder-open.md 개정)
