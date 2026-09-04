@@ -100,6 +100,11 @@ export function configureSessions(e: SessionsEnv): void {
   env = e;
 }
 
+/** 환경 종류 — 최근 목록(recents)이 저장소를 고른다 (앱 native state.json / 웹 localStorage / mock 없음) */
+export function sessionsKind(): 'app' | 'web' | 'mock' {
+  return env.kind;
+}
+
 /** 탭 UI 를 그리는가 — mock(세션 개념 없음)만 아니면 단일 탭이어도 그린다 (+ 버튼 발견성) */
 export function sessionsEnabled(): boolean {
   return env.kind !== 'mock';

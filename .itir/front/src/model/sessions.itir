@@ -19,6 +19,9 @@ export val DND_TERMINAL
 export fn configureSessions(env) {
   role: 환경 주입 (host.ts 전용) — kind 와 탭별 백엔드 연결 생성기, 데몬 소켓 요청자 요청의 처리기(onRequest, 와이어 v9 — 세션 컨텍스트 생성 시 그 백엔드의 onRequest 를 이 처리기에 묶는다. 어떤 요청이 있는지는 조립 지점이 정한다)
 }
+export fn sessionsKind() -> String {
+  role: 환경 종류('app'|'web'|'mock') — recents 모델이 저장소(native state.json / localStorage / 없음)를 고른다
+}
 export fn sessionsEnabled() -> Bool {
   role: 탭 UI 표시 여부 — mock 만 아니면 단일 탭이어도 그린다 (+ 버튼 발견성)
 }

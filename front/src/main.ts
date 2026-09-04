@@ -8,12 +8,14 @@ import './model/host';
 import Workbench from './ui/Workbench.vue';
 import { installKeybindings, setupCommands } from './model/commands';
 import { initOsDrop } from './model/osdrop';
+import { initRecents } from './model/recents';
 import { hasAnyDirty, initSessions } from './model/sessions';
 
 setupCommands();
 installKeybindings(window);
 initOsDrop();
 initSessions();
+initRecents();
 
 // WHY: Ctrl+W 등 브라우저 예약 키는 페이지가 가로챌 수 없다 — 미저장 변경이 있으면
 //      탭이 닫히기 직전의 확인 대화상자가 마지막 안전망이다. 배경 세션 탭의 dirty 도 지킨다

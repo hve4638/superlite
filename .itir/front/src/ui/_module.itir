@@ -3,6 +3,7 @@ import { inApp, appWindow, minimizeWindow, toggleMaximizeWindow, closeWindow, wi
 import { sessions, sessionsEnabled, activateSession, closeSession, addEmptySession, browseBackend, moveSession, renameSession, isRemoteEmpty, remoteHost, SessionTab, multiWindow, detachSession, detachSessionNearby, requestSessionMove, moveSessionToWindow, listWindows, DND_SESSION } from '../model/sessions'
 import { openFolder, openFolderDialog, openRootDefault, confirmDaemonClean, retryActiveConnection } from '../model/host'
 import { daemonClean, cancelDaemonClean } from '../model/daemon'
+import { recents, refreshRecents, forgetRecent, forgetBundle, openBundle, recentLabel, RecentEntry } from '../model/recents'
 import { editors, activeTab, openFile, indentOf, languageLabel, baseName, base64Bytes, confirmCloseSave, confirmCloseDiscard, confirmCloseCancel } from '../model/editors'
 import { files } from '../model/files'
 import { scm } from '../model/scm'

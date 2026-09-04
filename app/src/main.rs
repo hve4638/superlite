@@ -20,8 +20,11 @@
 //! 만들고 native 는 내용을 모른 채 대상 창에 전달만 한다 (아직 로드 전인 새 창은 부팅 후
 //! take_handoff 로 가져간다).
 //!
-//! 시작은 항상 빈 세션(시작 페이지)이다 — 마지막 워크스페이스 복원·지속 저장은 하지
-//! 않는다 (2026-09-02 사용자 결정, ticket app-empty-session). 명시 argv 로 준 폴더만 연다.
+//! 시작은 항상 빈 세션(시작 페이지)이다 — 마지막 워크스페이스 자동 복원은 하지 않는다
+//! (2026-09-02 사용자 결정, ticket app-empty-session). 명시 argv 로 준 폴더만 연다.
+//! 대신 state.json(app_data_dir, version 2 — decision/state-persistence.md)에 최근 연 폴더
+//! MRU 와 세션 묶음(한 창에 함께 열려 있던 root 집합) 이력을 남기고, 시작 페이지가 그 목록을
+//! 보여 사용자가 명시적으로 다시 연다 (ticket start-page-recents).
 //!
 //! 실행: superlight-app [워크스페이스루트]  (인자 없으면 빈 세션으로 시작)
 
@@ -29,7 +32,7 @@
 #![cfg_attr(all(not(debug_assertions), windows), windows_subsystem = "windows")]
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -56,6 +59,140 @@ struct AppState {
     /// 마지막으로 포커스된 창 — 두 번째 실행(argv)·OS 드롭처럼 창을 지목하지 않는 열기의 대상
     focused: Mutex<String>,
     next_window: AtomicUsize,
+    /// 최근 폴더·세션 묶음 이력 — state.json 의 메모리 사본. 락 순서는 sessions → windows → persisted
+    persisted: Mutex<Persisted>,
+    /// state.json 경로 — app_data_dir 를 못 만들면 None (저장 없이 동작)
+    state_file: Option<PathBuf>,
+}
+
+/// 최근 연 폴더 MRU 상한 (시작 페이지 왼쪽 컬럼)
+const RECENTS_MAX: usize = 10;
+/// 세션 묶음 이력 상한 (시작 페이지 오른쪽 컬럼)
+const BUNDLES_MAX: usize = 5;
+
+/// 디스크에 남기는 상태 — 스키마·규칙은 docs/decision/state-persistence.md (version 2).
+/// recents 는 개별 root 의 MRU(앞이 최신), bundles 는 한 창에 함께 열려 있던 root 집합의
+/// 이력(앞이 최신, 원소 순서 = 탭 순서). 빈 세션(root 없음·경로 없는 ssh://host)은 둘 다 제외
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct Persisted {
+    version: u32,
+    #[serde(default)]
+    recents: Vec<PathBuf>,
+    #[serde(default)]
+    bundles: Vec<Vec<PathBuf>>,
+}
+
+/// 시작 페이지용 사영 — missing 은 로컬 경로가 지금 디렉토리가 아니다(삭제·이동·드라이브
+/// 분리). 원격 ssh:// 는 검사하지 않는다(접속해야 안다). 표시 이름은 front 가 root 로 만든다
+#[derive(Clone, serde::Serialize)]
+struct RecentEntry {
+    root: String,
+    missing: bool,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct RecentsInfo {
+    recents: Vec<RecentEntry>,
+    bundles: Vec<Vec<RecentEntry>>,
+}
+
+fn recent_entry(root: &Path) -> RecentEntry {
+    let s = root.to_string_lossy().into_owned();
+    let missing = !s.starts_with("ssh://") && !root.is_dir();
+    RecentEntry { root: s, missing }
+}
+
+/// state.json 읽기 — 파일 없음·파싱 실패·버전 불일치는 빈 상태 (reader 는 version 이 다르면
+/// 파일 전체를 무시한다 — 결정 문서 규칙)
+fn load_state(path: Option<&Path>) -> Persisted {
+    let Some(path) = path else {
+        return Persisted { version: 2, ..Default::default() };
+    };
+    match std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str::<Persisted>(&t).ok()) {
+        Some(p) if p.version == 2 => p,
+        _ => Persisted { version: 2, ..Default::default() },
+    }
+}
+
+/// state.json 쓰기 — tmp 에 쓴 뒤 rename (torn write 방지). 실패는 로그만 — 이력이 앱을 죽이면 안 된다
+fn save_state(path: Option<&Path>, p: &Persisted) {
+    let Some(path) = path else { return };
+    let json = serde_json::to_string(p).expect("상태 직렬화는 실패할 수 없다");
+    let tmp = path.with_extension("json.tmp");
+    if let Err(e) = std::fs::write(&tmp, json).and_then(|()| std::fs::rename(&tmp, path)) {
+        eprintln!("superlight-app: 상태 저장 실패: {e}");
+    }
+}
+
+/// MRU 갱신 — 있으면 앞으로 당기고 없으면 앞에 넣는다. 상한 초과는 뒤에서 버린다
+fn note_recent(recents: &mut Vec<PathBuf>, root: &Path) {
+    recents.retain(|r| r != root);
+    recents.insert(0, root.to_path_buf());
+    recents.truncate(RECENTS_MAX);
+}
+
+fn is_subset(a: &[PathBuf], b: &[PathBuf]) -> bool {
+    a.iter().all(|x| b.contains(x))
+}
+
+/// 묶음 이력 갱신 — 한 창의 현재 root 집합(탭 순서)을 넣는다. 세션 하나는 묶음이 아니다
+/// (왼콽 MRU 몫). WHY: 탭을 하나씩 열고 닫는 과정의 중간 구성이 이력을 채우지 않게 — 새 집합이
+///      기존 묶음의 부분집합이면(탭을 닫는 중) 그 묶음을 앞으로 당기기만 하고, 새 집합이 기존
+///      묶음을 포함하면(탭을 더 여는 중) 그 부분집합 묶음들을 새 것으로 대체한다. 결과적으로
+///      한 작업 흐름의 최대 구성만 남는다
+fn note_bundle(bundles: &mut Vec<Vec<PathBuf>>, roots: Vec<PathBuf>) {
+    if roots.len() < 2 {
+        return;
+    }
+    if let Some(i) = bundles.iter().position(|b| is_subset(&roots, b)) {
+        let b = bundles.remove(i);
+        bundles.insert(0, b);
+        return;
+    }
+    bundles.retain(|b| !is_subset(b, &roots));
+    bundles.insert(0, roots);
+    bundles.truncate(BUNDLES_MAX);
+}
+
+/// 폴더 열기 진입점들이 부른다 — MRU 에 올리고 저장. 빈 세션 root 는 무시
+fn remember_recent(state: &AppState, root: &Path) {
+    if is_empty_root(Some(root)) {
+        return;
+    }
+    let mut p = state.persisted.lock().unwrap();
+    note_recent(&mut p.recents, root);
+    save_state(state.state_file.as_deref(), &p);
+}
+
+/// 레지스트리 변경마다(emit_sessions) 창별 root 집합을 묶음 이력에 반영하고 저장한다.
+/// 종료 훅에 의존하지 않으므로 crash 에도 마지막 변경까지 남는다
+fn record_bundles(state: &AppState) {
+    let groups: Vec<Vec<PathBuf>> = {
+        let list = state.sessions.lock().unwrap();
+        let windows = state.windows.lock().unwrap();
+        let mut labels: Vec<&String> = Vec::new();
+        for (id, _) in list.iter() {
+            if let Some(w) = windows.get(id) {
+                if !labels.contains(&w) {
+                    labels.push(w);
+                }
+            }
+        }
+        labels
+            .into_iter()
+            .map(|w| {
+                list.iter()
+                    .filter(|(id, r)| windows.get(id) == Some(w) && !is_empty_root(r.as_deref()))
+                    .filter_map(|(_, r)| r.clone())
+                    .collect()
+            })
+            .collect()
+    };
+    let mut p = state.persisted.lock().unwrap();
+    for g in groups {
+        note_bundle(&mut p.bundles, g);
+    }
+    save_state(state.state_file.as_deref(), &p);
 }
 
 /// 세션 탭 표시용 사영 — 부팅 주입(__SUPERLIGHT_SESSIONS__)·list_sessions 응답·
@@ -101,6 +238,8 @@ fn infos_for(state: &AppState, label: &str) -> Vec<SessionInfo> {
 
 /// 레지스트리 변경 방송 — 창마다 자기 몫의 목록을 보낸다. front 세션 관리자가 reconcile 한다
 fn emit_sessions(app: &tauri::AppHandle, state: &AppState) {
+    // 저장이 방송보다 앞 — front 가 반향을 받고 list_recents 를 부르면 이미 갱신돼 있다
+    record_bundles(state);
     for label in app.webview_windows().keys() {
         let _ = app.emit_to(label.as_str(), "sessions-changed", infos_for(state, label));
     }
@@ -229,6 +368,8 @@ fn is_empty_root(root: Option<&std::path::Path>) -> bool {
 /// 에디터·터미널 탭 분리(detach_tabs)는 같은 root 의 두 번째 세션을 의도적으로 만들므로
 /// 이 함수를 타지 않는다.
 fn open_workspace(app: &tauri::AppHandle, state: &AppState, label: &str, root: PathBuf, replace: Option<&str>) {
+    // 이미 열려 있어 포커스만 옮기는 경우도 "최근 연 폴더"다
+    remember_recent(state, &root);
     {
         let mut list = state.sessions.lock().unwrap();
         let mut windows = state.windows.lock().unwrap();
@@ -601,6 +742,93 @@ fn list_windows(app: tauri::AppHandle, state: tauri::State<AppState>) -> Vec<Win
         .collect()
 }
 
+/// 시작 페이지 목록 — 최근 폴더 MRU 와 세션 묶음 이력. 매 표시마다 부른다 (소실 여부는 그때 검사)
+#[tauri::command]
+fn list_recents(state: tauri::State<AppState>) -> RecentsInfo {
+    let p = state.persisted.lock().unwrap();
+    RecentsInfo {
+        recents: p.recents.iter().map(|r| recent_entry(r)).collect(),
+        bundles: p.bundles.iter().map(|b| b.iter().map(|r| recent_entry(r)).collect()).collect(),
+    }
+}
+
+/// 최근 폴더 목록에서 지우기 (시작 페이지 ×). 묶음 이력은 건드리지 않는다
+#[tauri::command]
+fn forget_recent(state: tauri::State<AppState>, root: String) {
+    let mut p = state.persisted.lock().unwrap();
+    p.recents.retain(|r| r.to_string_lossy() != root);
+    save_state(state.state_file.as_deref(), &p);
+}
+
+/// 묶음 이력에서 지우기 (시작 페이지 ×) — 같은 집합인 묶음을 지운다
+#[tauri::command]
+fn forget_bundle(state: tauri::State<AppState>, roots: Vec<String>) {
+    let roots: Vec<PathBuf> = roots.into_iter().map(PathBuf::from).collect();
+    let mut p = state.persisted.lock().unwrap();
+    p.bundles.retain(|b| !(b.len() == roots.len() && is_subset(b, &roots)));
+    save_state(state.state_file.as_deref(), &p);
+}
+
+/// 세션 묶음 열기 (시작 페이지 오른쪽 컬럼) — root 들을 세션 탭으로 한꺼번에 등록한다.
+/// 이 창의 탭이 전부 빈 세션이면 그 빈 탭들을 치우고 이 창에 (시작 페이지에서 고르는 명시적
+/// 복원), 비어 있지 않은 탭이 있으면 무조건 새 창에 (사용자 결정 — 열려 있는 작업과 섞지 않는다).
+/// 이미 어느 창에든 열린 root 는 건너뛴다 (open_workspace 의 중복 금지와 같은 이유). 경로가
+/// 소실된 root 도 건너뛰고, 열 것이 하나도 없으면 에러로 알린다.
+/// WHY: async — 창을 만드는 커맨드는 메인 스레드에서 돌면 Windows 에서 교착한다 (build_window 참조)
+#[tauri::command]
+async fn open_bundle(app: tauri::AppHandle, window: tauri::WebviewWindow, roots: Vec<String>) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let from = window.label().to_string();
+    let parsed: Vec<PathBuf> = roots.iter().filter_map(|r| parse_root(r).ok()).collect();
+    if parsed.is_empty() {
+        return Err("열 수 있는 폴더가 없다".into());
+    }
+    for r in &parsed {
+        remember_recent(&state, r);
+    }
+    let (label, added) = {
+        let mut list = state.sessions.lock().unwrap();
+        let mut windows = state.windows.lock().unwrap();
+        let here_nonempty = list
+            .iter()
+            .any(|(id, r)| windows.get(id) == Some(&from) && !is_empty_root(r.as_deref()));
+        let fresh: Vec<PathBuf> =
+            parsed.into_iter().filter(|root| !list.iter().any(|(_, r)| r.as_ref() == Some(root))).collect();
+        if fresh.is_empty() {
+            return Err("묶음의 폴더가 모두 이미 열려 있다".into());
+        }
+        let label = if here_nonempty {
+            new_window_label(&state)
+        } else {
+            list.retain(|(id, _)| windows.get(id) != Some(&from));
+            windows.retain(|_, w| w != &from);
+            from.clone()
+        };
+        let mut added = Vec::new();
+        for root in fresh {
+            let id = rand_hex();
+            windows.insert(id.clone(), label.clone());
+            list.push((id.clone(), Some(root)));
+            added.push(id);
+        }
+        (label, added)
+    };
+    if label != from {
+        if let Err(e) = build_window(&app, &state, &label, None) {
+            // 롤백 — 생기지 않은 창 소속으로 세션이 남지 않게
+            let mut list = state.sessions.lock().unwrap();
+            let mut windows = state.windows.lock().unwrap();
+            list.retain(|(id, _)| !added.contains(id));
+            for id in &added {
+                windows.remove(id);
+            }
+            return Err(format!("창 생성 실패: {e}"));
+        }
+    }
+    emit_sessions(&app, &state);
+    Ok(())
+}
+
 /// OS 파일/폴더 드롭 수신 (Windows 전용). disable_drag_drop_handler 로 Tauri 의 파일 드롭
 /// 이벤트가 꺼진 상태의 공식 대체 경로다 (WebView2 WebMessageObjects): front 가 DOM drop 의
 /// File 객체를 postMessageWithAdditionalObjects 로 넘기면 여기서 절대 경로·종류를 읽는다.
@@ -759,7 +987,11 @@ fn main() {
             detach_tabs,
             forward,
             take_handoff,
-            list_windows
+            list_windows,
+            list_recents,
+            forget_recent,
+            forget_bundle,
+            open_bundle
         ])
         // 창 X = 그 창의 세션만 정리 (다른 창은 영향 없음). 포커스 추적은 두 번째 실행의 대상 창
         .on_window_event(|window, event| match event {
@@ -785,6 +1017,19 @@ fn main() {
                 None => Vec::new(),
             };
 
+            // 상태 파일은 OS 관례 경로(app_data_dir) 아래 state.json — 스키마·쓰기 규칙은
+            // docs/decision/state-persistence.md. 디렉토리를 못 만들면 저장 없이 동작한다
+            let state_file = match app.path().app_data_dir().and_then(|d| {
+                std::fs::create_dir_all(&d)?;
+                Ok(d.join("state.json"))
+            }) {
+                Ok(p) => Some(p),
+                Err(e) => {
+                    eprintln!("superlight-app: 상태 디렉토리 준비 실패 — 최근 목록 저장 없이 동작: {e}");
+                    None
+                }
+            };
+            let persisted = load_state(state_file.as_deref());
             app.manage(AppState {
                 ws_url,
                 sessions,
@@ -792,6 +1037,8 @@ fn main() {
                 handoffs: Mutex::default(),
                 focused: Mutex::new(MAIN_WINDOW.to_string()),
                 next_window: AtomicUsize::new(0),
+                persisted: Mutex::new(persisted),
+                state_file,
             });
             let state = app.state::<AppState>();
             // 초기 세션 등록 — 창을 만들기 전에 끝내야 주입 목록이 완전하다
@@ -801,6 +1048,7 @@ fn main() {
                 for root in roots {
                     // plain: Windows verbatim 루트는 '/' 와이어 경로·자식 cwd 를 깨뜨린다
                     let root = superlight_common::plain(root);
+                    remember_recent(&state, &root);
                     let id = rand_hex();
                     windows.insert(id.clone(), MAIN_WINDOW.to_string());
                     list.push((id, Some(root)));
@@ -850,6 +1098,56 @@ mod tests {
 
     /// 창 안 순서 이동은 다른 창 엔트리의 자리를 건드리지 않는다 — 전체 목록 [a(main) x(w1)
     /// b(main) c(main)] 에서 main 의 a 를 끝으로 보내도 x 는 여전히 두 번째다
+    fn paths(v: &[&str]) -> Vec<PathBuf> {
+        v.iter().map(PathBuf::from).collect()
+    }
+
+    #[test]
+    fn note_recent_is_mru_with_cap() {
+        let mut r = Vec::new();
+        for i in 0..RECENTS_MAX + 2 {
+            note_recent(&mut r, Path::new(&format!("/p{i}")));
+        }
+        assert_eq!(r.len(), RECENTS_MAX);
+        assert_eq!(r[0], PathBuf::from(format!("/p{}", RECENTS_MAX + 1)));
+        // 재열기는 앞으로 당긴다 (중복 없음)
+        note_recent(&mut r, Path::new("/p5"));
+        assert_eq!(r[0], PathBuf::from("/p5"));
+        assert_eq!(r.iter().filter(|p| **p == PathBuf::from("/p5")).count(), 1);
+    }
+
+    #[test]
+    fn note_bundle_keeps_maximal_configuration() {
+        let mut b = Vec::new();
+        note_bundle(&mut b, paths(&["/a"])); // 하나는 묶음이 아니다
+        assert!(b.is_empty());
+        note_bundle(&mut b, paths(&["/a", "/b"]));
+        note_bundle(&mut b, paths(&["/a", "/b", "/c"])); // 확장 — 부분집합을 대체
+        assert_eq!(b, vec![paths(&["/a", "/b", "/c"])]);
+        note_bundle(&mut b, paths(&["/b", "/c"])); // 축소(닫는 중) — 새 항목 없이 앞으로
+        assert_eq!(b, vec![paths(&["/a", "/b", "/c"])]);
+        note_bundle(&mut b, paths(&["/x", "/y"]));
+        assert_eq!(b[0], paths(&["/x", "/y"]));
+        assert_eq!(b.len(), 2);
+        // 같은 집합 다른 순서 — 기존을 앞으로 당길 뿐
+        note_bundle(&mut b, paths(&["/c", "/a", "/b"]));
+        assert_eq!(b[0], paths(&["/a", "/b", "/c"]));
+        assert_eq!(b.len(), 2);
+    }
+
+    #[test]
+    fn state_roundtrip_and_version_gate() {
+        let path = std::env::temp_dir().join(format!("superlight-test-{}.json", rand_hex()));
+        let p = Persisted { version: 2, recents: paths(&["/a"]), bundles: vec![paths(&["/a", "/b"])] };
+        save_state(Some(&path), &p);
+        let back = load_state(Some(&path));
+        assert_eq!(back.recents, p.recents);
+        assert_eq!(back.bundles, p.bundles);
+        std::fs::write(&path, r#"{"version":1,"workspaces":[{"root":"/a"}]}"#).unwrap();
+        assert!(load_state(Some(&path)).recents.is_empty());
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[test]
     fn move_in_window_keeps_other_windows_slots() {
         let mut list = entries(&["a", "x", "b", "c"]);

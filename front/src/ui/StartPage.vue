@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, onMounted, watch } from 'vue';
 import { openQuickInput } from '../model/workbench';
-import { retryActiveConnection } from '../model/host';
+import { openFolder, retryActiveConnection } from '../model/host';
+import { forgetBundle, forgetRecent, openBundle, recentLabel, recents, refreshRecents, type RecentEntry } from '../model/recents';
 import { isRemoteEmpty, remoteHost, sessions } from '../model/sessions';
 import { connection, failureLabel, stageLabel } from '../model/watch';
 
@@ -27,6 +28,25 @@ const statusText = computed(() => {
 function openDefault(): void {
   openQuickInput('folder');
 }
+
+// 최근 목록 (ticket start-page-recents) — 표시될 때와 세션 목록이 바뀔 때 다시 읽는다 (다른 탭에서
+// 폴더를 열어도 이 페이지의 목록이 따라온다). 왼쪽 = 최근 연 단일 폴더 MRU, 오른쪽 = 세션 묶음
+onMounted(() => void refreshRecents());
+watch(() => sessions.list.map((t) => t.root).join('\0'), () => void refreshRecents());
+/** rtl 말줄임(경로 꼬리를 남기는 트릭)에서 맨 앞 '/' 가 뒤로 밀리지 않게 하는 LTR 마크 */
+const LRM = '\u200E';
+const hasRecents = computed(() => recents.recents.length > 0 || recents.bundles.length > 0);
+
+/** 묶음 표시 — 이름을 ", " 로 잇고 전체 경로는 title 로 */
+function bundleLabel(b: RecentEntry[]): string {
+  return b.map((e) => recentLabel(e.root)).join(', ');
+}
+function bundleTitle(b: RecentEntry[]): string {
+  return b.map((e) => (e.missing ? `${e.root} (not found)` : e.root)).join('\n');
+}
+function bundleMissing(b: RecentEntry[]): boolean {
+  return b.some((e) => e.missing);
+}
 </script>
 
 <template>
@@ -42,6 +62,44 @@ function openDefault(): void {
       <button v-if="failed" class="start-retry" @click="retryActiveConnection()">Retry</button>
     </div>
     <button class="start-open" :disabled="connecting" @click="openDefault()">Open Folder…</button>
+    <div v-if="hasRecents" class="start-recents">
+      <div class="recent-col">
+        <div class="recent-head">Recent</div>
+        <div v-if="recents.recents.length === 0" class="recent-empty">No recent folders</div>
+        <div
+          v-for="e in recents.recents"
+          :key="e.root"
+          class="recent-row"
+          :class="{ missing: e.missing }"
+          :title="e.missing ? `${e.root} (not found)` : e.root"
+          @click="openFolder(e.root)"
+        >
+          <span class="recent-name">{{ recentLabel(e.root) }}</span>
+          <span class="recent-path">{{ LRM + e.root }}</span>
+          <button class="recent-x codicon codicon-close" title="Remove from Recent" @click.stop="forgetRecent(e.root)" />
+        </div>
+      </div>
+      <div class="recent-col">
+        <div class="recent-head">Recent Sessions</div>
+        <div v-if="recents.bundles.length === 0" class="recent-empty">No recent sessions</div>
+        <div
+          v-for="b in recents.bundles"
+          :key="b.map((e) => e.root).join('\0')"
+          class="recent-row bundle"
+          :class="{ missing: bundleMissing(b) }"
+          :title="bundleTitle(b)"
+          @click="openBundle(b.map((e) => e.root))"
+        >
+          <span class="recent-name">{{ bundleLabel(b) }}</span>
+          <span class="recent-path">{{ b.length }} folders</span>
+          <button
+            class="recent-x codicon codicon-close"
+            title="Remove from Recent Sessions"
+            @click.stop="forgetBundle(b.map((e) => e.root))"
+          />
+        </div>
+      </div>
+    </div>
     <div class="start-hints">
       <div class="hint-row">
         <span class="hint-label">Open folder by path</span>
@@ -117,6 +175,83 @@ function openDefault(): void {
 }
 .start-open:hover {
   background: var(--vscode-button-hoverBackground, #1177bb);
+}
+.start-recents {
+  margin-top: 18px;
+  display: grid;
+  grid-template-columns: minmax(220px, 340px) minmax(220px, 340px);
+  gap: 28px;
+  max-width: 760px;
+  width: min(760px, 90%);
+}
+.recent-col {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.recent-head {
+  font-size: 15px;
+  font-weight: 300;
+  margin-bottom: 6px;
+  color: var(--vscode-titleBar-inactiveForeground);
+}
+.recent-empty {
+  font-size: 12px;
+  opacity: 0.55;
+}
+.recent-row {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.recent-row.bundle {
+  grid-template-columns: minmax(0, 1fr) auto 16px;
+}
+.recent-row.bundle .recent-path {
+  direction: ltr;
+}
+.recent-row:hover {
+  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.06));
+}
+.recent-row.missing {
+  opacity: 0.45;
+}
+.recent-name {
+  color: var(--vscode-textLink-foreground, #3794ff);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.recent-path {
+  font-size: 11px;
+  opacity: 0.6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+.recent-x {
+  visibility: hidden;
+  border: none;
+  background: none;
+  color: inherit;
+  font-size: 14px;
+  padding: 0;
+  cursor: pointer;
+  opacity: 0.7;
+}
+.recent-row:hover .recent-x {
+  visibility: visible;
+}
+.recent-x:hover {
+  opacity: 1;
 }
 .start-hints {
   margin-top: 22px;
