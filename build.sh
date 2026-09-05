@@ -1,7 +1,10 @@
 #!/bin/sh
-# Windows 배포 세트 빌드 — front dist → cross-compile → <ws>/build/ 에 4파일.
-# superlight-daemon-linux-x86_64 는 musl 정적 linux 데몬 — Windows 앱이 linux 원격(ssh)에
-# 올려 실행한다 (backend/relay ssh.rs remote_daemon_bin 의 형제 파일 규칙).
+# Windows 배포 세트 빌드 — front dist → cross-compile → <ws>/build/ 에 아래 배치.
+#   superlight-app.exe, WebView2Loader.dll
+#   daemon/windows-x86_64.exe   앱이 로컬에서 띄우는 데몬
+#   daemon/linux-x86_64         musl 정적 linux 데몬 — linux 원격(ssh)에 올려 실행
+# 데몬은 앱 옆 daemon/<os>-<arch>[.exe] 한 규칙으로 찾는다 (backend/relay lib.rs
+# daemon_bin_for — 이름은 rust std::env::consts::OS·ARCH 값 그대로).
 # 사전 준비: rustup target add x86_64-pc-windows-gnu x86_64-unknown-linux-musl
 # main 은 워크스페이스 루트의 build/ 에, 다른 브랜치는 build/<워크트리 폴더명>/ 에
 # 넣는다 — 병행 워커끼리 서로 덮어쓰는 사고 방지.
@@ -40,7 +43,8 @@ cargo build --release --target x86_64-pc-windows-gnu -p superlight-app -p superl
 cargo build --release --target x86_64-unknown-linux-musl -p superlight-daemon
 
 rel=target/x86_64-pc-windows-gnu/release
-mkdir -p "$out"
-cp "$rel/superlight-app.exe" "$rel/superlight-daemon.exe" "$rel/WebView2Loader.dll" "$out/"
-cp target/x86_64-unknown-linux-musl/release/superlight-daemon "$out/superlight-daemon-linux-x86_64"
-echo "→ $out/ (superlight-app.exe, superlight-daemon.exe, WebView2Loader.dll, superlight-daemon-linux-x86_64)"
+mkdir -p "$out/daemon"
+cp "$rel/superlight-app.exe" "$rel/WebView2Loader.dll" "$out/"
+cp "$rel/superlight-daemon.exe" "$out/daemon/windows-x86_64.exe"
+cp target/x86_64-unknown-linux-musl/release/superlight-daemon "$out/daemon/linux-x86_64"
+echo "→ $out/ (superlight-app.exe, WebView2Loader.dll, daemon/windows-x86_64.exe, daemon/linux-x86_64)"

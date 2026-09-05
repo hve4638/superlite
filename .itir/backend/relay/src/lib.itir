@@ -52,8 +52,11 @@ fn close_with(tx, rx, code, reason) {
 fn daemon_conn() {
   role: 데몬 소켓 접속. spawn 인자는 제어 루프만 true — relay 까지 spawn 하면 백엔드 하나가 데몬을 두 번 띄우는 race 가 생기므로 relay 는 재시도만 한다 (데몬 부재 시 제어 루프가 곧 재기동)
 }
+fn daemon_bin_for(os, arch) -> path {
+  role: OS·arch 에 맞는 데몬 바이너리 배치 규칙 하나 — 실행 파일 옆 daemon/<os>-<arch>[.exe] (이름은 std::env::consts::OS·ARCH 값 그대로, 매핑 표 없음). 로컬(내 OS·arch)이면 SUPERLIGHT_DAEMON_BIN 우회가 먼저, daemon/ 에 없으면 형제 superlight-daemon 폴백 (cargo 가 target/debug 에 평평하게 놓는다 — check 하니스·cargo run). 원격용은 daemon/ 에 없으면 파일명·위치를 담은 오류
+}
 fn daemon_bin_path() {
-  role: 데몬 바이너리 위치 (env 우회 또는 형제 파일) — 로컬 spawn 과 원격 업로드(ssh 모듈)가 같은 규칙
+  role: 로컬 데몬 바이너리 — daemon_bin_for(내 OS, 내 arch)
 }
 fn control_loop() {
   role: 백엔드 자체 수명 — 데몬 기동 보장 + 30초 ping 생존 신호

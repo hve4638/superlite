@@ -120,15 +120,36 @@ async fn daemon_conn(spawn: bool) -> Result<DaemonStream, String> {
     Err(format!("데몬 기동 실패 (5초): {}", sock.display()))
 }
 
-/// 데몬 바이너리 위치 — 로컬 spawn 과 원격 업로드(ssh 모듈)가 같은 규칙을 쓴다
-pub(crate) fn daemon_bin_path() -> Result<PathBuf, String> {
-    match std::env::var("SUPERLIGHT_DAEMON_BIN") {
-        Ok(p) => Ok(PathBuf::from(p)),
-        // 형제 바이너리 — cargo build --workspace 가 둘 다 만든다
-        Err(_) => Ok(std::env::current_exe()
-            .map_err(|e| format!("current_exe: {e}"))?
-            .with_file_name("superlight-daemon")),
+/// OS·아키텍처에 맞는 데몬 바이너리 — 로컬 spawn 과 원격 업로드(ssh 모듈)가 같은 규칙 하나를
+/// 쓴다: 실행 파일 옆 `daemon/<os>-<arch>[.exe]` (이름은 std::env::consts::OS·ARCH 값
+/// 그대로 — build.sh 가 이 배치로 배포 세트를 만든다). 로컬(내 OS·arch)은
+/// SUPERLIGHT_DAEMON_BIN 우회가 먼저고, daemon/ 에 없으면 형제 `superlight-daemon` 으로
+/// 폴백한다 — cargo 는 target/debug 에 평평하게 놓는다 (check 하니스·cargo run 이 기댄다).
+/// 원격용(다른 OS·arch)은 daemon/ 에 없으면 오류 — 무엇을 어디에 둬야 하는지 알린다.
+pub(crate) fn daemon_bin_for(os: &str, arch: &str) -> Result<PathBuf, String> {
+    let local = os == std::env::consts::OS && arch == std::env::consts::ARCH;
+    if local {
+        if let Ok(p) = std::env::var("SUPERLIGHT_DAEMON_BIN") {
+            return Ok(PathBuf::from(p));
+        }
     }
+    let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
+    let name = format!("{os}-{arch}{}", if os == "windows" { ".exe" } else { "" });
+    let p = exe.with_file_name("daemon").join(&name);
+    if p.is_file() {
+        Ok(p)
+    } else if local {
+        Ok(exe.with_file_name("superlight-daemon"))
+    } else {
+        // 짧게 — 프론트에 close 사유(123B 한도)로 그대로 간다. 전체 경로는 로그에
+        eprintln!("backend: 원격 데몬 바이너리 없음: {}", p.display());
+        Err(format!("원격 {os}/{arch} 용 데몬 바이너리 없음 (daemon/{name} 을 앱 옆에)"))
+    }
+}
+
+/// 로컬 데몬 바이너리 — 내 OS·아키텍처용 (daemon_bin_for)
+pub(crate) fn daemon_bin_path() -> Result<PathBuf, String> {
+    daemon_bin_for(std::env::consts::OS, std::env::consts::ARCH)
 }
 
 fn spawn_daemon() -> Result<(), String> {

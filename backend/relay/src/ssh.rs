@@ -6,8 +6,8 @@
 //! 원격 요구: sshd + 비대화형 인증(BatchMode — 키·agent 전제, 대화형 2FA 는 v0 밖) +
 //! 바이너리 업로드·실행 가능한 unix 원격. 헬퍼는 별도 바이너리가 아니라 데몬 자신의
 //! --pipe 모드다 — "헬퍼가 곧 원격의 데몬" 대칭 (decision 2026-08-31). 데몬 바이너리는
-//! 원격 OS·아키텍처에 맞는 것을 고른다 — 로컬과 같으면 로컬 데몬, 다르면 동봉된 형제 파일
-//! (superlight-daemon-<os>-<arch>, remote_daemon_bin).
+//! 원격 OS·아키텍처에 맞는 것을 고른다 — 로컬 조회와 같은 규칙으로 앱 옆
+//! daemon/<os>-<arch> (remote_daemon_bin → lib daemon_bin_for).
 
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -437,23 +437,11 @@ pub fn expand_home(home: &str, path: &str) -> String {
     }
 }
 
-/// 원격 OS·아키텍처용 데몬 바이너리 — 로컬과 같으면 로컬 데몬 그대로(linux 백엔드 → linux
-/// 원격), 다르면 형제 파일 `superlight-daemon-<os>-<arch>` (Windows 배포 세트가 musl 정적
-/// linux 데몬을 이 이름으로 동봉한다 — build.sh). 없으면 무엇을 어디에 둬야 하는지 알린다
+/// 원격 OS·아키텍처용 데몬 바이너리 — 로컬 조회와 같은 규칙(앱 옆 `daemon/<os>-<arch>`,
+/// crate::daemon_bin_for). Windows 배포 세트가 musl 정적 daemon/linux-x86_64 를 동봉한다
+/// (build.sh). 없으면 무엇을 어디에 둬야 하는지 알린다
 fn remote_daemon_bin(info: &RemoteInfo) -> Result<PathBuf, String> {
-    let local = crate::daemon_bin_path()?;
-    if info.os == std::env::consts::OS && info.arch == std::env::consts::ARCH {
-        return Ok(local);
-    }
-    let name = format!("superlight-daemon-{}-{}", info.os, info.arch);
-    let p = local.with_file_name(&name);
-    if p.is_file() {
-        Ok(p)
-    } else {
-        // 짧게 — 프론트에 close 사유(123B 한도)로 그대로 간다. 전체 경로는 로그에
-        eprintln!("backend: 원격 데몬 바이너리 없음: {}", p.display());
-        Err(format!("원격 {}/{} 용 데몬 바이너리 없음 ({name} 을 앱 옆에)", info.os, info.arch))
-    }
+    crate::daemon_bin_for(&info.os, &info.arch)
 }
 
 /// 원격 헬퍼(=데몬 바이너리) 배치 보장 — 없으면 로컬 산출물을 ssh stdin 으로 업로드.

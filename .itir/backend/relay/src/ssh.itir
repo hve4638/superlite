@@ -1,4 +1,4 @@
-role: SSH 원격 접속 통로 — 시스템 OpenSSH subprocess 로 원격 데몬에 닿는다 (ws docs/decision/remote-ssh.md). SSH 프로토콜을 직접 구현하지 않는다: 인증·~/.ssh/config·ProxyJump 는 ssh 바이너리에 위임하고, exec 채널(원격 명령의 stdin/stdout) 위에서 데몬 와이어를 그대로 말한다 — 포트 포워딩 불요. 원격 요구: sshd + 비대화형 인증(BatchMode — 키·agent 전제, 대화형 2FA 는 v0 밖) + 바이너리 업로드·실행 가능한 unix 원격. 헬퍼는 별도 바이너리가 아니라 데몬 자신의 --pipe 모드 — "헬퍼가 곧 원격의 데몬" 대칭. 데몬 바이너리는 원격 OS·arch 에 맞춰 고른다 (remote_daemon_bin)
+role: SSH 원격 접속 통로 — 시스템 OpenSSH subprocess 로 원격 데몬에 닿는다 (ws docs/decision/remote-ssh.md). SSH 프로토콜을 직접 구현하지 않는다: 인증·~/.ssh/config·ProxyJump 는 ssh 바이너리에 위임하고, exec 채널(원격 명령의 stdin/stdout) 위에서 데몬 와이어를 그대로 말한다 — 포트 포워딩 불요. 원격 요구: sshd + 비대화형 인증(BatchMode — 키·agent 전제, 대화형 2FA 는 v0 밖) + 바이너리 업로드·실행 가능한 unix 원격. 헬퍼는 별도 바이너리가 아니라 데몬 자신의 --pipe 모드 — "헬퍼가 곧 원격의 데몬" 대칭. 데몬 바이너리는 원격 OS·arch 에 맞춰 고른다 (remote_daemon_bin → lib daemon_bin_for, 앱 옆 daemon/<os>-<arch>)
 
 fn parse_remote(s) -> remote? {
   role: ssh://<host>/<절대경로> 파싱 → (host, path) — 원격 root 표기 (프론트·레지스트리 공용). 경로 없는 ssh://<host> 는 원격 빈 세션 (path "" — relay 가 홈에 탐색 전용 attach). '-' 선두 host 거부 (ssh 옵션 주입 봉쇄)
@@ -47,7 +47,7 @@ fn expand_home(home, path) -> path {
   role: `/~`·`/~/sub` 표기를 원격 $HOME 절대 경로로 치환 (순수) — 프론트는 원격 홈을 모르므로 세션 root 에 '~' 를 적는다. '~' 가 아니면 그대로
 }
 fn remote_daemon_bin(info) -> path {
-  role: 원격 OS·arch 용 데몬 바이너리 — 로컬과 같으면 로컬 데몬, 다르면 형제 파일 superlight-daemon-<os>-<arch> (Windows 배포 세트가 musl 정적 linux-x86_64 데몬을 동봉 — build.sh). 없으면 파일명·위치를 담은 오류
+  role: 원격 OS·arch 용 데몬 바이너리 — 로컬과 같은 규칙(lib daemon_bin_for)으로 앱 옆 daemon/<os>-<arch> 를 고른다 (Windows 배포 세트가 musl 정적 daemon/linux-x86_64 를 동봉 — build.sh). 없으면 파일명·위치를 담은 오류
 }
 fn ensure_remote_bin(host, opts, info, tx?) -> remote_path {
   role: 원격 헬퍼(=데몬 바이너리) 배치 보장 — $HOME/.cache/code-superlight/bin/<내용해시>/ 에 없으면 remote_daemon_bin 산출물을 ssh stdin 으로 업로드. 해시 키라 재빌드=재배포·빌드 혼용 없음. 단계 'helper'(존재 확인)·'upload'(bytes 동봉, 없을 때만) 통보
