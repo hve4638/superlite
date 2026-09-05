@@ -89,15 +89,9 @@ export class WsBackend implements ThinBackend {
   /** dispose 됨 — 재연결 루프를 멈춘다 (세션 탭 닫기 등 의도적 종료) */
   private disposed = false;
 
-  constructor(url: string, session?: string) {
-    // 세션 id — 재접속 시 데몬이 같은 세션(터미널)을 이어 붙이는 키. 주입(Tauri —
-    // native 레지스트리 발급)이 우선이고, 없으면(브라우저) 페이지 수명 단위로 만든다 —
-    // 새로고침은 새 세션이다 (이전 세션의 터미널은 데몬이 grace 뒤 회수).
-    // WHY: randomUUID 는 보안 컨텍스트 전용 — IP 오리진(http://host:8793) 접속에서
-    //      부팅이 죽는다. getRandomValues 는 어디서나 되므로 폴백 (유일성만 필요)
-    session ??=
-      crypto.randomUUID?.() ??
-      Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
+  /** session: 재접속 시 데몬이 같은 세션(터미널)을 이어 붙이는 키 — 앱은 native 레지스트리가,
+   *  웹은 sessions.genSessionId 가 발급한다 (페이지 수명 단위 — 새로고침은 새 세션) */
+  constructor(url: string, session: string) {
     this.url = `${url}${url.includes('?') ? '&' : '?'}session=${session}`;
     this.connect();
   }
@@ -270,7 +264,7 @@ export class WsBackend implements ThinBackend {
         this.pending.clear();
       }
       this.connHandler?.(false);
-      // ponytail: 고정 1초 재시도, 무한 — 백오프·포기는 필요해지면
+      // ponytail: 고정 1초 재시도, 무한 (영구 포기는 위의 4403·4502 만) — 백오프는 필요해지면
       setTimeout(() => this.connect(), 1000);
     };
   }
@@ -324,7 +318,6 @@ export class WsBackend implements ThinBackend {
     this.send({ method: 'requestReply', params: reply });
   }
 
-  /** 세션 탭 닫기 등 의도적 종료 — 재연결을 멈추고 연결·대기 요청을 정리한다 */
   /** 영구 실패(4403·4502) 뒤 사용자 주도 재접속 — disposed 를 풀고 다시 연다. 의도적 dispose
    *  뒤에는 부르지 않는다 (세션 탭이 이미 없다) */
   reconnect(): void {
@@ -334,6 +327,7 @@ export class WsBackend implements ThinBackend {
     this.connect();
   }
 
+  /** 세션 탭 닫기 등 의도적 종료 — 재연결을 멈추고 연결·대기 요청을 정리한다 */
   dispose(): void {
     this.disposed = true;
     for (const p of this.pending.values()) p.reject(new Error('세션이 닫혔다'));

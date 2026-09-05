@@ -197,11 +197,10 @@ function removeLocal(id: string): void {
 /** 부팅 세션 등록 (host.ts 조립 시점) — 마지막으로 등록된 것이 활성이 된다 */
 export function bootSession(tab: SessionTab, backend: ThinBackend): void {
   addLocal(tab, backend);
-  sessions.activeId = tab.id;
-  activeCtx.value = ctxs.get(tab.id)!;
+  activateSession(tab.id);
 }
 
-/** 세션 탭 순환 (Ctrl+Alt+Tab) — 활성 탭의 이웃으로 wrap 이동 */
+/** 세션 탭 순환 (Ctrl+Shift+Tab, commands.ts) — 활성 탭의 이웃으로 wrap 이동 */
 export function cycleSession(dir: 1 | -1): void {
   if (sessions.list.length < 2) return;
   const i = sessions.list.findIndex((t) => t.id === sessions.activeId);
@@ -334,7 +333,7 @@ export function openWebFolder(root: string, mode?: OpenMode): void {
   }
   // 대체 대상: 명시적 replace, 또는 기본 모드에서 활성 탭이 빈 세션(시작 페이지에서 열기 —
   // 앱의 native replace 와 동일 의미). 새 탭이 그 탭의 자리를 차지한다
-  const replaceId = mode === 'replace' || (mode === undefined && activeSessionEmpty()) ? prevId : null;
+  const replaceId = mode === 'replace' || (mode === undefined && prevEmpty) ? prevId : null;
   const id = genSessionId();
   const base = root.split('/').filter((s) => s !== '').pop() ?? root;
   addLocal({ id, name: tabLabel(root, base), root });
@@ -413,6 +412,8 @@ export function initSessions(): void {
     activateSession(id);
   });
   listenHere('handoff-available', () => takeHandoffs());
+  // 에디터·터미널 탭 핸드오프는 forward 로 바로 도착한다 (take_handoff 큐를 거치지 않는다)
+  listenHere('tabs-handoff', (e) => applyHandoff(e.payload as Handoff));
   listenHere('session-move-request', (e) =>
     onSessionMoveRequest(e.payload as { id: string; toWindow: string; toIndex: number }),
   );
@@ -609,9 +610,6 @@ function applyHandoff(h: Handoff): void {
   }
   activateSession(sid);
 }
-
-// tabs-handoff 는 forward 로 바로 도착한다 (take_handoff 큐를 거치지 않는다)
-listenHere('tabs-handoff', (e) => applyHandoff(e.payload as Handoff));
 
 /** 모든 세션의 미저장 문서 여부 — beforeunload 안전망 (배경 탭의 dirty 도 지켜야 한다) */
 export function hasAnyDirty(): boolean {

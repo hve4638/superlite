@@ -73,16 +73,21 @@ export function createTerminals(backend: ThinBackend, workbenchM: ReturnType<typ
     return terminals.list.filter((t) => id === undefined || t.id === id).map(snapshotOf);
   }
 
-  /** 목록에서 빼되 데몬 터미널은 죽이지 않는다 — 다른 창의 세션이 이어받는다 (release).
-   *  나머지 뒷정리(활성 이양·마지막이면 패널 닫기)는 dispose 와 같다 */
+  /** 목록에서 빼되 데몬 터미널은 죽이지 않는다 — 다른 창의 세션이 이어받는다 (release) */
   function releaseTerminal(id: number): void {
     const idx = terminals.list.findIndex((t) => t.id === id);
     if (idx === -1) return;
-    const inst = terminals.list[idx];
-    inst.session.release?.();
+    terminals.list[idx].session.release?.();
+    removeAt(idx);
+  }
+
+  /** 목록에서 뺀 뒤의 뒷정리 — 활성 이양, 마지막이면 패널 닫기 (release·dispose 공용).
+   *  WHY: 마지막 터미널이 빠지면 패널을 닫는다 (VS Code) — kill 버튼·셸 종료·세션 회수·창 이동이
+   *      전부 여기를 지나므로 여기가 합류점이다 */
+  function removeAt(idx: number): void {
+    const [inst] = terminals.list.splice(idx, 1);
     inputBlocked.delete(inst.session.id);
-    terminals.list.splice(idx, 1);
-    if (terminals.activeId === id) {
+    if (terminals.activeId === inst.id) {
       terminals.activeId = terminals.list[terminals.list.length - 1]?.id ?? 0;
     }
     if (terminals.list.length === 0 && workbench.panelVisible) togglePanel();
@@ -104,14 +109,7 @@ export function createTerminals(backend: ThinBackend, workbenchM: ReturnType<typ
     const idx = terminals.list.findIndex((t) => t.id === id);
     if (idx === -1) return;
     terminals.list[idx].session.dispose();
-    inputBlocked.delete(terminals.list[idx].session.id);
-    terminals.list.splice(idx, 1);
-    if (terminals.activeId === id) {
-      terminals.activeId = terminals.list[terminals.list.length - 1]?.id ?? 0;
-    }
-    // WHY: 마지막 터미널이 빠지면 패널을 닫는다 (VS Code) — kill 버튼·셸 종료·세션 회수가
-    //      전부 이 함수를 지나므로 여기가 합류점이다
-    if (terminals.list.length === 0 && workbench.panelVisible) togglePanel();
+    removeAt(idx);
   }
 
   function setActiveTerminal(id: number): void {

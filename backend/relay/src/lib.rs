@@ -229,29 +229,21 @@ fn cors(mut resp: Response) -> Response {
     resp
 }
 
-async fn hosts_handler(
-    state: State<App>,
-    query: Query<std::collections::HashMap<String, String>>,
-    headers: HeaderMap,
-) -> Response {
-    cors(hosts_inner(state, query, headers).await)
-}
-
 /// 원격 탐색기의 호스트 목록 — 백엔드가 실행된 머신의 ~/.ssh/config (읽기 전용) 에
-/// superlight 자체 상태(고정·숨김·drift)를 합친 것. /ws 를 거치지 않는 백엔드 자체 응답 —
+/// superlight 자체 상태(즐겨찾기·고정·drift·missing)를 합친 것. /ws 를 거치지 않는 백엔드 자체 응답 —
 /// 주소·연결은 백엔드 소유라는 결정 (decision/remote-ssh.md 2026-08-31)의 첫 표면이다.
-async fn hosts_inner(
+async fn hosts_handler(
     State(app): State<App>,
     Query(query): Query<std::collections::HashMap<String, String>>,
     headers: HeaderMap,
 ) -> Response {
     if !authed(&app, &query, &headers) {
-        return StatusCode::FORBIDDEN.into_response();
+        return cors(StatusCode::FORBIDDEN.into_response());
     }
-    Json(ssh::host_list()).into_response()
+    cors(Json(ssh::host_list()).into_response())
 }
 
-/// POST /ssh/state?op=&host= — 고정·숨김 상태 변경 (hide·unhide·pin·unpin·ack·refresh).
+/// POST /ssh/state?op=&host= — 즐겨찾기·고정·최근·pane 상태 변경 (fav·unfav·pin·unpin·ack·refresh·forget·pane).
 /// 본문 없이 쿼리만 쓴다 — JSON 본문은 CORS preflight(OPTIONS) 를 유발해 라우트가 하나 더
 /// 필요해진다. 응답은 갱신된 목록 (GET 과 같은 형태) — 프론트가 재조회 없이 갈아끼운다
 async fn state_handler(
@@ -427,11 +419,20 @@ async fn close_with(
 /// 정리한다 (원격은 detach 전환 — 원격 데몬의 세션 grace 가 재접속을 기다린다).
 /// 방향별 전용 태스크 — 바이너리 프레임 읽기(read_frame)는 다중 await 라 select 취소에
 /// 안전하지 않아, 종전의 단일 select 루프 구조를 쓸 수 없다.
+/// 프론트 Text 프레임 하나를 데몬에 한 줄로. 생 개행이 든 프레임은 데몬 쪽에서 N개 요청으로
+/// 쪼개진다(1:1 불변식 파괴 — JSON.stringify 출력엔 있을 수 없다) — 프로토콜 위반으로 보고
+/// false (연결 종료). 쓰기 실패도 false
+async fn forward_client_line(w: &mut DaemonWrite, line: &str) -> bool {
+    !line.contains('\n') && write_line(w, line).await.is_ok()
+}
+
 async fn relay(ws: WebSocket, target: Target, session: Option<String>, spares: Arc<ssh::Spares>) {
     use futures_util::{SinkExt, StreamExt};
     let (mut ws_tx, mut ws_rx) = ws.split();
     // _child: 원격 ssh subprocess 의 수명 앵커 — relay 종료(drop)가 곧 ssh kill 이다
-    let mut remote: Option<(String, bool)> = None;
+    // 원격이면 watch 생략 여부(빈 세션)와 최근 폴더 기록 대상 호스트(폴더 세션) — 접속 팔이 채운다
+    let mut no_watch = false;
+    let mut record_host: Option<String> = None;
     let mut stderr_last: Option<Arc<Mutex<String>>> = None;
     // 원격 접속 중에 프론트가 보낸 요청 — attach 줄 뒤에 순서대로 보낸다
     let mut early_lines: Vec<String> = Vec::new();
@@ -536,7 +537,8 @@ async fn relay(ws: WebSocket, target: Target, session: Option<String>, spares: A
                 }
             });
             stderr_last = Some(last);
-            remote = Some((host, browse_only));
+            no_watch = browse_only;
+            record_host = (!browse_only).then_some(host);
             early_lines = early;
             (Box::new(r), Box::new(w), path, Some(child))
         }
@@ -546,17 +548,16 @@ async fn relay(ws: WebSocket, target: Target, session: Option<String>, spares: A
     if let Some(s) = session {
         attach["params"]["session"] = json!(s);
     }
-    if matches!(remote, Some((_, true))) {
+    if no_watch {
         attach["params"]["watch"] = json!(false);
     }
-    // 최근 폴더 기록 대상 — 원격 폴더 세션(빈 세션 제외)의 attach 성공 응답에서 데몬이
-    // 돌려준 정규화 경로(rootPath)를 적는다
-    let record_host = remote.and_then(|(h, b)| (!b).then_some(h));
+    // record_host: 원격 폴더 세션의 attach 성공 응답에서 데몬이 돌려준 정규화 경로(rootPath)를
+    // 최근 폴더로 적는다
     if write_line(&mut write_half, &attach.to_string()).await.is_err() {
         return;
     }
     for l in early_lines {
-        if l.contains('\n') || write_line(&mut write_half, &l).await.is_err() {
+        if !forward_client_line(&mut write_half, &l).await {
             return;
         }
     }
@@ -575,7 +576,7 @@ async fn relay(ws: WebSocket, target: Target, session: Option<String>, spares: A
             while let Some(Ok(m)) = ws_rx.next().await {
                 match m {
                     Message::Text(t) => {
-                        if t.as_str().contains('\n') || write_line(&mut write_half, t.as_str()).await.is_err() {
+                        if !forward_client_line(&mut write_half, t.as_str()).await {
                             break;
                         }
                     }
@@ -641,11 +642,7 @@ async fn relay(ws: WebSocket, target: Target, session: Option<String>, spares: A
             tokio::select! {
                 msg = ws_rx.next() => match msg {
                     Some(Ok(Message::Text(t))) => {
-                        // 생 개행이 든 프레임은 데몬 쪽에서 N개 요청으로 쪼개진다(1:1 불변식
-                        // 파괴 — JSON.stringify 출력엔 있을 수 없다). 프로토콜 위반 → 연결 종료
-                        if t.as_str().contains('\n')
-                            || write_line(&mut write_half, t.as_str()).await.is_err()
-                        {
+                        if !forward_client_line(&mut write_half, t.as_str()).await {
                             break;
                         }
                     }

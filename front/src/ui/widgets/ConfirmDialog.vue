@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // 모달 confirm (VS Code dialog 근사) — Enter=확인, Escape=취소, 확인 버튼 자동 포커스.
-// ponytail: 범용 다이얼로그 서비스 없음 — 쓰는 곳이 삭제 확인뿐이라 props 로 충분.
+// ponytail: 범용 다이얼로그 서비스 없음 — 쓰는 곳이 넷(탐색기 삭제·SCM discard·에디터 닫기·원격 데몬
+// 강제 정리)이고 각자 v-if + props 로 띄운다. 상한(한 화면에 둘 이상 동시 필요)은 아직 아니다.
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 
 // secondaryLabel 이 있으면 3버튼 (Save / Don't Save / Cancel 류 — 에디터 닫기 확인)

@@ -229,4 +229,3 @@ export function failureLabel(stage: ConnectStage | null): string {
 // ---- 활성 세션 전달 shim
 
 export const connection = viewOf(() => ctx().watch.connection);
-export const initWatch = (): void => ctx().watch.initWatch();

@@ -351,7 +351,7 @@ export class MockBackend implements ThinBackend {
   }
 
   gitCheckout(_branch: string): Promise<void> {
-    // ponytail: mock 은 브랜치가 하나뿐 — 전환은 no-op
+    // ponytail: mock 의 브랜치 전환은 no-op — 목록(gitBranches)은 둘을 돌려주지만 파일 상태는 하나뿐
     return delay(undefined);
   }
 

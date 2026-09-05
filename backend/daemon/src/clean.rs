@@ -12,7 +12,7 @@
 //! - 헬퍼 배치 캐시 ($HOME/.cache/code-superlight/bin/<hash>/): 자기 자신이 실행 중인
 //!   디렉터리 외 전부 삭제 (다음 접속이 다시 올린다).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 pub fn clean_main() {
@@ -25,7 +25,7 @@ pub fn clean_main() {
 
 /// 락 시도 — Some(파일) 이면 보유자 없음(이 프로세스가 쥠), None 이면 남이 쥐고 있다
 fn try_lock(lock: &Path) -> Option<std::fs::File> {
-    let f = std::fs::OpenOptions::new().write(true).create(true).truncate(false).open(lock).ok()?;
+    let f = superlight_common::open_lock_file(lock).ok()?;
     f.try_lock().ok()?;
     Some(f)
 }
@@ -102,8 +102,7 @@ fn clean_old_versions(sock: &Path) {
 /// 헬퍼 배치 캐시 — 자기 실행 파일이 든 디렉터리만 남긴다. 자기 자신이 캐시 밖(로컬 빌드)에서
 /// 실행됐으면 건드리지 않는다 — 이 머신이 남의 원격일 때 올라온 헬퍼는 로컬 정리의 대상이 아니다
 fn clean_bin_cache() {
-    let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) else { return };
-    let bin = PathBuf::from(home).join(".cache").join("code-superlight").join("bin");
+    let Some(bin) = superlight_common::cache_dir().map(|d| d.join("bin")) else { return };
     let own = std::env::current_exe().ok().and_then(|p| p.canonicalize().ok()).and_then(|p| p.parent().map(Path::to_path_buf));
     let Some(own) = own.filter(|o| o.parent().and_then(|p| p.canonicalize().ok()).as_deref() == bin.canonicalize().ok().as_deref()) else { return };
     let Ok(entries) = std::fs::read_dir(&bin) else { return };

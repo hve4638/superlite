@@ -20,8 +20,9 @@ const WATCH_BATCH_CAP: usize = 1_000;
 /// 등록이 끝나면 워처를 slot 에 담는다 — slot 이 drop 되면 감시·집계 태스크가 함께 끝난다.
 /// 심링크는 따라가지 않는다 (attach root 봉쇄와 일관 — 루트 밖 경로가 이벤트로 새지 않게).
 /// ponytail: 재귀 watch 는 제외 없이 전부 inotify 에 등록한다 — 거대 node_modules 에서
-///           watch 한도(fs.inotify.max_user_watches) 고갈 가능. 문제되면 디렉터리 단위
-///           비재귀 watch + 제외 목록으로 전환.
+///           watch 한도(fs.inotify.max_user_watches) 고갈 가능. 워처는 연결(attach) 단위라
+///           같은 폴더를 연 창이 N 개면 등록도 N 배다 (다중 창 이후). 문제되면 디렉터리
+///           단위 비재귀 watch + 제외 목록으로 전환.
 pub(crate) fn start_watcher(root: PathBuf, tx: UnboundedSender<String>, slot: WatcherSlot) {
     use notify::event::{EventKind, ModifyKind};
     use notify::Watcher as _;

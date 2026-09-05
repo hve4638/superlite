@@ -19,7 +19,7 @@ fn cors() {
   role: /ssh/* 응답에 Access-Control-Allow-Origin '*' — Tauri webview(tauri.localhost 오리진)의 fetch 는 /ws 와 달리 CORS 대상이라 헤더가 없으면 "Failed to fetch". 접근 통제는 authed 가 이미 하므로 권한 확대가 아니다 (토큰 없는 교차 오리진은 403)
 }
 fn hosts_handler() {
-  role: GET /ssh/hosts — 백엔드 머신의 ~/.ssh/config Host 별칭 목록에 고정·숨김·drift 를 합친 JSON (ssh::host_list). 데몬 와이어 밖 백엔드 자체 응답의 첫 표면 (주소·연결은 백엔드 소유 — decision/remote-ssh.md 2026-08-31)
+  role: GET /ssh/hosts — 백엔드 머신의 ~/.ssh/config Host 별칭 목록에 즐겨찾기·고정·drift·missing 을 합친 JSON (ssh::host_list). 데몬 와이어 밖 백엔드 자체 응답의 첫 표면 (주소·연결은 백엔드 소유 — decision/remote-ssh.md 2026-08-31)
 }
 fn state_handler() {
   role: POST /ssh/state?op=&host=(&path=|&open=) — 즐겨찾기·고정·최근·pane 상태 변경 (ssh::update_state 에 쿼리 전체를 넘긴다). 본문 없이 쿼리만 — JSON 본문은 CORS preflight 를 유발한다. 응답은 갱신된 목록 (GET 과 동일 형태)
@@ -46,7 +46,7 @@ fn close_with(tx, rx, code, reason) {
   role: '재시도 무의미' close(4403 미등록 세션·4502 접속 실패 + 사유, 123B 내 문자 경계로 절단)를 프론트에 — Close 를 보낸 뒤 클라이언트의 Close 응답을 최대 2초 기다린다 (바로 drop 하면 Chrome 이 1006 으로 보고해 코드·사유가 유실되고 프론트가 무한 재연결에 빠진다)
 }
 fn daemon_conn() {
-  role: 데몬 소켓 접속, 없으면 spawn 후 재시도
+  role: 데몬 소켓 접속. spawn 인자는 제어 루프만 true — relay 까지 spawn 하면 백엔드 하나가 데몬을 두 번 띄우는 race 가 생기므로 relay 는 재시도만 한다 (데몬 부재 시 제어 루프가 곧 재기동)
 }
 fn daemon_bin_path() {
   role: 데몬 바이너리 위치 (env 우회 또는 형제 파일) — 로컬 spawn 과 원격 업로드(ssh 모듈)가 같은 규칙

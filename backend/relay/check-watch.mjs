@@ -1,5 +1,5 @@
 // 감시 스모크 — 외부 파일 변경이 fsChanges 이벤트로 프론트까지 푸시되는지 검증한다.
-//   cargo build --workspace 후: node backend/check-watch.mjs
+//   cargo build --workspace 후: node backend/relay/check-watch.mjs
 // 워크스페이스는 임시 디렉터리 — create/change/delete 와 .git 심층 필터를 확인한다.
 import assert from 'node:assert';
 import { spawn } from 'node:child_process';

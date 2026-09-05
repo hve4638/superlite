@@ -1,5 +1,5 @@
 // /ws 연결 토큰 스모크 — SUPERLIGHT_TOKEN 설정 시 ?tkn= 불일치는 403, 일치는 정상 동작.
-//   cargo build --workspace 후: node backend/check-auth.mjs
+//   cargo build --workspace 후: node backend/relay/check-auth.mjs
 import assert from 'node:assert';
 import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';

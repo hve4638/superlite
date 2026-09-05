@@ -87,6 +87,19 @@ pub fn lock_path(sock: &Path) -> PathBuf {
     }
 }
 
+/// 락 파일 열기 — 데몬 기동(acquire_lock)과 `--clean` 의 보유자 탐지(try_lock)가 같은 규칙.
+/// truncate(false) 가 계약: 락을 쥐지 못한 쪽이 열기만으로 내용을 비우면 안 된다
+pub fn open_lock_file(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new().write(true).create(true).truncate(false).open(path)
+}
+
+/// 이 머신의 superlight 캐시 디렉터리 `$HOME/.cache/code-superlight` — 헬퍼 배치(bin/)와
+/// 데몬 로그가 산다. 원격 셸이 해석하는 같은 경로 문자열은 relay ssh.rs 가 따로 든다
+pub fn cache_dir() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+    Some(PathBuf::from(home).join(".cache").join("code-superlight"))
+}
+
 /// 락 보유 데몬의 pid 파일 — 락 파일과 나란히 (`daemon-<N>.pid`). 락을 쥔 쪽만 쓴다.
 /// WHY: 락 파일 자체에 pid 를 적지 않는다 — Windows 의 배타 락(LockFileEx)은 다른 프로세스의
 ///      읽기까지 막아 `--clean` 이 보유자를 알 수 없고, unix 는 락 없이 열어도 되지만 두

@@ -1,5 +1,5 @@
 // excludes 스모크 — 트리(files.exclude 기본값)와 검색·listFiles(--hidden + 제외 글롭).
-//   cargo build --workspace 후: node backend/check-excludes.mjs
+//   cargo build --workspace 후: node backend/relay/check-excludes.mjs
 import assert from 'node:assert';
 import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';

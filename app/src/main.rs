@@ -12,9 +12,9 @@
 //! label 을 함께 들고 list_sessions·sessions-changed 를 창 단위로 보낸다. 어느 탭이
 //! 활성인지는 여전히 모른다 (전환은 front 소유).
 //!
-//! 창은 각각 독립된 하나다 — 세션이 0 개가 된 창은 닫히지 않고 빈 세션(시작 페이지)으로
-//! 남는다. 창이 사라지는 경로는 그 창의 X 만이며, X 는 그 창의 세션만 정리한다. 마지막
-//! 창의 X 가 앱 종료다 (Tauri 기본 — 창이 모두 닫히면 종료).
+//! 창은 각각 독립된 하나다 — 세션이 0 개가 된 창은 닫힌다 (close_if_empty — 탭 닫기·분리·
+//! 병합 모두 같은 규칙, 2026-09-05 개정). 창의 X 는 그 창의 세션만 정리한다. 마지막 창이
+//! 닫히면 앱 종료다 (Tauri 기본 — 창이 모두 닫히면 종료).
 //!
 //! 탭 이동의 front 상태(에디터 문서·터미널 버퍼 등)는 JSON 핸드오프로 나른다 — 출처 창이
 //! 만들고 native 는 내용을 모른 채 대상 창에 전달만 한다 (아직 로드 전인 새 창은 부팅 후
@@ -336,7 +336,7 @@ fn build_window(
         .disable_drag_drop_handler()
         // 첫 페인트 전 흰 플래시 방지 — 테마 배경(--vscode-editor-background)과 일치
         .background_color(tauri::window::Color(0x1f, 0x1f, 0x1f, 0xff))
-        .initialization_script(&format!(
+        .initialization_script(format!(
             "window.__SUPERLIGHT_WS__ = '{}'; window.__SUPERLIGHT_SESSIONS__ = {boot}; window.__SUPERLIGHT_OPEN_ROOT__ = {open_root}; window.__SUPERLIGHT_WINDOW__ = {win};",
             state.ws_url,
             // JSON 문자열로 — 경로 이스케이프 안전 (드라이브 문자엔 특수문자 없지만 관례)
@@ -488,7 +488,7 @@ fn move_entry(list: &mut Vec<(String, Option<PathBuf>)>, id: &str, to: usize) ->
 /// 한 창 안에서의 순서 이동 — 전체 목록에서 그 창 소속만 뽑아 재배열하고 같은 자리들에
 /// 되쓴다 (다른 창 엔트리의 위치는 그대로). to 는 그 창의 표시 목록 기준
 fn move_in_window(
-    list: &mut Vec<(String, Option<PathBuf>)>,
+    list: &mut [(String, Option<PathBuf>)],
     windows: &HashMap<String, String>,
     label: &str,
     id: &str,
@@ -515,13 +515,11 @@ fn move_session(app: tauri::AppHandle, window: tauri::WebviewWindow, id: String,
     if owned_by(&state, &id, window.label()).is_err() {
         return;
     }
+    // owned_by 통과 = 이 세션의 소속 창이 곧 호출 창
     let moved = {
         let mut list = state.sessions.lock().unwrap();
         let windows = state.windows.lock().unwrap();
-        match windows.get(&id).cloned() {
-            Some(label) => move_in_window(&mut list, &windows, &label, &id, to),
-            None => false,
-        }
+        move_in_window(&mut list, &windows, window.label(), &id, to)
     };
     if moved {
         emit_sessions(&app, &state);
@@ -566,10 +564,6 @@ fn deliver_handoff(app: &tauri::AppHandle, state: &AppState, to: &str, handoff: 
     let _ = app.emit_to(to, "handoff-available", ());
 }
 
-/// 세션 탭을 새 창으로 분리 — 드롭 지점(x, y 논리 좌표)에 창을 만들고 세션의 소속을 옮긴다.
-/// 출처 창은 sessions-changed 로 그 세션을 잃고(연결 dispose → 데몬 detach), 새 창이 같은
-/// session id 로 attach 해 터미널을 이어받는다 (tmux 식 재-attach). front 상태는 handoff.
-/// 출처 창이 비면 새 창이 생긴 뒤 그 창을 닫는다 (창 생성 실패 시 출처 창이 남아 있어야 한다)
 /// 호출 창이 그 세션의 소유자인지 — 창 밖 드롭과 다른 창 드롭이 겹쳐 두 경로가 같은 세션을
 /// 옮기려 할 때, 이미 떠난 세션에 대한 늦은 요청을 구조적으로 거절한다 (dropEffect 전파를
 /// 신뢰하지 않는다). 다른 창의 세션을 닫거나 옮기는 것도 막는다
@@ -581,6 +575,10 @@ fn owned_by(state: &AppState, id: &str, label: &str) -> Result<(), String> {
     }
 }
 
+/// 세션 탭을 새 창으로 분리 — 드롭 지점(x, y 논리 좌표)에 창을 만들고 세션의 소속을 옮긴다.
+/// 출처 창은 sessions-changed 로 그 세션을 잃고(연결 dispose → 데몬 detach), 새 창이 같은
+/// session id 로 attach 해 터미널을 이어받는다 (tmux 식 재-attach). front 상태는 handoff.
+/// 출처 창이 비면 새 창이 생긴 뒤 그 창을 닫는다 (창 생성 실패 시 출처 창이 남아 있어야 한다)
 #[tauri::command]
 async fn detach_session(
     app: tauri::AppHandle,
@@ -980,7 +978,7 @@ fn main() {
     tauri::Builder::default()
         // WHY: single-instance 는 맨 먼저 등록 — 두 번째 실행이 다른 초기화를 밟기 전에
         //      argv·cwd 를 첫 프로세스로 넘기고 즉시 종료해야 한다 (공식 권고).
-        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| open_second_instance(app, argv, cwd)))
+        .plugin(tauri_plugin_single_instance::init(open_second_instance))
         .invoke_handler(tauri::generate_handler![
             open_folder,
             open_folder_path,
@@ -1102,8 +1100,6 @@ mod tests {
         assert_eq!(ids(&list), ["c", "b", "a"]);
     }
 
-    /// 창 안 순서 이동은 다른 창 엔트리의 자리를 건드리지 않는다 — 전체 목록 [a(main) x(w1)
-    /// b(main) c(main)] 에서 main 의 a 를 끝으로 보내도 x 는 여전히 두 번째다
     fn paths(v: &[&str]) -> Vec<PathBuf> {
         v.iter().map(PathBuf::from).collect()
     }
@@ -1160,6 +1156,8 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// 창 안 순서 이동은 다른 창 엔트리의 자리를 건드리지 않는다 — 전체 목록 [a(main) x(w1)
+    /// b(main) c(main)] 에서 main 의 a 를 끝으로 보내도 x 는 여전히 두 번째다
     #[test]
     fn move_in_window_keeps_other_windows_slots() {
         let mut list = entries(&["a", "x", "b", "c"]);

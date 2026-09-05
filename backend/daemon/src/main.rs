@@ -329,19 +329,13 @@ fn spawn_self_daemon() {
 /// 헬퍼가 띄운 데몬의 로그 파일 — 헬퍼 배치 디렉터리(relay ssh::ensure_remote_bin)와 같은
 /// 캐시 밑 `$HOME/.cache/code-superlight/daemon.log` (append)
 fn daemon_log_file() -> Option<std::fs::File> {
-    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
-    let dir = PathBuf::from(home).join(".cache").join("code-superlight");
+    let dir = superlight_common::cache_dir()?;
     std::fs::create_dir_all(&dir).ok()?;
     std::fs::OpenOptions::new().append(true).create(true).open(dir.join("daemon.log")).ok()
 }
 
 fn acquire_lock(sock: &Path) -> Option<std::fs::File> {
-    let f = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(superlight_common::lock_path(sock))
-        .ok()?;
+    let f = superlight_common::open_lock_file(&superlight_common::lock_path(sock)).ok()?;
     // WouldBlock 이든 다른 실패든 물러난다 (fail-closed)
     f.try_lock().ok()?;
     // 보유자 pid — `--clean` 이 좀비(락은 쥐고 소켓은 없음)를 지목하는 유일한 근거.
@@ -442,6 +436,20 @@ impl Drop for ConnCleanup {
 /// payload 는 relay 가 WS 바이너리 프레임으로 그대로 나르는 단위: 4B BE 헤더 길이 +
 /// 헤더 JSON(id·result 메타·payload 명세) + 본문 바이트. JSON 줄은 '{' 로 시작하므로
 /// 0x00 첫 바이트로 무모호하게 구분된다.
+/// attach 뒤에만 허용되는 요청의 root — attach 전이면 응답 있는 요청(id 비-null)에만 에러를
+/// 돌리고 None (알림은 조용히 버린다)
+fn session_root(cleanup: &ConnCleanup, tx: &UnboundedSender<String>, id: &serde_json::Value) -> Option<PathBuf> {
+    match &cleanup.session {
+        Some(s) => Some(s.root.clone()),
+        None => {
+            if !id.is_null() {
+                let _ = tx.send(json!({"id": id, "error": "attach 전 요청"}).to_string());
+            }
+            None
+        }
+    }
+}
+
 fn payload_frame(header: &serde_json::Value, body: &[u8]) -> Vec<u8> {
     let h = header.to_string().into_bytes();
     let payload_len = 4 + h.len() + body.len();
@@ -623,12 +631,7 @@ async fn handle_conn(
             // 달라 일반 경로와 분리 라우팅
             "readFile" => {
                 let (id, params) = (req["id"].clone(), req["params"].clone());
-                let Some(root) = cleanup.session.as_ref().map(|s| s.root.clone()) else {
-                    if !id.is_null() {
-                        let _ = tx.send(json!({"id": id, "error": "attach 전 요청"}).to_string());
-                    }
-                    continue;
-                };
+                let Some(root) = session_root(&cleanup, &tx, &id) else { continue };
                 let (tx, btx) = (tx.clone(), btx.clone());
                 tokio::spawn(async move {
                     match req::read_file(&params, &root).await {
@@ -648,12 +651,7 @@ async fn handle_conn(
             }
             _ => {
                 let (id, params) = (req["id"].clone(), req["params"].clone());
-                let Some(root) = cleanup.session.as_ref().map(|s| s.root.clone()) else {
-                    if !id.is_null() {
-                        let _ = tx.send(json!({"id": id, "error": "attach 전 요청"}).to_string());
-                    }
-                    continue;
-                };
+                let Some(root) = session_root(&cleanup, &tx, &id) else { continue };
                 let tx = tx.clone();
                 tokio::spawn(async move {
                     let out = match req::handle_req(&method, &params, &root).await {

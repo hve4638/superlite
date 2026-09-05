@@ -1,5 +1,5 @@
 // 파일 조작 스모크 — createFile(배타·중첩)/createDir/rename(대상 보호)/delete(파일·디렉토리).
-//   cargo build --workspace 후: node backend/check-fileops.mjs
+//   cargo build --workspace 후: node backend/relay/check-fileops.mjs
 import assert from 'node:assert';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

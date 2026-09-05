@@ -1,6 +1,6 @@
 // 재접속 스모크 — 같은 session id 로 다시 붙으면 터미널이 살아 있고, 끊김 중 출력이
 // 버퍼에서 flush 되며, 세션 grace 를 넘기면 회수된다.
-//   cargo build --workspace 후: node backend/check-reconnect.mjs
+//   cargo build --workspace 후: node backend/relay/check-reconnect.mjs
 import assert from 'node:assert';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';

@@ -183,11 +183,7 @@ export function createFiles(backend: ThinBackend) {
 // ---- 활성 세션 전달 shim — UI·커맨드는 종전 이름 그대로 활성 세션에 작용한다
 
 export const files = viewOf(() => ctx().files.files);
-export const initFiles = (): Promise<void> => ctx().files.initFiles();
 export const toggleDir = (node: TreeNode): Promise<void> => ctx().files.toggleDir(node);
-export const refreshDir = (path: string): Promise<void> => ctx().files.refreshDir(path);
-export const loadedDirPaths = (): string[] => ctx().files.loadedDirPaths();
-export const refreshAllFiles = (): Promise<void> => ctx().files.refreshAllFiles();
 export const refreshTree = (): Promise<void> => ctx().files.refreshTree();
 export const collapseAll = (): void => ctx().files.collapseAll();
 export const visibleNodes = (): TreeNode[] => ctx().files.visibleNodes();

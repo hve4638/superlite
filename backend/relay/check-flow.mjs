@@ -1,6 +1,6 @@
 // flow control 스모크 — ack 없이는 데몬이 고수위(100k 자)에서 출력 읽기를 멈추고,
 // ack 를 보내면 재개돼 끝까지 흘러나온다.
-//   cargo build --workspace 후: node backend/check-flow.mjs
+//   cargo build --workspace 후: node backend/relay/check-flow.mjs
 import assert from 'node:assert';
 import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';

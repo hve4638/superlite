@@ -1,6 +1,6 @@
 // 계약 스모크 (프론트 WS → 백엔드 → 데몬 전 구간) — 백엔드가 repo 루트를 서빙 중일 때:
 //   cargo run -p superlight-backend   (데몬은 자동 기동)
-//   node backend/check.mjs
+//   node backend/relay/check.mjs
 import assert from 'node:assert';
 import { readFileSync, rmSync } from 'node:fs';
 

@@ -24,6 +24,11 @@ static NEXT_RID: AtomicU64 = AtomicU64::new(1);
 /// 세션별 미응답 요청: rid → (요청자 연결 tx, 요청자가 붙인 id)
 pub(crate) type Pending = Mutex<HashMap<u64, (UnboundedSender<String>, Value)>>;
 
+/// poison 무시 — 대기 맵은 어느 요청자의 패닉에도 남은 요청자에게 응답을 돌려야 한다
+fn lock(p: &Pending) -> std::sync::MutexGuard<'_, HashMap<u64, (UnboundedSender<String>, Value)>> {
+    p.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// 요청자의 frontRequest 를 세션 프론트로 전달. 프론트 미접속(detach)이면 즉시 에러 —
 /// 버퍼에 쌓아 두고 재접속을 기다리는 것은 요청자(셸 명령)의 기대가 아니다
 pub(crate) fn request(
@@ -40,7 +45,7 @@ pub(crate) fn request(
         return;
     }
     let rid = NEXT_RID.fetch_add(1, Ordering::Relaxed);
-    pending.lock().unwrap().insert(rid, (req_tx.clone(), req_id));
+    lock(pending).insert(rid, (req_tx.clone(), req_id));
     // 검사 직후 끊긴 미시 race 는 버퍼(비폐기)로 가고, 연결 정리(fail_all)가 요청자에게
     // 에러를 돌린다 — 재접속 후 도착하는 늦은 응답은 pending 에 없어 무시된다
     sink_send(
@@ -53,7 +58,7 @@ pub(crate) fn request(
 /// 프론트의 requestReply → 요청자에게 응답 회신. error 가 있으면 에러, 없으면 result
 pub(crate) fn reply(pending: &Pending, p: &Value) {
     let Some(rid) = p["rid"].as_u64() else { return };
-    let Some((tx, id)) = pending.lock().unwrap().remove(&rid) else { return };
+    let Some((tx, id)) = lock(pending).remove(&rid) else { return };
     let out = match p.get("error") {
         Some(e) if !e.is_null() => json!({"id": id, "error": e}),
         _ => json!({"id": id, "result": p["result"]}),
@@ -63,7 +68,7 @@ pub(crate) fn reply(pending: &Pending, p: &Value) {
 
 /// 프론트 연결 소실 — 응답이 올 수 없는 대기 요청 전부를 에러로 회신
 pub(crate) fn fail_all(pending: &Pending, reason: &str) {
-    let drained: Vec<_> = pending.lock().unwrap_or_else(|e| e.into_inner()).drain().collect();
+    let drained: Vec<_> = lock(pending).drain().collect();
     for (_, (tx, id)) in drained {
         let _ = tx.send(json!({"id": id, "error": reason}).to_string());
     }

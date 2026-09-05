@@ -92,7 +92,6 @@ export function createSearch(backend: ThinBackend) {
 export const search = viewOf(() => ctx().search.search);
 export const setQuery = (q: string): void => ctx().search.setQuery(q);
 export const runSearch = (): Promise<void> => ctx().search.runSearch();
-export const autoRerunSearch = (): Promise<void> => ctx().search.autoRerunSearch();
 export const matchCount = (): number => ctx().search.matchCount();
 export const toggleCase = (): void => ctx().search.toggleCase();
 export const clearSearch = (): void => ctx().search.clearSearch();

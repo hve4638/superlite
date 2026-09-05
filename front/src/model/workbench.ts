@@ -124,7 +124,6 @@ export function createWorkbench(backend: ThinBackend) {
 // ---- 활성 세션 전달 shim
 
 export const workbench = viewOf(() => ctx().workbench.workbench);
-export const initWorkbench = (): Promise<void> => ctx().workbench.initWorkbench();
 export const toggleSideBar = (): void => ctx().workbench.toggleSideBar();
 export const showViewlet = (id: ViewletId, toggle = false): void =>
   ctx().workbench.showViewlet(id, toggle);

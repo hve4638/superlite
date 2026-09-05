@@ -60,10 +60,11 @@ export function remoteEnabled(): boolean {
   return backendApiUrl('/ssh/hosts') !== null;
 }
 
-/** 호스트 목록 로드 — 뷰가 열릴 때 1회 (다시 읽기는 refreshHosts) */
-export async function loadHosts(): Promise<void> {
-  if (remote.loaded) return;
+/** 호스트 목록 (재)로드 — 뷰 마운트·세션 목록 변경·사이드바 새로고침이 부른다. loaded 는
+ *  "조회를 한 번이라도 시작했는가" — 빈 목록 안내 표시 여부 */
+export async function refreshHosts(): Promise<void> {
   remote.loaded = true;
+  remote.error = null;
   try {
     const url = backendApiUrl('/ssh/hosts');
     if (url === null) throw new Error('원격 미지원 환경');
@@ -73,12 +74,6 @@ export async function loadHosts(): Promise<void> {
   } catch (e) {
     remote.error = e instanceof Error ? e.message : String(e);
   }
-}
-
-export function refreshHosts(): Promise<void> {
-  remote.loaded = false;
-  remote.error = null;
-  return loadHosts();
 }
 
 /** 상태 변경 — 백엔드가 돌려준 목록으로 갈아끼운다. host 자리는 pane 이면 pane 이름,

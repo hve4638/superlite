@@ -12,20 +12,8 @@ export fn createFiles(backend) {
 export fn parentOf(path) {
   role: 부모 디렉토리 경로 (루트는 '') — 순수 함수, 세션 무관
 }
-export fn initFiles() {
-  role: 루트 나열로 트리 초기화 — root 가 오면 loading 을 내리고(탐색기 진행 막대 종료) quick open 용 listFiles 는 그 뒤에. 셸은 이 완료를 기다리지 않고 마운트된다 (main.ts)
-}
 export fn toggleDir(node) {
   role: 디렉토리 펼침/접힘 (첫 펼침에 자식 로드)
-}
-export fn refreshDir(path) {
-  role: 한 디렉토리 재나열 후 기존 노드와 병합 — 펼침 상태·로드된 자식 보존
-}
-export fn loadedDirPaths() -> Path[] {
-  role: 로드된 디렉토리 경로 나열 (전체 리프레시 대상)
-}
-export fn refreshAllFiles() {
-  role: Quick Open 파일 목록 재조회
 }
 export fn refreshTree() {
   role: 수동 새로고침 (탐색기 Refresh 버튼) — 로드된 디렉토리 재나열 + Quick Open 목록 재조회. 실패는 삼킨다 (워처·다음 시도가 복구)
