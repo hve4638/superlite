@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import type { EditorGroup, Tab } from '../../model/editors';
-import { closeTab, editors, isHtml, moveTabToGroup, openFile, openHtmlPreview, pinTab, setActiveTab, splitActiveEditor } from '../../model/editors';
+import { closeTab, editors, isHtml, moveTabToGroup, openFile, pinTab, reloadPreview, toggleHtmlPreview, setActiveTab, splitActiveEditor } from '../../model/editors';
 import { notify } from '../../model/notifications';
 import { DND_EDITOR, detachEditorTab, multiWindow, requestTabsMove, sessionRoot, sessions } from '../../model/sessions';
 import { windowLabel } from '../../model/window';
@@ -11,10 +11,15 @@ import FileIcon from '../widgets/FileIcon.vue';
 
 const props = defineProps<{ group: EditorGroup }>();
 
-// 활성 탭이 HTML 편집기면 그룹 액션에 프리뷰 아이콘 (VS Code markdown 의 Open Preview to the Side 자리)
+// 활성 탭이 HTML 편집기면 그룹 액션에 프리뷰 전환 아이콘, 프리뷰면 소스 복귀·수동 갱신 아이콘
+const activeOf = () => props.group.tabs.find((t) => t.id === props.group.activeTabId);
 const htmlActive = computed(() => {
-  const t = props.group.tabs.find((t) => t.id === props.group.activeTabId);
-  return t && t.kind !== 'preview' && isHtml(t.path) ? t.path : null;
+  const t = activeOf();
+  return t && t.kind === 'file' && isHtml(t.path) ? t.id : null;
+});
+const previewActive = computed(() => {
+  const t = activeOf();
+  return t && t.kind === 'preview' ? t : null;
 });
 
 function iconName(tab: Tab): string {
@@ -184,9 +189,17 @@ function onForeignDrop(e: DragEvent) {
       </div>
     </div>
     <div class="group-actions">
-      <span v-if="htmlActive" class="group-action" title="Open Preview to the Side (Ctrl+Shift+V)" @click="openHtmlPreview(htmlActive)">
+      <span v-if="htmlActive" class="group-action" title="Open Preview (Ctrl+Shift+V)" @click="toggleHtmlPreview(group.id, htmlActive)">
         <span class="codicon codicon-open-preview" />
       </span>
+      <template v-if="previewActive">
+        <span class="group-action" title="Reload Preview" @click="reloadPreview(previewActive.path)">
+          <span class="codicon codicon-refresh" />
+        </span>
+        <span class="group-action" title="Show Source (Ctrl+Shift+V)" @click="toggleHtmlPreview(group.id, previewActive.id)">
+          <span class="codicon codicon-code" />
+        </span>
+      </template>
       <span class="group-action" title="Split Editor Right (Ctrl+\)" @click="splitActiveEditor()">
         <span class="codicon codicon-split-horizontal" />
       </span>

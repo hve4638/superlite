@@ -46,7 +46,10 @@ export fn loadHexChunk(path, idx) {
   role: HEX_CHUNK(64KB) 단위 범위 읽기(readFile offset, 와이어 v11) — HexView 가 보이는 행의 청크만 요청한다. 진행 중 중복 요청 억제, 경로당 캐시 상한(64 청크) 초과 시 오래된 것부터 폐기, 왕복 중 문서가 갈렸으면 버린다. 실패는 조용히 (다음 스크롤이 재시도)
 }
 export fn openHtmlPreview(path) {
-  role: HTML 프리뷰 탭('preview:'+path, "Preview x") 열기 — 활성 그룹 오른쪽 새 그룹에 (VS Code markdown "Open Preview to the Side"). 이미 열려 있으면 그 탭 활성화. 문서는 같은 path 의 doc.content 를 공유하므로 HtmlPreview 가 편집 버퍼를 실시간 반영한다. 프리뷰·hex 탭은 dirty 표시를 받지 않는다
+  role: HTML 프리뷰 탭('preview:'+path, "Preview x")을 활성 그룹에 열기 — 닫은 탭 복원·창 간 이동의 재개방 경로. 이미 열려 있으면 그 탭 활성화. 문서는 같은 path 의 doc 을 공유하고 HtmlPreview 는 savedContent(저장분)만 그린다 — 편집 버퍼는 반영하지 않는다. 프리뷰·hex 탭은 dirty 표시를 받지 않는다
+}
+export fn toggleHtmlPreview(groupId, tabId) {
+  role: HTML 편집기 ↔ 프리뷰 제자리 전환 (Ctrl+Shift+V, 탭바 아이콘) — 탭을 같은 자리에서 다른 종류(id 가 다름)로 바꾼다. 문서 공유라 dirty 버퍼 유지, 프리뷰 상태에서 탐색기로 같은 파일을 열면 편집기 탭이 따로 열린다. 바꿀 종류의 탭이 그 그룹에 이미 있으면 현재 탭을 접고 그쪽 활성화. .html 이 아닌 file 탭·diff·hex 는 no-op
 }
 export fn openDiff(path, opts?) {
   role: SCM diff 탭 열기 — modified 쪽은 워킹트리 문서 그 자체. opts.deleted 면 워킹트리에 없는 파일 — 문서를 만들지 않고 deleted 탭으로 열어 HEAD 내용을 읽기 전용 편집기로 보여 준다 (MonacoHost 분기, dirty·저장 없음)
@@ -126,6 +129,18 @@ export fn imageMime(path) -> mime? {
 }
 export fn isHtml(path) -> Bool {
   role: HTML 프리뷰 대상 확장자(.html·.htm) 판별 — 순수 함수, 세션 무관
+}
+export val viewerAutoReload
+export fn toggleViewerAutoReload(kind) {
+  role: 뷰어 자동 갱신 스위치 토글 — 뷰어 종류(html·pdf)별, 세션 무관 전역이라 localStorage 에 기억. 기본 HTML on / PDF off (PDF 는 재렌더 비용 — viewer-cache-refresh). 설정 체계(config-system)가 생기면 그쪽으로
+}
+export val editorView
+export fn toggleWordWrap() {
+  role: 자동 줄바꿈 토글 — 전 에디터 공통 뷰 상태(editorView.wordWrap), 세션 안에서만 (VS Code Alt+Z 동일, 영속화 없음). MonacoHost 가 지켜보다 updateOptions
+}
+export val previewReloadTick
+export fn reloadPreview(path) {
+  role: 프리뷰 수동 갱신 신호 — path 별 tick 증가. 자동 갱신 off 인 프리뷰의 유일한 갱신 통로 (HtmlPreview 가 iframe 을 다시 만든다)
 }
 export fn tabIdOf(kind, path) -> id {
   role: 탭 id 규칙 — file 은 path 그대로, 그 외는 kind 접두 ('diff:'·'hex:'·'preview:'). 순수 함수

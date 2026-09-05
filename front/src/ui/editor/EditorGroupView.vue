@@ -110,7 +110,7 @@ const SHORTCUTS = [
     <div class="editor-body">
       <!-- overlay 종류별 뷰 (hex·preview 는 path 키라 탭 전환 시 컴포넌트가 갈린다) -->
       <HexView v-if="overlay?.kind === 'hex'" :key="overlay.path" :path="overlay.path" />
-      <HtmlPreview v-else-if="overlay?.kind === 'preview'" :key="overlay.path" :path="overlay.path" />
+      <HtmlPreview v-else-if="overlay?.kind === 'preview'" :key="overlay.path" :path="overlay.path" @focus="focusGroup" />
       <ImageView v-else-if="overlay?.kind === 'image'" :path="overlay.path" :data="overlay.data" />
       <!-- 열 수 없는 파일(크기 초과·이진) 안내 -->
       <div v-else-if="overlay?.kind === 'unopenable'" class="unopenable">

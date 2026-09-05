@@ -148,6 +148,37 @@ export function isHtml(path: string): boolean {
   return /\.html?$/i.test(path);
 }
 
+/** 뷰어 자동 갱신 스위치 — 뷰어 종류별, 세션 무관 전역 (localStorage). HTML 은 재렌더가 싸서 on,
+ *  PDF 는 재렌더 비용이 커서 off 가 기본 (viewer-cache-refresh). ponytail: 설정 체계(config-system)가
+ *  생기면 그쪽으로 옮긴다 */
+const AUTO_RELOAD_KEY = 'superlight.viewerAutoReload';
+export const viewerAutoReload = reactive(loadAutoReload());
+function loadAutoReload(): { html: boolean; pdf: boolean } {
+  const d = { html: true, pdf: false };
+  try {
+    const p = JSON.parse(localStorage.getItem(AUTO_RELOAD_KEY) ?? '') as Partial<typeof d>;
+    return { html: p.html ?? d.html, pdf: p.pdf ?? d.pdf };
+  } catch {
+    return d;
+  }
+}
+export function toggleViewerAutoReload(kind: keyof typeof viewerAutoReload): void {
+  viewerAutoReload[kind] = !viewerAutoReload[kind];
+  localStorage.setItem(AUTO_RELOAD_KEY, JSON.stringify(viewerAutoReload));
+}
+
+/** 자동 줄바꿈 — 전 에디터 공통 뷰 상태 (VS Code Alt+Z 와 같이 세션 안에서만, 영속화 없음) */
+export const editorView = reactive({ wordWrap: false });
+export function toggleWordWrap(): void {
+  editorView.wordWrap = !editorView.wordWrap;
+}
+
+/** 프리뷰 수동 갱신 신호 — path 별 tick. 자동 갱신 off 인 프리뷰가 이걸 보고 iframe 을 다시 만든다 */
+export const previewReloadTick = reactive(new Map<string, number>());
+export function reloadPreview(path: string): void {
+  previewReloadTick.set(path, (previewReloadTick.get(path) ?? 0) + 1);
+}
+
 /** base64 길이에서 원본 바이트 수 복원 — 패딩 보정 (와이어가 크기를 따로 나르지 않는다) */
 export function base64Bytes(b64: string): number {
   const pad = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0;
@@ -378,8 +409,8 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     }
   }
 
-  /** HTML 프리뷰 탭 열기 — 활성 그룹 오른쪽 새 그룹에 (VS Code markdown "Open Preview to the Side").
-   *  이미 어느 그룹에든 열려 있으면 그 탭을 활성화한다. 문서는 같은 path 의 doc 을 공유한다 */
+  /** HTML 프리뷰 탭 열기 — 활성 그룹에 (닫은 탭 복원·창 간 이동의 재개방 경로). 이미 어느 그룹에든
+   *  열려 있으면 그 탭을 활성화한다. 문서는 같은 path 의 doc 을 공유한다. 편집기에서의 전환은 toggleHtmlPreview */
   async function openHtmlPreview(path: string): Promise<void> {
     const id = tabIdOf('preview', path);
     for (const g of editors.groups) {
@@ -395,12 +426,33 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
       notify('error', `Unable to open '${baseName(path)}': ${errText(e)}`);
       return;
     }
-    const ref = activeGroup();
-    const tab: PreviewTab = { kind: 'preview', id, path, name: tabNameOf('preview', path), dirty: false, preview: false };
-    const group: EditorGroup = { id: nextGroupId++, tabs: [tab], activeTabId: id };
-    editors.groups.splice(editors.groups.indexOf(ref) + 1, 0, group);
-    insertIntoLayout(ref.id, group.id, 'right');
-    editors.activeGroupId = group.id;
+    const group = activeGroup();
+    group.tabs.push({ kind: 'preview', id, path, name: tabNameOf('preview', path), dirty: false, preview: false });
+    group.activeTabId = id;
+  }
+
+  /** HTML 편집기 ↔ 프리뷰 제자리 전환 (Ctrl+Shift+V) — 탭을 같은 자리에서 다른 종류로 바꾼다.
+   *  문서는 공유되므로 dirty 버퍼가 유지되고, 프리뷰 상태에서 탐색기로 같은 파일을 열면 편집기 탭이
+   *  따로 열린다 (id 가 다르다). 바꿀 종류의 탭이 이 그룹에 이미 있으면 현재 탭을 접고 그쪽을 활성화 */
+  function toggleHtmlPreview(groupId: number, tabId: string): void {
+    const group = editors.groups.find((g) => g.id === groupId);
+    const idx = group?.tabs.findIndex((t) => t.id === tabId) ?? -1;
+    if (!group || idx === -1) return;
+    const cur = group.tabs[idx];
+    if (cur.kind !== 'file' && cur.kind !== 'preview') return;
+    if (cur.kind === 'file' && !isHtml(cur.path)) return;
+    const kind = cur.kind === 'file' ? 'preview' : 'file';
+    const id = tabIdOf(kind, cur.path);
+    const existing = group.tabs.find((t) => t.id === id);
+    if (existing) {
+      group.tabs.splice(idx, 1);
+      group.activeTabId = id;
+      return;
+    }
+    const doc = editors.docs.get(cur.path);
+    const dirty = kind === 'file' && doc !== undefined && doc.content !== doc.savedContent;
+    group.tabs.splice(idx, 1, { kind, id, path: cur.path, name: tabNameOf(kind, cur.path), dirty, preview: false });
+    if (group.activeTabId === tabId) group.activeTabId = id;
   }
 
   function setActiveTab(groupId: number, tabId: string): void {
@@ -925,7 +977,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
   }
 
   return {
-    editors, activeGroup, activeTab, openFile, openFileAt, openDiff, openHex, ensureHex, loadHexChunk, openHtmlPreview, setActiveTab, pinTab,
+    editors, activeGroup, activeTab, openFile, openFileAt, openDiff, openHex, ensureHex, loadHexChunk, openHtmlPreview, toggleHtmlPreview, setActiveTab, pinTab,
     openFileSplit, closeTab, confirmCloseSave, confirmCloseDiscard, confirmCloseCancel,
     reopenClosedEditor, moveTabToGroup, moveTabSplit,
     splitActiveEditor, updateContent, setOrphaned, remapPaths, closePathTabs,
@@ -987,6 +1039,7 @@ export const openHex = (path: string): void => ctx().editors.openHex(path);
 export const ensureHex = (path: string): Promise<void> => ctx().editors.ensureHex(path);
 export const loadHexChunk = (path: string, idx: number): Promise<void> => ctx().editors.loadHexChunk(path, idx);
 export const openHtmlPreview = (path: string): Promise<void> => ctx().editors.openHtmlPreview(path);
+export const toggleHtmlPreview = (groupId: number, tabId: string): void => ctx().editors.toggleHtmlPreview(groupId, tabId);
 export const setActiveTab = (groupId: number, tabId: string): void =>
   ctx().editors.setActiveTab(groupId, tabId);
 export const pinTab = (groupId: number, tabId: string): void => ctx().editors.pinTab(groupId, tabId);

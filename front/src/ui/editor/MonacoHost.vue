@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { EditorGroup } from '../../model/editors';
-import { editors, indentOf } from '../../model/editors';
+import { editorView, editors, indentOf } from '../../model/editors';
 import { scm } from '../../model/scm';
 import { openQuickInput } from '../../model/workbench';
 import { EDITOR_OPTIONS, modelFor, monaco, originalModelFor } from './monaco';
@@ -18,9 +18,16 @@ const mode = computed(() => (active.value?.kind === 'diff' && !active.value.dele
 let codeEditor: monaco.editor.IStandaloneCodeEditor | null = null;
 let diffEditor: monaco.editor.IStandaloneDiffEditor | null = null;
 
+const wrapOpt = () => ({ wordWrap: editorView.wordWrap ? 'on' : 'off' } as const);
+// 자동 줄바꿈 토글(Alt+Z)을 이 그룹의 편집기 둘에 반영 — 생성 시점 값은 각 ensure 가 넣는다
+watch(() => editorView.wordWrap, () => {
+  codeEditor?.updateOptions(wrapOpt());
+  diffEditor?.updateOptions(wrapOpt());
+});
+
 function ensureCodeEditor(): monaco.editor.IStandaloneCodeEditor {
   if (!codeEditor) {
-    codeEditor = monaco.editor.create(codeHost.value!, { ...EDITOR_OPTIONS, model: null });
+    codeEditor = monaco.editor.create(codeHost.value!, { ...EDITOR_OPTIONS, ...wrapOpt(), model: null });
     codeEditor.onDidChangeCursorPosition((e) => {
       if (editors.activeGroupId === props.group.id) {
         editors.cursor = { line: e.position.lineNumber, col: e.position.column };
@@ -34,7 +41,7 @@ function ensureCodeEditor(): monaco.editor.IStandaloneCodeEditor {
 
 function ensureDiffEditor(): monaco.editor.IStandaloneDiffEditor {
   if (!diffEditor) {
-    diffEditor = monaco.editor.createDiffEditor(diffHost.value!, { ...EDITOR_OPTIONS, automaticLayout: true });
+    diffEditor = monaco.editor.createDiffEditor(diffHost.value!, { ...EDITOR_OPTIONS, ...wrapOpt(), automaticLayout: true });
     const modified = diffEditor.getModifiedEditor();
     modified.onDidChangeCursorPosition((e) => {
       if (editors.activeGroupId === props.group.id) {

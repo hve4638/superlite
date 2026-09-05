@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { activeTab, base64Bytes, editors, indentOf, languageLabel } from '../model/editors';
+import { activeTab, base64Bytes, editors, indentOf, languageLabel, toggleViewerAutoReload, viewerAutoReload } from '../model/editors';
 import { scm } from '../model/scm';
 import { connection, stageLabel, failureLabel } from '../model/watch';
 
@@ -93,6 +93,16 @@ function fmtSize(bytes: number): string {
         </div>
       </template>
       <div v-else-if="hexSize !== null" class="statusbar-item"><span>{{ fmtSize(hexSize) }}</span></div>
+      <!-- HTML 프리뷰 탭이면 자동 갱신 토글 — 뷰어 종류별 스위치 (PDF 뷰어는 pdf 키로 같은 자리) -->
+      <div
+        v-else-if="fileTab?.kind === 'preview'"
+        class="statusbar-item"
+        :title="viewerAutoReload.html ? 'Auto Reload is on — click to turn off' : 'Auto Reload is off — click to turn on'"
+        @click="toggleViewerAutoReload('html')"
+      >
+        <span class="codicon" :class="viewerAutoReload.html ? 'codicon-sync' : 'codicon-sync-ignored'" />
+        <span>Auto Reload: {{ viewerAutoReload.html ? 'On' : 'Off' }}</span>
+      </div>
       <template v-else-if="fileTab && !viewerTab">
         <div class="statusbar-item">
           <span>Ln {{ editors.cursor.line }}, Col {{ editors.cursor.col }}</span>
