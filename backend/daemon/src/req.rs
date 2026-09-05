@@ -34,25 +34,31 @@ const READ_MAX_BYTES: u64 = 50 * 1024 * 1024;
 /// ponytail: 설정 시스템이 없어 하드코딩 — 사용자 설정이 생기면 여기로 합류.
 const FILES_EXCLUDED: [&str; 5] = [".git", ".svn", ".hg", ".DS_Store", "Thumbs.db"];
 
-/// 검색·listFiles 공통 rg 인자 — VS Code 와 동일하게 dotfile 을 포함(--hidden)하되
-/// files.exclude + search.exclude 기본값(node_modules 등)을 글롭으로 제외한다.
+/// 검색(rg)·listFiles(ignore 크레이트) 공통 제외 글롭 — files.exclude + search.exclude 기본값
+/// (node_modules 등). rg 의 -g 와 ignore::overrides 는 같은 글롭 문법·같은 부정(!) 의미다.
+const EXCLUDE_GLOBS: [&str; 8] = [
+    "!**/.git",
+    "!**/.svn",
+    "!**/.hg",
+    "!**/.DS_Store",
+    "!**/Thumbs.db",
+    "!**/node_modules",
+    "!**/bower_components",
+    "!**/*.code-search",
+];
+
+/// 검색의 rg 인자 — VS Code 와 동일하게 dotfile 을 포함(--hidden)하되 EXCLUDE_GLOBS 를 제외한다.
 /// ignore 파일은 워크스페이스 안의 것만 존중한다 — VS Code 기본과 동일
 /// (useIgnoreFiles=true, useParentIgnoreFiles/useGlobalIgnoreFiles=false).
 /// --no-require-git 만 주면 부모·글로벌 gitignore 까지 새어 들어와 파일이 조용히 사라진다.
-const RG_EXCLUDE_ARGS: [&str; 20] = [
-    "--hidden",
-    "--no-require-git",
-    "--no-ignore-parent",
-    "--no-ignore-global",
-    "-g", "!**/.git",
-    "-g", "!**/.svn",
-    "-g", "!**/.hg",
-    "-g", "!**/.DS_Store",
-    "-g", "!**/Thumbs.db",
-    "-g", "!**/node_modules",
-    "-g", "!**/bower_components",
-    "-g", "!**/*.code-search",
-];
+/// listFiles 의 WalkBuilder 설정(list_files)은 이 인자들의 라이브러리 대응이다.
+fn rg_exclude_args() -> Vec<&'static str> {
+    let mut args = vec!["--hidden", "--no-require-git", "--no-ignore-parent", "--no-ignore-global"];
+    for g in EXCLUDE_GLOBS {
+        args.extend(["-g", g]);
+    }
+    args
+}
 
 /// readFile 응답 — 소형은 종전 JSON, 대형은 바이너리 payload 프레임 (와이어 v6).
 /// meta 는 content 를 제외한 result 필드(etag 등)이고, main.rs 가 payload 명세와 합쳐
@@ -286,20 +292,11 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
             Ok(json!(out))
         }
         "listFiles" => {
-            // 부팅이 이 호출을 await 하므로 실패 시 앱이 안 뜬다 — exit 1(0건)은 성공이다
-            let mut args = vec!["--files"];
-            args.extend(RG_EXCLUDE_ARGS);
-            match run_rg(root, &args).await {
-                Ok(out) => Ok(json!(out.lines().map(crate::wire_rel).collect::<Vec<_>>())),
-                // rg 부재(spawn ENOENT 메시지 — windows/unix 문구가 다르다)에도 앱은 떠야
-                // 한다 — 자체 walk 로 강등. 검색은 여전히 rg 가 필요하다 (에러로 표면화).
-                Err(e) if e.contains("program not found") || e.contains("No such file") => {
-                    let mut files = Vec::new();
-                    walk_files(root, root, &mut files);
-                    Ok(json!(files))
-                }
-                Err(e) => Err(e),
-            }
+            // 부팅이 이 호출을 await 하므로 실패 시 앱이 안 뜬다. 외부 rg 없이 데몬 안에서
+            // 걷는다 (ignore 크레이트 = rg 의 walk) — 원격에 rg 가 없어도 같은 결과·같은 속도
+            let root = root.to_path_buf();
+            let files = tokio::task::spawn_blocking(move || list_files(&root)).await.map_err(err)??;
+            Ok(json!(files))
         }
         "search" => search(root, p).await,
         // git repo 가 아니어도 앱은 떠야 한다 — 빈 상태로 강등
@@ -382,7 +379,7 @@ async fn search(root: &Path, p: &Value) -> Result<Value, String> {
         return Ok(json!([]));
     }
     let mut args = vec!["--json", "--fixed-strings"];
-    args.extend(RG_EXCLUDE_ARGS);
+    args.extend(rg_exclude_args());
     if !p["opts"]["caseSensitive"].as_bool().unwrap_or(false) {
         args.push("--ignore-case");
     }
@@ -467,29 +464,51 @@ async fn git_status(root: &Path) -> Result<Value, String> {
     Ok(json!({"branch": branch, "head": head, "dirty": !changes.is_empty(), "changes": changes}))
 }
 
-/// rg 부재 시의 listFiles 강등 — RG_EXCLUDE_ARGS 의 basename 글롭 제외와 --hidden 포함을
-/// 흉내 낸 자체 재귀 walk. gitignore 미적용이 rg 경로와의 의도된 차이고, 심링크는
-/// rg 기본값과 같이 추적하지 않는다.
-fn walk_files(root: &Path, dir: &Path, out: &mut Vec<String>) {
-    const EXCLUDED: [&str; 7] =
-        [".git", ".svn", ".hg", ".DS_Store", "Thumbs.db", "node_modules", "bower_components"];
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
-    for ent in rd.flatten() {
-        let name = ent.file_name();
-        let name = name.to_string_lossy();
-        if EXCLUDED.contains(&name.as_ref()) || name.ends_with(".code-search") {
-            continue;
-        }
-        // file_type 은 심링크를 따라가지 않는다 — 심링크 디렉토리 순환 방지
-        let Ok(ft) = ent.file_type() else { continue };
-        if ft.is_dir() {
-            walk_files(root, &ent.path(), out);
-        } else if let Ok(rel) = ent.path().strip_prefix(root) {
-            let parts: Vec<String> =
-                rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
-            out.push(parts.join("/"));
-        }
+/// listFiles 의 파일 수 상한 — 규칙을 다 적용해도 이 위로는 (gitignore 없는 홈 디렉터리 등)
+/// 빠른 열기 목록의 가치보다 걷는 비용이 크다. VS Code 의 maxResults 자리. 부분 목록이 되면
+/// 빠른 열기만 손해다 (탐색기는 readDir, 검색은 rg)
+const WALK_MAX: usize = 50_000;
+
+/// 빠른 열기용 전체 파일 목록 — ignore 크레이트의 병렬 walk (rg --files 와 같은 엔진).
+/// 설정은 rg_exclude_args 의 라이브러리 대응: hidden 포함, 워크스페이스 안 ignore 파일만
+/// (parents/git_global 끔), git repo 아니어도 gitignore 존중(require_git 끔), EXCLUDE_GLOBS 를
+/// override 로. 심링크는 따라가지 않는다. WALK_MAX 에서 Quit 한다 (부분 목록, 로그 한 줄).
+/// 종전 (2026-09-05 이전): rg 서브프로세스 + rg 부재 시 gitignore 모르는 자체 walk 강등 —
+/// 원격 홈 디렉터리에서 5초+ 걸리고 런타임 워커를 붙잡아 readDir 까지 굶겼다
+fn list_files(root: &Path) -> Result<Vec<String>, String> {
+    let mut ov = ignore::overrides::OverrideBuilder::new(root);
+    for g in EXCLUDE_GLOBS {
+        ov.add(g).map_err(err)?;
     }
+    let mut wb = ignore::WalkBuilder::new(root);
+    wb.hidden(false)
+        .parents(false)
+        .git_global(false)
+        .require_git(false)
+        .overrides(ov.build().map_err(err)?);
+    let out = std::sync::Mutex::new(Vec::new());
+    wb.build_parallel().run(|| {
+        Box::new(|ent| {
+            let Ok(ent) = ent else { return ignore::WalkState::Continue };
+            if ent.file_type().is_some_and(|t| t.is_dir()) {
+                return ignore::WalkState::Continue;
+            }
+            let Ok(rel) = ent.path().strip_prefix(root) else { return ignore::WalkState::Continue };
+            let rel: Vec<String> =
+                rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+            let mut out = out.lock().unwrap();
+            if out.len() >= WALK_MAX {
+                return ignore::WalkState::Quit;
+            }
+            out.push(rel.join("/"));
+            ignore::WalkState::Continue
+        })
+    });
+    let files = out.into_inner().unwrap();
+    if files.len() >= WALK_MAX {
+        eprintln!("superlight-daemon: listFiles 상한 {WALK_MAX} — 부분 목록");
+    }
+    Ok(files)
 }
 
 /// rg 전용 — exit code 계약이 0=매치, 1=무매치(정상), 2+=에러다

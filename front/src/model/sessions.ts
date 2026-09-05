@@ -81,6 +81,8 @@ function listenHere(name: string, cb: (e: { payload: unknown }) => void): void {
 }
 
 export const sessions = reactive({ list: [] as SessionTab[], activeId: '' });
+/** 초기 로드(ctx.init) 진행 중인 세션 id — 탭의 로딩 스피너. 실패도 종료다 */
+export const loading = reactive(new Set<string>());
 
 /** id → 세션 컨텍스트. 반응성 불요(외부 핸들 뭉치) — 목록 반응성은 sessions.list 가 담당 */
 const ctxs = new Map<string, SessionCtx>();
@@ -161,13 +163,16 @@ function addLocal(tab: SessionTab, backend?: ThinBackend): SessionCtx {
   });
   // 이름 채움 — 워크스페이스 정보가 오면 탭 라벨을 실제 이름으로 (부팅 주입 목록은 이미 이름이 있다).
   // 원격 빈 세션은 홈 이름이 오지만 라벨은 Welcome [host] 고정 (TitleBar)
+  loading.add(tab.id);
   void ctx.init().then(() => {
+    loading.delete(tab.id);
     const t = sessions.list.find((x) => x.id === tab.id);
     if (t && ctx.workbench.workbench.workspaceName && !isRemoteEmpty(t.root))
       t.name = tabLabel(t.root ?? '', ctx.workbench.workbench.workspaceName);
     if (t && !t.root && ctx.workbench.workbench.rootPath) t.root = ctx.workbench.workbench.rootPath;
   }, () => {
     // 초기 로드 실패(원격 ssh 접속 실패 등) — 사유는 connection.error 로 탐색기에 보인다
+    loading.delete(tab.id);
   });
   return ctx;
 }
@@ -184,6 +189,7 @@ function removeLocal(id: string): void {
     if (next) activateSession(next.id);
   }
   ctxs.delete(id);
+  loading.delete(id);
   if (idx !== -1) sessions.list.splice(idx, 1);
   (ctx.backend as { dispose?: () => void }).dispose?.();
 }

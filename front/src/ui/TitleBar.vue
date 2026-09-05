@@ -27,6 +27,7 @@ import {
   listWindows,
   DND_SESSION,
   type SessionTab,
+  loading,
 } from '../model/sessions';
 import { pointerOutside } from './dndUtil';
 
@@ -241,6 +242,9 @@ function commitRename(): void {
               descriptions.get(tab.id)
             }}</span>
           </template>
+          <!-- 로딩 스피너 — 초기 로드(ctx.init) 중, X 바로 왼쪽. 예비 파이프 접속은 상태바 단계가
+               안 보이므로 로드 완료의 유일한 시각 신호다 -->
+          <span v-if="loading.has(tab.id)" class="session-loading codicon codicon-loading codicon-modifier-spin" />
           <span
             class="session-close codicon codicon-close"
             @click.stop="closeSession(tab.id)"
@@ -393,6 +397,16 @@ function commitRename(): void {
 .session-tab:hover .session-close,
 .session-tab.active .session-close {
   visibility: visible;
+}
+/* 스피너가 있으면 스피너가 오른쪽 정렬 여백을 맡고 X 는 바로 그 옆 */
+.session-tab .session-loading {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  font-size: 14px;
+}
+.session-tab .session-loading + .session-close {
+  margin-left: 0;
 }
 .session-close:hover {
   background: var(--vscode-toolbar-hoverBackground);

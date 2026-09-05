@@ -51,6 +51,24 @@ fn ensure_remote_bin(host, info, tx?) -> remote_path {
 fn clean_remote(host) -> report {
   role: 원격 문제 데몬 정리 — probe_remote → ensure_remote_bin → `ssh host superlight-daemon --clean` exec, stdout 반환. 헬퍼가 곧 원격의 데몬이므로 정리 명령도 같은 바이너리
 }
-fn pipe_conn(host, info, tx?) -> child {
-  role: 원격 데몬 파이프 연결 — 배치 보장 후 `ssh host superlight-daemon --pipe` spawn (단계 'daemon' 통보). child 의 stdin/stdout 이 데몬 와이어 (relay 가 로컬 소켓 자리에 물린다). kill_on_drop — relay 종료 = ssh 종료 → 원격 데몬 세션 detach
+fn pipe_conn(host, bin, tx?) -> child {
+  role: 원격 데몬 파이프 연결 — 배치된 헬퍼 경로(ensure_remote_bin 결과)로 `ssh host superlight-daemon --pipe` spawn (단계 'daemon' 통보). child 의 stdin/stdout 이 데몬 와이어 (relay 가 로컬 소켓 자리에 물린다). kill_on_drop — relay 종료 = ssh 종료 → 원격 데몬 세션 detach. attach 를 보내기 전까지 어느 경로·세션에도 묶이지 않는다 — 예비(Spares)로 미리 만들어 둘 수 있는 근거
+}
+export class Spares {
+  role: 호스트별 예비 파이프 (ticket ssh-spare-pipe) — 같은 호스트 재접속의 ~500ms(ssh exec 3회 직렬 + 원격 헬퍼 기동)를 없앤다. ControlMaster 가 아끼는 것은 인증뿐이라 relay 안에 접속 결과(attach 전 ssh child + RemoteInfo + 헬퍼 경로)를 호스트 단위로 하나씩 들고 있는다. App 상태로 relay 들이 공유. 예비는 attach 를 보내지 않은 채 보관 (재-attach 는 데몬이 거부) — 경로·세션·watch 는 소비자가 attach 한 줄로 정하므로 어떤 경로든 소비 가능. 예비가 살아 있는 동안 원격 데몬은 연결 수 ≥1 이라 유휴 종료하지 않으므로 만료가 필수 — 그 호스트의 실제 접속이 0 이 된 뒤 SUPERLIGHT_SPARE_SECS(기본 300 = 원격 세션 grace 와 같은 재접속 약속 창)가 지나면 drop → kill_on_drop → 원격 헬퍼 EOF 종료 → 원격 데몬은 기존 grace 규칙으로 물러난다. 예비는 30초 ping 을 보내 데몬의 10분 무입력 종료를 피한다
+  fn enter(host) -> Enter {
+    role: 실제 접속 시작 표시 (active += 1) — drop 이 곧 leave: active 가 0 이 되면 idle 시각을 찍고 만료 태스크를 예약. 만료 태스크는 그 idle 시각이 그대로일 때만(사이에 접속이 없었을 때만) 항목을 버린다
+  }
+  fn take(host) -> Spare? {
+    role: 예비 소비 — ssh child 가 이미 죽었으면(try_wait) None (fallback: 기존 접속 경로). ping 태스크를 멈추고 stdin 을 child 로 되돌려 온전한 child 로 넘긴다
+  }
+  fn fill(host, info, bin) {
+    role: 예비 보충 — 슬롯이 비어 있을 때만 pipe_conn 한 번 (spawn 은 fork 뿐이라 즉시, 원격 헬퍼 기동은 뒤에서 진행). 접속 성립 직후 relay 가 부른다 (첫 접속 뒤에도, 소비 직후에도)
+  }
+}
+export class Spare {
+  role: 소비자에게 넘기는 예비 한 벌 — attach 전 ssh child(stdin/stdout 온전) + RemoteInfo + 원격 헬퍼 경로. 보관 중에는 stdin 을 ping 태스크가 쥐고(Held), take 가 되돌려 준다
+}
+export class Enter {
+  role: Spares.enter 의 가드 — drop 이 곧 leave (active -= 1, 0 이면 idle 시각 기록 + 만료 태스크 예약). relay 의 어느 반환 경로든 놓치지 않는다
 }

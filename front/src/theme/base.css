@@ -67,3 +67,23 @@ input, textarea {
   font-style: normal;
   font-weight: normal;
 }
+
+/* 로딩 스피너 — codicon loading 글리프를 회전시키면 글리프의 원 중심이 em 박스 중심과 어긋나
+   흔들려 보인다 (4배 확대 실측 2026-09-05: 글리프가 박스 아래쪽에 놓인다). 글리프 대신 정사각
+   ::before 에 CSS 원호를 그리고 그 박스 자체를 돌린다 — 회전 중심 = 원 중심이 구조적으로 보장.
+   steps 는 codicon 과 같은 FPS 절약. 탭·상태바·시작 페이지·탐색기 twistie 가 공유한다 */
+.codicon.codicon-loading.codicon-modifier-spin {
+  animation: none;
+}
+.codicon.codicon-loading.codicon-modifier-spin::before {
+  content: '';
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  box-sizing: border-box;
+  border: 1.5px solid currentColor;
+  border-left-color: transparent;
+  border-radius: 50%;
+  vertical-align: middle;
+  animation: codicon-spin 1.25s steps(30) infinite;
+}

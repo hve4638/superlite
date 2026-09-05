@@ -75,6 +75,8 @@ struct App {
     roots: SessionRoots,
     /// 설정 시 /ws 연결 토큰 — 로컬(loopback+Origin 검증)은 무인증이 기본이라 옵션이다
     token: Option<String>,
+    /// 호스트별 예비 ssh 파이프 — relay 들이 공유 (ticket ssh-spare-pipe)
+    spares: Arc<ssh::Spares>,
 }
 
 /// 서버 기동 단일 진입점 — 제어 연결을 spawn 하고 /ws(+옵션 dist) 라우터를 listener 위에 serve.
@@ -90,7 +92,7 @@ pub async fn serve(listener: TcpListener, roots: SessionRoots, token: Option<Str
     if let Some(dist) = &dist {
         app = app.fallback_service(ServeDir::new(dist));
     }
-    let app = app.with_state(App { roots, token });
+    let app = app.with_state(App { roots, token, spares: Arc::default() });
     axum::serve(listener, app).await.unwrap();
 }
 
@@ -343,7 +345,8 @@ async fn ws_handler(
             }
         },
     };
-    ws.on_upgrade(move |sock| relay(sock, target, session))
+    let spares = app.spares.clone();
+    ws.on_upgrade(move |sock| relay(sock, target, session, spares))
 }
 
 /// payload 프레임의 상한 — READ_MAX_BYTES(50MB)보다 넉넉한 방어선. 초과는 프레임
@@ -424,7 +427,7 @@ async fn close_with(
 /// 정리한다 (원격은 detach 전환 — 원격 데몬의 세션 grace 가 재접속을 기다린다).
 /// 방향별 전용 태스크 — 바이너리 프레임 읽기(read_frame)는 다중 await 라 select 취소에
 /// 안전하지 않아, 종전의 단일 select 루프 구조를 쓸 수 없다.
-async fn relay(ws: WebSocket, target: Target, session: Option<String>) {
+async fn relay(ws: WebSocket, target: Target, session: Option<String>, spares: Arc<ssh::Spares>) {
     use futures_util::{SinkExt, StreamExt};
     let (mut ws_tx, mut ws_rx) = ws.split();
     // _child: 원격 ssh subprocess 의 수명 앵커 — relay 종료(drop)가 곧 ssh kill 이다
@@ -432,6 +435,8 @@ async fn relay(ws: WebSocket, target: Target, session: Option<String>) {
     let mut stderr_last: Option<Arc<Mutex<String>>> = None;
     // 원격 접속 중에 프론트가 보낸 요청 — attach 줄 뒤에 순서대로 보낸다
     let mut early_lines: Vec<String> = Vec::new();
+    // _enter: 이 호스트의 실제 접속 표시 — drop 이 leave (예비 만료 타이머의 기준)
+    let mut _enter: Option<ssh::Enter> = None;
     let (read_half, mut write_half, root_str, _child): (
         DaemonRead,
         DaemonWrite,
@@ -450,54 +455,71 @@ async fn relay(ws: WebSocket, target: Target, session: Option<String>) {
             // — 재시도는 사용자 몫(탭 다시 접속), 상세는 로그로
             // 경로 없는 ssh://host 는 원격 빈 세션 — 홈에 attach 하되 탐색 전용(watch:false)
             let browse_only = path.is_empty();
-            // 접속 단계를 프론트에 흘린다 — {"event":"connectStage","stage":ssh|helper|upload|daemon}
-            // (데몬 와이어 밖 relay 자체 이벤트, WIRE_VERSION 불변). 접속은 별도 태스크 — 그동안
-            // 프론트 Close 를 감지해 긴 업로드 중 탭 닫기가 ssh 를 바로 끊게 하고(태스크 abort =
-            // child drop = kill), 프론트 Text 요청은 attach 뒤에 보내도록 모아 둔다
-            let (stage_tx, mut stage_rx) = tokio::sync::mpsc::unbounded_channel();
-            let conn = {
-                let (host, path) = (host.clone(), path.clone());
-                tokio::spawn(async move {
-                    let info = ssh::probe_remote(&host, Some(&stage_tx)).await?;
-                    let path = ssh::expand_home(&info.home, if browse_only { "/~" } else { &path });
-                    Ok::<_, String>((ssh::pipe_conn(&host, &info, Some(&stage_tx)).await?, path))
-                })
-            };
+            _enter = Some(spares.enter(&host));
             let mut early: Vec<String> = Vec::new();
-            loop {
-                tokio::select! {
-                    s = stage_rx.recv() => match s {
-                        Some((stage, bytes)) => {
-                            let mut ev = json!({"event": "connectStage", "stage": stage});
-                            if let Some(b) = bytes {
-                                ev["bytes"] = json!(b);
-                            }
-                            if ws_tx.send(Message::Text(ev.to_string().into())).await.is_err() {
-                                conn.abort();
-                                return;
-                            }
-                        }
-                        None => break, // 접속 태스크 종료 (송신자 drop)
-                    },
-                    m = ws_rx.next() => match m {
-                        Some(Ok(Message::Text(t))) => early.push(t.to_string()),
-                        Some(Ok(Message::Close(_))) | None | Some(Err(_)) => {
-                            conn.abort();
-                            return;
-                        }
-                        _ => {}
-                    },
+            // 예비 파이프가 있으면 exec 없이 바로 (ssh::Spares) — 없거나 죽었으면 접속 경로:
+            // 원격 정보 조회 → 헬퍼 배치 → 파이프 spawn. 접속 단계를 프론트에 흘린다 —
+            // {"event":"connectStage","stage":ssh|helper|upload|daemon} (데몬 와이어 밖 relay
+            // 자체 이벤트, WIRE_VERSION 불변). 접속은 별도 태스크 — 그동안 프론트 Close 를
+            // 감지해 긴 업로드 중 탭 닫기가 ssh 를 바로 끊게 하고(태스크 abort = child drop =
+            // kill), 프론트 Text 요청은 attach 뒤에 보내도록 모아 둔다
+            let ready = match spares.take(&host).await {
+                Some(sp) => {
+                    eprintln!("backend: ssh {host} — 예비 파이프 사용");
+                    Ok((sp.child, sp.info, sp.bin))
                 }
-            }
-            let (mut child, path) = match conn.await {
-                Ok(Ok(v)) => v,
-                Ok(Err(e)) => {
+                None => {
+                    let (stage_tx, mut stage_rx) = tokio::sync::mpsc::unbounded_channel();
+                    let conn = {
+                        let host = host.clone();
+                        tokio::spawn(async move {
+                            let info = ssh::probe_remote(&host, Some(&stage_tx)).await?;
+                            let bin = ssh::ensure_remote_bin(&host, &info, Some(&stage_tx)).await?;
+                            Ok::<_, String>((ssh::pipe_conn(&host, &bin, Some(&stage_tx))?, info, bin))
+                        })
+                    };
+                    loop {
+                        tokio::select! {
+                            s = stage_rx.recv() => match s {
+                                Some((stage, bytes)) => {
+                                    let mut ev = json!({"event": "connectStage", "stage": stage});
+                                    if let Some(b) = bytes {
+                                        ev["bytes"] = json!(b);
+                                    }
+                                    if ws_tx.send(Message::Text(ev.to_string().into())).await.is_err() {
+                                        conn.abort();
+                                        return;
+                                    }
+                                }
+                                None => break, // 접속 태스크 종료 (송신자 drop)
+                            },
+                            m = ws_rx.next() => match m {
+                                Some(Ok(Message::Text(t))) => early.push(t.to_string()),
+                                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => {
+                                    conn.abort();
+                                    return;
+                                }
+                                _ => {}
+                            },
+                        }
+                    }
+                    match conn.await {
+                        Ok(v) => v,
+                        Err(_) => return,
+                    }
+                }
+            };
+            let (mut child, info, bin) = match ready {
+                Ok(v) => v,
+                Err(e) => {
                     eprintln!("backend: ssh {host} 연결 실패: {e}");
                     close_with(&mut ws_tx, &mut ws_rx, 4502, &e).await;
                     return;
                 }
-                Err(_) => return,
             };
+            let path = ssh::expand_home(&info.home, if browse_only { "/~" } else { &path });
+            // 다음 접속용 예비 보충 — 첫 접속 뒤에도, 소비 직후에도
+            spares.fill(&host, info, bin);
             let (r, w) = (child.stdout.take().unwrap(), child.stdin.take().unwrap());
             // 헬퍼·원격 데몬의 stderr — 백엔드 로그로 흘리면서 마지막 줄을 남긴다: attach 전에
             // 끊기면 그 줄이 곧 실패 사유다 ("데몬 기동 실패 (5초): …" 등)

@@ -375,6 +375,7 @@ fn ssh_err(out: &std::process::Output) -> String {
 
 /// 원격 기본 정보 — 홈 경로와 OS·아키텍처. 접속마다 exec 한 번 (ControlMaster 덕에 왕복
 /// 하나 값, Windows 는 핸드셰이크 하나). os/arch 는 데몬 바이너리 선택 키.
+#[derive(Clone)]
 pub struct RemoteInfo {
     pub home: String,
     /// std::env::consts::OS 표기 (linux·macos) — uname -s 를 정규화
@@ -457,7 +458,7 @@ fn remote_daemon_bin(info: &RemoteInfo) -> Result<PathBuf, String> {
 /// 다른 빌드끼리 섞이지 않는다 (와이어 버전 대조가 필요 없어진다).
 /// 반환: 원격 셸이 해석할 경로 식 ("$HOME/..." — 원격 홈 경로를 이쪽에서 모른다).
 /// 올리는 바이너리는 원격 OS·아키텍처에 맞춘다 (remote_daemon_bin).
-async fn ensure_remote_bin(host: &str, info: &RemoteInfo, tx: Option<&StageTx>) -> Result<String, String> {
+pub async fn ensure_remote_bin(host: &str, info: &RemoteInfo, tx: Option<&StageTx>) -> Result<String, String> {
     let bin = remote_daemon_bin(info)?;
     let data = std::fs::read(&bin)
         .map_err(|e| format!("데몬 바이너리 읽기 실패 {}: {e}", bin.display()))?;
@@ -486,15 +487,16 @@ async fn ensure_remote_bin(host: &str, info: &RemoteInfo, tx: Option<&StageTx>) 
     Ok(target)
 }
 
-/// 원격 데몬으로의 파이프 연결 — 헬퍼 배치 보장 후 `ssh host superlight-daemon --pipe`.
-/// 반환된 child 의 stdin/stdout 이 데몬 와이어다 (relay 가 로컬 소켓 자리에 물린다).
-/// kill_on_drop: relay 종료 = ssh 종료 → 원격 --pipe 가 EOF 로 물러나고 원격 데몬은
-/// 세션을 detach 로 돌린다 (재접속 약속은 원격 데몬의 세션 grace 가 지킨다).
-pub async fn pipe_conn(host: &str, info: &RemoteInfo, tx: Option<&StageTx>) -> Result<Child, String> {
+/// 원격 데몬으로의 파이프 연결 — 배치된 헬퍼 경로(ensure_remote_bin 결과)로
+/// `ssh host superlight-daemon --pipe`. 반환된 child 의 stdin/stdout 이 데몬 와이어다
+/// (relay 가 로컬 소켓 자리에 물린다). kill_on_drop: relay 종료 = ssh 종료 → 원격 --pipe 가
+/// EOF 로 물러나고 원격 데몬은 세션을 detach 로 돌린다 (재접속 약속은 원격 데몬의 세션
+/// grace 가 지킨다). attach 를 보내기 전까지는 어느 경로·세션에도 묶이지 않는다 — Spares 가
+/// 미리 만들어 두는 근거.
+pub fn pipe_conn(host: &str, bin: &str, tx: Option<&StageTx>) -> Result<Child, String> {
     if !host_ok(host) {
         return Err("잘못된 host".into());
     }
-    let bin = ensure_remote_bin(host, info, tx).await?;
     stage(tx, "daemon", None);
     let mut c = ssh_cmd(host);
     c.arg(format!(r#""{bin}" --pipe"#));
@@ -502,6 +504,143 @@ pub async fn pipe_conn(host: &str, info: &RemoteInfo, tx: Option<&StageTx>) -> R
     c.stderr(Stdio::piped());
     c.kill_on_drop(true);
     c.spawn().map_err(|e| format!("ssh 실행 실패: {e}"))
+}
+
+// ---------------------------------------------------------------- 예비 파이프
+
+/// 호스트별 예비 파이프 (ticket ssh-spare-pipe). 같은 호스트 두 번째 접속도 ~500ms 걸렸다 —
+/// ControlMaster 가 아끼는 것은 인증뿐이고 relay 는 접속마다 ssh exec 3회(probe·test -x·
+/// --pipe)를 직렬로 새로 했다 (각각 로컬 ssh spawn + 원격 sshd 셸 fork, 마지막은 원격 헬퍼
+/// 기동까지). 그래서 접속 결과(attach 전 ssh child + 원격 정보 + 헬퍼 경로)를 호스트마다
+/// 하나씩 미리 만들어 둔다. attach 는 소비자가 보내므로 경로·세션·watch 와 무관하게 어떤
+/// 접속이든 소비할 수 있다 (재-attach 는 데몬이 거부 — 예비는 attach 없이 보관).
+///
+/// 만료: 예비가 살아 있는 동안 원격 데몬은 연결 수 ≥1 이라 유휴 종료하지 않는다
+/// (daemon-cleanup 의 취지와 충돌). 그 호스트의 실제 접속이 0 이 된 뒤 SPARE_SECS 가 지나면
+/// 항목을 버린다 — kill_on_drop → 원격 헬퍼 EOF 종료 → 원격 데몬은 기존 grace 규칙으로
+/// 물러난다. 기본 300초 = 원격 세션 grace 와 같은 "재접속 약속" 창.
+#[derive(Default)]
+pub struct Spares(std::sync::Mutex<std::collections::HashMap<String, HostState>>);
+
+#[derive(Default)]
+struct HostState {
+    spare: Option<Held>,
+    /// 이 호스트의 실제 접속 수 (enter 가드)
+    active: usize,
+    /// active 가 0 이 된 시각 — 만료 태스크는 이 값이 그대로일 때만 버린다
+    idle_since: Option<std::time::Instant>,
+}
+
+/// 소비자에게 넘기는 예비 — child 는 stdin/stdout 이 온전한 attach 전 ssh
+pub struct Spare {
+    pub child: Child,
+    pub info: RemoteInfo,
+    pub bin: String,
+}
+
+/// 보관 중인 예비 — stdin 은 ping 태스크가 쥔다. 데몬은 10분 무입력 연결을 죽은 것으로 보고
+/// 닫으므로 예비도 relay 처럼 30초 ping 을 보낸다. take 가 stop 으로 멈추고 stdin 을 돌려받는다
+struct Held {
+    spare: Spare,
+    stop: tokio::sync::oneshot::Sender<()>,
+    stdin: tokio::sync::oneshot::Receiver<tokio::process::ChildStdin>,
+}
+
+impl Held {
+    fn new(mut child: Child, info: RemoteInfo, bin: String) -> Held {
+        let mut si = child.stdin.take().unwrap();
+        let (stop, mut stop_rx) = tokio::sync::oneshot::channel();
+        let (back, stdin) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let mut ping = tokio::time::interval(std::time::Duration::from_secs(30));
+            ping.tick().await;
+            loop {
+                tokio::select! {
+                    _ = &mut stop_rx => break,
+                    _ = ping.tick() => {
+                        if si.write_all(b"{\"method\":\"ping\"}\n").await.is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+            let _ = back.send(si);
+        });
+        Held { spare: Spare { child, info, bin }, stop, stdin }
+    }
+}
+
+/// enter 의 반환 가드 — drop 이 leave (relay 의 어느 반환 경로든 놓치지 않게)
+pub struct Enter {
+    spares: std::sync::Arc<Spares>,
+    host: String,
+}
+
+impl Drop for Enter {
+    fn drop(&mut self) {
+        let mut map = self.spares.0.lock().unwrap();
+        let Some(st) = map.get_mut(&self.host) else { return };
+        st.active -= 1;
+        if st.active > 0 {
+            return;
+        }
+        let now = std::time::Instant::now();
+        st.idle_since = Some(now);
+        drop(map);
+        let (spares, host) = (self.spares.clone(), self.host.clone());
+        tokio::spawn(async move {
+            tokio::time::sleep(spare_secs()).await;
+            let mut map = spares.0.lock().unwrap();
+            // 사이에 접속이 있었으면(idle_since 갱신·해제) 그쪽의 만료 태스크가 맡는다
+            if map.get(&host).is_some_and(|st| st.idle_since == Some(now)) {
+                map.remove(&host);
+                eprintln!("backend: ssh {host} — 예비 파이프 만료");
+            }
+        });
+    }
+}
+
+fn spare_secs() -> std::time::Duration {
+    let secs = std::env::var("SUPERLIGHT_SPARE_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(300);
+    std::time::Duration::from_secs(secs)
+}
+
+impl Spares {
+    /// 실제 접속 시작 — 가드가 살아 있는 동안 이 호스트의 예비는 만료되지 않는다
+    pub fn enter(self: &std::sync::Arc<Self>, host: &str) -> Enter {
+        let mut map = self.0.lock().unwrap();
+        let st = map.entry(host.to_string()).or_default();
+        st.active += 1;
+        st.idle_since = None;
+        Enter { spares: self.clone(), host: host.to_string() }
+    }
+
+    /// 예비 소비 — ssh 가 이미 죽었으면(네트워크 단절·원격 데몬 종료) None: 호출자는 기존
+    /// 접속 경로로 간다. ping 태스크를 멈추고 stdin 을 child 에 되돌려 온전한 child 로 넘긴다
+    pub async fn take(&self, host: &str) -> Option<Spare> {
+        let Held { mut spare, stop, stdin } = self.0.lock().unwrap().get_mut(host)?.spare.take()?;
+        if !matches!(spare.child.try_wait(), Ok(None)) {
+            return None;
+        }
+        let _ = stop.send(());
+        spare.child.stdin = Some(stdin.await.ok()?);
+        Some(spare)
+    }
+
+    /// 예비 보충 — 슬롯이 비어 있을 때만 pipe_conn 한 번. spawn 은 fork 만이라 즉시 돌아오고
+    /// 원격 헬퍼 기동은 뒤에서 진행된다 (소비가 먼저 오면 attach 줄이 파이프에서 기다릴 뿐).
+    /// 접속 성립 직후 부른다
+    pub fn fill(&self, host: &str, info: RemoteInfo, bin: String) {
+        let mut map = self.0.lock().unwrap();
+        let st = map.entry(host.to_string()).or_default();
+        if st.spare.is_some() {
+            return;
+        }
+        match pipe_conn(host, &bin, None) {
+            Ok(c) => st.spare = Some(Held::new(c, info, bin)),
+            Err(e) => eprintln!("backend: ssh {host} — 예비 파이프 실패: {e}"),
+        }
+    }
 }
 
 /// 원격 문제 데몬 정리 — 헬퍼 배치 보장 후 `ssh host superlight-daemon --clean`. 헬퍼가

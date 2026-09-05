@@ -167,7 +167,7 @@ const BACKGROUND_MENU: ContextMenuItem[] = [
 
 /** 디렉토리 twistie — 펼침 chevron, 로드가 800ms 를 넘기면 스피너 (VS Code tree-item-loading) */
 function twistieClass(node: TreeNode): string {
-  if (files.slowDirs.has(node.path)) return 'codicon-loading loading';
+  if (files.slowDirs.has(node.path)) return 'codicon-loading codicon-modifier-spin loading';
   return files.expanded.has(node.path) ? 'codicon-chevron-down' : 'codicon-chevron-right';
 }
 
@@ -606,15 +606,7 @@ function decoColor(node: TreeNode): string | undefined {
   font-size: 16px;
   flex-shrink: 0;
 }
-/* spec tree.css .codicon-tree-item-loading — steps 로 FPS 를 낮춰 CPU 를 아낀다 */
-.row .twistie.loading::before {
-  display: inline-block;
-  animation: codicon-spin 1.25s steps(30) infinite;
-  transform-origin: center center;
-}
-@keyframes codicon-spin {
-  to { transform: rotate(360deg); }
-}
+/* 로드 스피너(.loading)는 base.css 의 codicon-modifier-spin 공용 규칙 (spec tree.css .codicon-tree-item-loading 상당) */
 /* 파일 행 twistie 는 폭 0 + 좌측 8px 패딩만 (spec: 파일 아이콘이 폴더 chevron 아래 정렬) */
 .row .twistie.leaf {
   width: 8px;

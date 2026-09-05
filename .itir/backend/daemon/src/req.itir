@@ -9,8 +9,13 @@ val WRITE_LOCK
 val READ_MAX_BYTES
 // 트리(readDir)에서 숨기는 basename — VS Code files.exclude 기본값 (.git·.svn·.hg·.DS_Store·Thumbs.db). node_modules 는 트리에 보인다
 val FILES_EXCLUDED
-// 검색·listFiles 의 rg 공통 인자 — --hidden + files.exclude·search.exclude(node_modules 등) 글롭. ignore 파일은 워크스페이스 안의 것만 (VS Code 기본: useIgnoreFiles=true, parent/global=false)
-val RG_EXCLUDE_ARGS
+// 검색(rg -g)·listFiles(ignore override) 공통 제외 글롭 — files.exclude·search.exclude 기본값(node_modules 등). 두 쪽이 같은 글롭 문법·같은 부정 의미
+val EXCLUDE_GLOBS
+// listFiles 파일 수 상한 (50,000) — 규칙을 다 적용해도 홈 디렉터리 같은 큰 트리는 빠른 열기 목록의 가치보다 걷는 비용이 크다 (VS Code maxResults 자리)
+val WALK_MAX
+fn rg_exclude_args() -> args {
+  role: 검색의 rg 인자 — --hidden + --no-require-git + --no-ignore-parent/--no-ignore-global + EXCLUDE_GLOBS 를 -g 로. ignore 파일은 워크스페이스 안의 것만 (VS Code 기본: useIgnoreFiles=true, parent/global=false)
+}
 
 fn handle_req() {
   role: 메서드 디스패치 — 요청은 태스크로 병렬, 쓰기 경합은 WRITE_LOCK 직렬화. readFile 은 여기 없다 — 반환형이 달라 main.rs 가 read_file 로 직접 라우팅
@@ -43,8 +48,8 @@ fn git_paths_cmd() {
 fn run_rg() {
   role: rg 실행 — exit 1(무매치)도 성공 취급
 }
-fn walk_files() {
-  role: rg 부재 시 listFiles 강등 — RG_EXCLUDE_ARGS 의 basename 제외를 흉내 낸 자체 재귀 walk (gitignore 미적용이 의도된 차이, 심링크 미추적). 부팅이 listFiles 를 await 하므로 rg 없는 실기기에서도 앱은 떠야 한다
+fn list_files(root) -> files {
+  role: 빠른 열기용 전체 파일 목록 — 외부 rg 없이 ignore 크레이트(rg 의 walk 엔진)의 병렬 walk 로 데몬 안에서 걷는다 (사용자 결정 2026-09-05: VS Code 처럼 내장하되 바이너리 동봉 대신 라이브러리 링크 — 데몬은 여전히 하나). 설정은 rg_exclude_args 의 라이브러리 대응(hidden 포함, parents/git_global 끔, require_git 끔, EXCLUDE_GLOBS override), 심링크 미추적. WALK_MAX 에서 Quit — 부분 목록(빠른 열기만 손해), 로그 한 줄. 블로킹 풀에서 돈다. 종전의 rg 서브프로세스 + gitignore 모르는 강등 walk(원격 홈 5초+·readDir 굶김)를 대체
 }
 fn run() {
   role: 외부 명령 실행 — 실패 시 stderr, 비면 stdout 을 에러로

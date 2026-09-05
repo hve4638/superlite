@@ -7,11 +7,12 @@ import { SessionSnapshot } from './session'
 import { notify } from './notifications'
 import { windowLabel } from './window'
 
-role: 워크스페이스 세션 탭 관리자 — 한 창(페이지) 안에서 세션 컨텍스트 여럿을 들고 전환한다. 탭 전환 = activeCtx 교체 (창 이동 없음, 웹·앱 동일 동작 — decision/workspace-session-tabs.md 개정). 목록의 단일 출처는 환경별: 앱은 native 레지스트리(추가·닫기는 invoke, sessions-changed 반향에 reconcile — 전환만 front 소유), 웹은 front 소유(세션마다 relay ?folder= 연결, 페이지 수명), mock 은 부팅 세션 하나(탭 UI 미표시). 환경(kind·연결 생성기)은 host.ts 조립 지점이 주입한다. root 가 null 인 탭은 루트 없는 빈 세션(시작 페이지, ticket app-empty-session) — 백엔드 연결 없이(EmptyBackend) 시작 페이지만 그려지고, 폴더를 열면 그 자리가 워크스페이스 세션으로 교체된다. 다중 창(앱, decision 2026-09-03 개정 — ticket app-tab-detach-window): 창마다 관리자 하나, native 가 창 단위 목록을 준다. 탭을 창 밖에 놓으면 새 창(detach*), 다른 창에 놓으면 대상 창이 출처 창에 이동을 요청(request*)하고 출처가 그 시점 상태를 직렬화해 확정한다 — 핸드오프(Handoff JSON)는 항상 출처가 만들고 native 는 내용을 모른 채 전달(detach_session/move_session_to_window/detach_tabs 는 큐 적재+handoff-available, forward 는 살아 있는 창에 직접). 도착한 핸드오프는 applyHandoff 가 세션에 덮어쓴다 (대상 컨텍스트가 아직 없으면 다음 reconcile 뒤로 미룸)
+role: 워크스페이스 세션 탭 관리자 — 한 창(페이지) 안에서 세션 컨텍스트 여럿을 들고 전환한다. 탭 전환 = activeCtx 교체 (창 이동 없음, 웹·앱 동일 동작 — decision/workspace-session-tabs.md 개정). 목록의 단일 출처는 환경별: 앱은 native 레지스트리(추가·닫기는 invoke, sessions-changed 반향에 reconcile — 전환만 front 소유), 웹은 front 소유(세션마다 relay ?folder= 연결, 페이지 수명), mock 은 부팅 세션 하나(탭 UI 미표시). 환경(kind·연결 생성기)은 host.ts 조립 지점이 주입한다. root 가 null 인 탭은 루트 없는 빈 세션(시작 페이지, ticket app-empty-session) — 백엔드 연결 없이(EmptyBackend) 시작 페이지만 그려지고, 폴더를 열면 그 자리가 워크스페이스 세션으로 교체된다. 다중 창(앱, decision 2026-09-03 개정 — ticket app-tab-detach-window): 창마다 관리자 하나, native 가 창 단위 목록을 준다. 탭을 창 밖에 놓으면 새 창(detach*), 다른 창에 놓으면 대상 창이 출처 창에 이동을 요청(request*)하고 출처가 그 시점 상태를 직렬화해 확정한다 — 핸드오프(Handoff JSON)는 항상 출처가 만들고 native 는 내용을 모른 채 전달(detach_session/move_session_to_window/detach_tabs 는 큐 적재+handoff-available, forward 는 살아 있는 창에 직접). 도착한 핸드오프는 applyHandoff 가 세션에 덮어쓴다 (대상 컨텍스트가 아직 없으면 다음 reconcile 뒤로 미룸). loading = 초기 로드(ctx.init: 워크스페이스·파일 목록·git 첫 로드) 진행 중인 세션 id 집합 — 탭이 X 왼쪽에 로딩 스피너를 그린다. 원격은 예비 파이프 접속이면 상태바 접속 단계가 안 보이므로 "로드가 끝났는가" 의 단일 시각 신호다 (2026-09-05 사용자 요청). 실패도 종료로 본다
 
 export type SessionTab
 export type Handoff
 export val sessions
+export val loading
 export val DND_SESSION
 export val DND_EDITOR
 export val DND_TERMINAL
