@@ -1,5 +1,5 @@
 import { ctx, viewOf } from './ctx'
-import { DirEntry, ThinBackend } from '../backend/types'
+import { DirEntry, QuickOpenResult, ThinBackend } from '../backend/types'
 
 role: 탐색기 파일 트리 — lazy 디렉토리 로드, 외부 변경 시 로드된 디렉토리만 병합 리프레시. 세션별 팩토리(createFiles) + 활성 세션 전달 shim — UI 는 종전 이름 그대로 활성 세션에 작용한다
 
@@ -7,7 +7,7 @@ export type TreeNode
 export val files
 
 export fn createFiles(backend) {
-  role: 세션별 트리 모듈 생성 — 트리·펼침·로딩 상태가 팩토리 클로저에 산다 (한 페이지에 세션 여럿). loading(루트 첫 로드, 진행 막대)·slowDirs(자식 로드 800ms 초과 디렉토리, twistie 스피너 — VS Code asyncDataTree slow 규칙)
+  role: 세션별 트리 모듈 생성 — 트리·펼침·로딩 상태가 팩토리 클로저에 산다 (한 페이지에 세션 여럿). 초기 로드(initFiles)는 루트 readDir 만 — 빠른 열기 목록은 나르지 않는다 (와이어 v12). loading(루트 첫 로드, 진행 막대)·slowDirs(자식 로드 800ms 초과 디렉토리, twistie 스피너 — VS Code asyncDataTree slow 규칙)
 }
 export fn parentOf(path) {
   role: 부모 디렉토리 경로 (루트는 '') — 순수 함수, 세션 무관
@@ -16,13 +16,16 @@ export fn toggleDir(node) {
   role: 디렉토리 펼침/접힘 (첫 펼침에 자식 로드)
 }
 export fn refreshTree() {
-  role: 수동 새로고침 (탐색기 Refresh 버튼) — 로드된 디렉토리 재나열 + Quick Open 목록 재조회. 실패는 삼킨다 (워처·다음 시도가 복구)
+  role: 수동 새로고침 (탐색기 Refresh 버튼) — 로드된 디렉토리 재나열 + Quick Open 캐시 무효화. 실패는 삼킨다 (워처·다음 시도가 복구)
 }
 export fn collapseAll() {
   role: 모두 접기 — 펼침 집합만 비운다. 로드된 자식은 유지되어 재펼침에 왕복이 없다
 }
 export fn revealPath(path) {
   role: 조상 디렉토리를 차례로 로드·펼치고 해당 경로를 선택 — 활성 편집기 자동 reveal(VS Code explorer.autoReveal)의 몸체. 트리에 없는 경로는 닿는 데까지만
+}
+export fn quickOpen(pattern) -> QuickOpenResult {
+  role: Quick Open 후보 요청 — 무효화 이후 첫 호출에만 fresh 를 실어 데몬이 다시 걷게 한다 (VS Code 처럼 목록은 데몬 쪽에, 프론트는 상위 결과만 — 와이어 v12). 실패하면 무효 상태를 되돌려 다음 호출이 다시 fresh. 무효화(팩토리 내부 invalidateQuickOpen)는 생성·삭제 이벤트(watch)·파일 조작(fileops)·수동 새로고침·재접속 전체 리프레시가 부르고, 걷기 자체는 다음 Ctrl+P 로 미룬다 (종전 refreshAllFiles 는 이벤트마다 즉시 다시 걷어 홈처럼 늘 변하는 트리에서 4MB 를 반복 전송했다)
 }
 export fn visibleNodes() -> TreeNode[] {
   role: 펼침 상태 기준 평탄화 — 렌더링용

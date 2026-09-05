@@ -63,6 +63,8 @@ struct Session {
     detached_at: Mutex<Option<Instant>>,
     /// 프론트 응답 대기 중인 요청자 요청 (와이어 v9)
     pending: front::Pending,
+    /// 빠른 열기 파일 목록 캐시 (와이어 v12) — 세션 수명이라 재접속 뒤 첫 Ctrl+P 가 다시 걷지 않는다
+    quick: req::QuickCache,
 }
 
 type Sessions = Arc<Mutex<HashMap<String, Arc<Session>>>>;
@@ -386,6 +388,7 @@ fn new_session(id: Option<String>, root: PathBuf, tx: &UnboundedSender<String>) 
         sink: Arc::new(Mutex::new(SinkState::Attached(tx.clone()))),
         detached_at: Mutex::new(None),
         pending: front::Pending::default(),
+        quick: req::QuickCache::default(),
     }
 }
 
@@ -647,6 +650,22 @@ async fn handle_conn(
                             let _ = tx.send(json!({"id": id, "error": e}).to_string());
                         }
                     }
+                });
+            }
+            // quickOpen 은 세션 캐시(와이어 v12)가 필요하다 — handle_req 는 root 만 받는다
+            "quickOpen" => {
+                let (id, params) = (req["id"].clone(), req["params"].clone());
+                let Some(s) = cleanup.session.clone() else {
+                    let _ = tx.send(json!({"id": id, "error": "attach 전 요청"}).to_string());
+                    continue;
+                };
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let out = match req::quick_open(&params, &s.root, &s.quick).await {
+                        Ok(v) => json!({"id": id, "result": v}),
+                        Err(e) => json!({"id": id, "error": e}),
+                    };
+                    let _ = tx.send(out.to_string());
                 });
             }
             _ => {

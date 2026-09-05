@@ -52,8 +52,13 @@ assert.match(pkg.etag, /^\d+-\d+$/, 'readFile etag');
 
 await assert.rejects(call('readFile', { path: '../etc/passwd' }), /이탈/, 'safe_join');
 
-const files = await call('listFiles');
-assert.ok(files.includes('front/src/main.ts'), 'listFiles');
+const quick = await call('quickOpen', { pattern: 'main.ts' });
+assert.ok(quick.items.some((it) => it.path === 'front/src/main.ts'), 'quickOpen 파일명 매치');
+assert.deepStrictEqual(
+  quick.items.find((it) => it.path === 'front/src/main.ts').highlights, [0, 1, 2, 3, 4, 5, 6], 'quickOpen 하이라이트');
+const quickPath = await call('quickOpen', { pattern: 'front/src/main' });
+assert.ok(quickPath.items.some((it) => it.path === 'front/src/main.ts' && it.highlights.length === 0), 'quickOpen 경로 매치');
+assert.ok(!(await call('quickOpen', { pattern: '' })).items.some((it) => it.path.startsWith('target/')), 'quickOpen gitignore 제외');
 
 const hits = await call('search', { query: 'ThinBackend', opts: {} });
 assert.ok(hits.some((f) => f.path === 'front/src/backend/types.ts'), 'search');

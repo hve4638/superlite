@@ -24,6 +24,6 @@ window.addEventListener('beforeunload', (e) => {
 });
 
 // WHY: 초기 로드(트리·git status)를 기다리지 않고 바로 마운트한다 — 큰 워크스페이스는
-//      첫 readDir/listFiles 가 수 초라, 기다리면 그동안 배경색만 보인다. 로드 중임은
+//      첫 readDir 가 수 초라, 기다리면 그동안 배경색만 보인다. 로드 중임은
 //      탐색기의 진행 막대(files.loading)가 알린다 (VS Code 도 셸 먼저, 뷰별 progress)
 createApp(Workbench).mount('#app');

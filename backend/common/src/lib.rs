@@ -41,7 +41,11 @@ pub fn socket_path() -> PathBuf {
 /// 11: readFile 범위 읽기(offset, encoding=base64 전용 — 크기 상한을 타지 않고 offset 부터
 ///    maxBytes 만큼) + stat 응답에 size. hex 뷰어가 GB 파일을 청크로 본다. 구버전 데몬은
 ///    offset 을 무시하고 파일 전체(또는 large)를 돌려줘 뷰가 조용히 어긋난다.
-const WIRE_VERSION: u32 = 11;
+/// 12: listFiles 제거, quickOpen(pattern, fresh) 추가 — 빠른 열기 목록은 데몬이 세션 캐시로
+///    들고 프론트는 패턴별 상위 결과만 받는다 (VS Code 방식). 종전엔 init 이 목록 전체(홈
+///    디렉터리 5만 파일 4MB)를 날라 저속 링크에서 뒤따르는 readDir 응답을 수 초 막았다.
+///    구버전 데몬은 quickOpen 을 모르는 메서드로 에러 응답해 Ctrl+P 가 비어 보인다.
+const WIRE_VERSION: u32 = 12;
 
 /// 0700 전용 디렉터리를 만들어 그 안에 소켓을 둔다.
 #[cfg(unix)]

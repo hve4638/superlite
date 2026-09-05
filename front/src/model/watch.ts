@@ -44,7 +44,7 @@ export function createWatch(
   searchM: ReturnType<typeof createSearch>,
 ) {
   const { editors, reloadDocFromDisk, setOrphaned } = editorsM;
-  const { loadedDirPaths, refreshAllFiles, refreshDir } = filesM;
+  const { loadedDirPaths, invalidateQuickOpen, refreshDir } = filesM;
   const { refreshScm } = scmM;
   const { autoRerunSearch } = searchM;
 
@@ -93,7 +93,7 @@ export function createWatch(
     (acc) => {
       const dirs = acc.all ? loadedDirPaths() : [...acc.dirs];
       for (const d of dirs) void refreshDir(d); // refreshDir 는 내부에서 실패를 삼킨다
-      if (acc.list || acc.all) swallow(refreshAllFiles());
+      if (acc.list || acc.all) invalidateQuickOpen();
     },
     () => ({ dirs: new Set(), list: false, all: false }),
   );

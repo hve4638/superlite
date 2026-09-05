@@ -1,6 +1,5 @@
 import type {
-  DirEntry, FileContent, FileSearchResult, FileStat, GitLogItem, GitStatus, TerminalSession, ThinBackend,
-  WorkspaceInfo, WriteResult,
+  DirEntry, FileContent, FileSearchResult, FileStat, GitLogItem, GitStatus, QuickOpenItem, QuickOpenResult, TerminalSession, ThinBackend, WorkspaceInfo, WriteResult,
 } from './types';
 
 // WHY: 이 픽스처는 tools/refspec/mock-workspace 와 파일/내용/git 상태가 1:1 이다.
@@ -262,8 +261,29 @@ export class MockBackend implements ThinBackend {
     return delay(undefined);
   }
 
-  listFiles(): Promise<string[]> {
-    return delay(Object.keys(FILES).sort());
+  quickOpen(pattern: string): Promise<QuickOpenResult> {
+    // 데몬 quick_open 과 같은 규칙 — 파일명 subsequence 우선, 실패 시 전체 경로(하이라이트 없음)
+    const q = pattern.toLowerCase();
+    const sub = (target: string): number[] | null => {
+      const t = target.toLowerCase();
+      const idx: number[] = [];
+      let ti = 0;
+      for (const ch of q) {
+        ti = t.indexOf(ch, ti);
+        if (ti < 0) return null;
+        idx.push(ti);
+        ti += 1;
+      }
+      return idx;
+    };
+    const byName: QuickOpenItem[] = [];
+    const byPath: QuickOpenItem[] = [];
+    for (const path of Object.keys(FILES).sort()) {
+      const hl = sub(path.slice(path.lastIndexOf('/') + 1));
+      if (hl) byName.push({ path, highlights: hl });
+      else if (sub(path)) byPath.push({ path, highlights: [] });
+    }
+    return delay({ items: [...byName, ...byPath], limitHit: false });
   }
 
   search(query: string, opts?: { caseSensitive?: boolean }): Promise<FileSearchResult[]> {

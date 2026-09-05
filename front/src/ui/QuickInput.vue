@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { closeQuickInput, workbench } from '../model/workbench';
-import { files } from '../model/files';
+import { quickOpen } from '../model/files';
 import { commandList, isWorkbenchChord, type Command } from '../model/commands';
 import { editors, openFile } from '../model/editors';
 import { openFolder, openFolderDialog, openRootDefault } from '../model/host';
@@ -139,6 +139,42 @@ function openTabPaths(): string[] {
   return out;
 }
 
+// ------------------------------------------------------------ 파일 모드
+// 후보는 백엔드 검색(와이어 v12, VS Code anythingQuickAccess 방식) — 목록은 데몬이 들고
+// 프론트는 패턴마다 상위 결과만 받는다. 늦은 응답은 seq 로 버린다
+const fileResults = ref<FileItem[]>([]);
+let fileSeq = 0;
+watch(
+  [isFolderMode, isCommandMode, filter],
+  async () => {
+    if (isFolderMode.value || isCommandMode.value) return;
+    const q = filter.value;
+    // WHY: VS Code 의 빈 Ctrl+P 는 전체 파일이 아니라 에디터 히스토리를 보여준다.
+    //      recency 추적이 없으므로 열린 탭 목록으로 근사하고, 없으면 백엔드 결과로 대체한다.
+    if (q === '' && openTabPaths().length) {
+      fileResults.value = openTabPaths().map((path) => toFileItem(path, []));
+      return;
+    }
+    const seq = ++fileSeq;
+    let items: FileItem[] = [];
+    try {
+      items = (await quickOpen(q)).items.map((it) => toFileItem(it.path, it.highlights));
+    } catch {
+      // 연결 끊김 등 — 후보 없음이 곧 피드백이다
+    }
+    if (seq === fileSeq) fileResults.value = items;
+  },
+  { immediate: true },
+);
+
+function toFileItem(path: string, highlights: number[]): FileItem {
+  const slash = path.lastIndexOf('/');
+  return {
+    kind: 'file', path, name: slash >= 0 ? path.slice(slash + 1) : path,
+    dir: slash >= 0 ? path.slice(0, slash) : '', highlights,
+  };
+}
+
 const items = computed<Item[]>(() => {
   const q = filter.value;
   if (isFolderMode.value) {
@@ -167,22 +203,7 @@ const items = computed<Item[]>(() => {
     }
     return out;
   }
-  const out: FileItem[] = [];
-  // WHY: VS Code 의 빈 Ctrl+P 는 전체 파일이 아니라 에디터 히스토리를 보여준다.
-  //      recency 추적이 없으므로 열린 탭 목록으로 근사하고, 없으면 전체 파일로 대체한다.
-  const source = q === '' && openTabPaths().length ? openTabPaths() : files.allFiles;
-  for (const path of source) {
-    const slash = path.lastIndexOf('/');
-    const name = slash >= 0 ? path.slice(slash + 1) : path;
-    // 파일명 우선 매칭, 실패하면 전체 경로로 재시도 (하이라이트는 파일명에만)
-    let hl = matchSubsequence(name, q);
-    if (hl === null) {
-      if (matchSubsequence(path, q) === null) continue;
-      hl = [];
-    }
-    out.push({ kind: 'file', path, name, dir: slash >= 0 ? path.slice(0, slash) : '', highlights: hl });
-  }
-  return out;
+  return fileResults.value;
 });
 
 watch(query, () => {

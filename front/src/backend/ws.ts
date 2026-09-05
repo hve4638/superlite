@@ -8,18 +8,8 @@
  * (터미널·끊김 중 출력 버퍼)을 이어 붙인다. 끊김 중 요청은 큐에 남아 재연결 후 전송되고,
  * 끊기는 순간 진행 중이던 요청만 실패한다 (실행 여부 불명 — 네트워크 실패의 본질).
  */
-import type { ConnectStage,
-  DirEntry,
-  FileContent,
-  FileSearchResult,
-  FileStat,
-  FsChange,
-  GitLogItem,
-  GitStatus,
-  TerminalSession,
-  ThinBackend,
-  WorkspaceInfo,
-  WriteResult,
+import type {
+  ConnectStage, DirEntry, FileContent, FileSearchResult, FileStat, FsChange, GitLogItem, GitStatus, QuickOpenResult, TerminalSession, ThinBackend, WorkspaceInfo, WriteResult,
 } from './types';
 
 interface Pending {
@@ -398,8 +388,8 @@ export class WsBackend implements ThinBackend {
   delete(path: string): Promise<void> {
     return this.call('delete', { path });
   }
-  listFiles(): Promise<string[]> {
-    return this.call('listFiles');
+  quickOpen(pattern: string, fresh?: boolean): Promise<QuickOpenResult> {
+    return this.call('quickOpen', { pattern, fresh });
   }
   browseDir(path: string): Promise<string[]> {
     return this.call('browseDir', { path });

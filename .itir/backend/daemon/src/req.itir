@@ -1,7 +1,7 @@
 // crate::err(main.rs) 참조 — crate:: 는 crate 루트(main.rs 디렉토리) 좌표 '.' 로 정규화된다
 import { err, wire_rel } from '.'
 
-role: RPC 요청 처리 — fs 읽기/쓰기(etag 낙관적 충돌 검사, readFile/writeFile 은 encoding=base64 이진 읽기/쓰기 겸용 — base64 읽기는 UTF-8 검증을 건너뛰고 크기 상한만 공유. offset 이 오면(와이어 v11, base64 전용) 범위 읽기 — 상한을 타지 않고 offset 부터 maxBytes 만큼, hex 뷰어 청크)·stat(내용 없는 경량 etag + size, v11)·생성/이름변경/삭제, rg 검색, git 상태(staged/unstaged 분리)·스테이징·discard·커밋·로그·브랜치 (와이어 v8). readFile 의 크기 초과·이진(비 UTF-8)은 에러가 아니라 구조화된 unopenable 응답 — 프론트가 탭을 열고 안내 화면을 띄운다. readFile 대형 응답(4KB 이상)은 JSON 이 아니라 바이너리 payload(ReadOut::Payload, 와이어 v6)로 나간다 — 텍스트는 deflate-raw 압축, base64 요청분은 부풀림 없는 원본 바이트 (프레임 조립은 main.rs). 경로는 safe_join 관문 — 단 파일 단건(readFile/stat/writeFile)은 file_path 를 거쳐 절대 경로도 허용한다 (워크스페이스 밖 파일 열기, VS Code 파리티). excludes 는 VS Code 기본값 하드코딩 (설정 시스템 없음)
+role: RPC 요청 처리 — fs 읽기/쓰기·빠른 열기 검색(quickOpen, 와이어 v12 — 세션 캐시 위 패턴 검색)(etag 낙관적 충돌 검사, readFile/writeFile 은 encoding=base64 이진 읽기/쓰기 겸용 — base64 읽기는 UTF-8 검증을 건너뛰고 크기 상한만 공유. offset 이 오면(와이어 v11, base64 전용) 범위 읽기 — 상한을 타지 않고 offset 부터 maxBytes 만큼, hex 뷰어 청크)·stat(내용 없는 경량 etag + size, v11)·생성/이름변경/삭제, rg 검색, git 상태(staged/unstaged 분리)·스테이징·discard·커밋·로그·브랜치 (와이어 v8). readFile 의 크기 초과·이진(비 UTF-8)은 에러가 아니라 구조화된 unopenable 응답 — 프론트가 탭을 열고 안내 화면을 띄운다. readFile 대형 응답(4KB 이상)은 JSON 이 아니라 바이너리 payload(ReadOut::Payload, 와이어 v6)로 나간다 — 텍스트는 deflate-raw 압축, base64 요청분은 부풀림 없는 원본 바이트 (프레임 조립은 main.rs). 경로는 safe_join 관문 — 단 파일 단건(readFile/stat/writeFile)은 file_path 를 거쳐 절대 경로도 허용한다 (워크스페이스 밖 파일 열기, VS Code 파리티). excludes 는 VS Code 기본값 하드코딩 (설정 시스템 없음)
 
 // 파일 시스템 락 — 쓰기 계열 RPC(write/create/rename/delete)의 직렬화(etag 검사-쓰기 원자성의 근거)와 readFile·stat 의 stat→read 정합. 읽은 뒤 인코딩(deflate·base64)은 락 밖
 val FS_LOCK
@@ -9,9 +9,9 @@ val FS_LOCK
 val READ_MAX_BYTES
 // 트리(readDir)에서 숨기는 basename — VS Code files.exclude 기본값 (.git·.svn·.hg·.DS_Store·Thumbs.db). node_modules 는 트리에 보인다
 val FILES_EXCLUDED
-// 검색(rg -g)·listFiles(ignore override) 공통 제외 글롭 — files.exclude·search.exclude 기본값(node_modules 등). 두 쪽이 같은 글롭 문법·같은 부정 의미
+// 검색(rg -g)·quickOpen 걷기(ignore override) 공통 제외 글롭 — files.exclude·search.exclude 기본값(node_modules 등). 두 쪽이 같은 글롭 문법·같은 부정 의미
 val EXCLUDE_GLOBS
-// listFiles 파일 수 상한 (50,000) — 규칙을 다 적용해도 홈 디렉터리 같은 큰 트리는 빠른 열기 목록의 가치보다 걷는 비용이 크다 (VS Code maxResults 자리)
+// quickOpen 걷기 파일 수 상한 (50,000) — 규칙을 다 적용해도 홈 디렉터리 같은 큰 트리는 빠른 열기 목록의 가치보다 걷는 비용이 크다 (VS Code maxResults 자리)
 val WALK_MAX
 fn rg_exclude_args() -> args {
   role: 검색의 rg 인자 — --hidden + --no-require-git + --no-ignore-parent/--no-ignore-global + EXCLUDE_GLOBS 를 -g 로. ignore 파일은 워크스페이스 안의 것만 (VS Code 기본: useIgnoreFiles=true, parent/global=false)
@@ -48,8 +48,16 @@ fn git_paths_cmd() {
 fn run_rg() {
   role: rg 실행 — exit 1(무매치)도 성공 취급
 }
+// quickOpen 응답 상한 (512, VS Code anythingQuickAccess MAX_RESULTS) — 와이어로 나가는 것은 항상 이 이하
+val QUICK_MAX
+class QuickCache {
+  role: 세션이 드는 빠른 열기 파일 목록 캐시 — None 이면 첫 quickOpen 이 걷는다. 걷는 동안 락을 쥐어 뒤따르는 키 입력 요청이 같은 결과를 기다린다 (VS Code 의 cache promise 대응)
+}
 fn list_files(root) -> files {
-  role: 빠른 열기용 전체 파일 목록 — 외부 rg 없이 ignore 크레이트(rg 의 walk 엔진)의 병렬 walk 로 데몬 안에서 걷는다 (사용자 결정 2026-09-05: VS Code 처럼 내장하되 바이너리 동봉 대신 라이브러리 링크 — 데몬은 여전히 하나). 설정은 rg_exclude_args 의 라이브러리 대응(hidden 포함, parents/git_global 끔, require_git 끔, EXCLUDE_GLOBS override), 심링크 미추적. WALK_MAX 에서 Quit — 부분 목록(빠른 열기만 손해), 로그 한 줄. 블로킹 풀에서 돈다. 종전의 rg 서브프로세스 + gitignore 모르는 강등 walk(원격 홈 5초+·readDir 굶김)를 대체
+  role: 빠른 열기용 전체 파일 목록 — 외부 rg 없이 ignore 크레이트(rg 의 walk 엔진)의 병렬 walk 로 데몬 안에서 걷는다 (사용자 결정 2026-09-05: VS Code 처럼 내장하되 바이너리 동봉 대신 라이브러리 링크 — 데몬은 여전히 하나). 설정은 rg_exclude_args 의 라이브러리 대응(hidden 포함, parents/git_global 끔, require_git 끔, EXCLUDE_GLOBS override), 심링크 미추적. WALK_MAX 에서 Quit — 부분 목록(빠른 열기만 손해), 로그 한 줄. 결과는 경로순 정렬 (병렬 walk 는 순서가 비결정적). 블로킹 풀에서 돈다. 와이어에 직접 나가지 않는다 — quick_open 의 캐시 재료 (와이어 v12, 종전 listFiles 는 이 목록 전체를 init 에 날랐다)
+}
+fn quick_open(params, root, cache) -> result {
+  role: quickOpen RPC (와이어 v12) — fresh 또는 캐시 부재면 list_files 로 다시 걷고, 캐시에서 pattern 을 대소문자 무시 subsequence 로 거른다. 파일명 매치(하이라이트 = 파일명 안 UTF-16 인덱스 — 프론트 segments 좌표계) 가 전체 경로 매치(하이라이트 없음)보다 앞. QUICK_MAX 에서 자르고 limitHit. 빈 pattern 은 캐시 앞 QUICK_MAX 건. 세션 캐시라 main.rs 가 세션을 들고 직접 라우팅한다 (handle_req 는 root 만 안다)
 }
 fn run() {
   role: 외부 명령 실행 — 실패 시 stderr, 비면 stdout 을 에러로

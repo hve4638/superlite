@@ -111,6 +111,17 @@ export interface TerminalSession {
  *  완료 신호는 따로 없다 — attach 응답 도달이 곧 완료. 로컬 세션은 이 이벤트가 오지 않는다 */
 export type ConnectStage = 'ssh' | 'helper' | 'upload' | 'daemon';
 
+export interface QuickOpenItem {
+  path: string;
+  /** 파일명 안 매치 문자 인덱스 (UTF-16) — 비어 있으면 경로로만 매치된 항목 */
+  highlights: number[];
+}
+export interface QuickOpenResult {
+  items: QuickOpenItem[];
+  /** 상한(512)에 걸려 잘렸다 */
+  limitHit: boolean;
+}
+
 export interface ThinBackend {
   workspace(): Promise<WorkspaceInfo>;
   /** path 디렉토리의 직계 엔트리. 정렬은 호출자 책임. */
@@ -139,8 +150,10 @@ export interface ThinBackend {
   rename(from: string, to: string): Promise<void>;
   /** 파일·디렉토리 겸용 삭제 (디렉토리는 재귀, 휴지통 없음) */
   delete(path: string): Promise<void>;
-  /** 워크스페이스 전체 파일 경로 목록 (quick open 용) */
-  listFiles(): Promise<string[]>;
+  /** Quick Open 후보 검색 (와이어 v12) — 목록은 백엔드가 들고, 패턴별 상위 결과만 온다.
+   *  파일명 subsequence 매치(highlights = 파일명 안 인덱스)가 앞, 전체 경로 매치(highlights
+   *  없음)가 뒤. fresh 면 백엔드가 목록을 다시 걷는다 — 무효화 판단은 호출측(files 모듈) */
+  quickOpen(pattern: string, fresh?: boolean): Promise<QuickOpenResult>;
   /**
    * '폴더 열기' 경로 탐색용 — 임의 절대 경로의 하위 디렉토리 이름 나열 (정렬됨).
    * 실 백엔드 전용 (mock 은 가짜 트리 밖 경로가 없어 미구현 — 커맨드 등록의 지원 신호로도 쓴다).

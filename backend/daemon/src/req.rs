@@ -2,7 +2,7 @@
 //! 모든 경로는 safe_join 관문을 지난다.
 
 use std::path::{Component, Path, PathBuf};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use std::time::UNIX_EPOCH;
 
 use serde_json::{json, Value};
@@ -37,7 +37,7 @@ const READ_MAX_BYTES: u64 = 50 * 1024 * 1024;
 /// ponytail: 설정 시스템이 없어 하드코딩 — 사용자 설정이 생기면 여기로 합류.
 const FILES_EXCLUDED: [&str; 5] = [".git", ".svn", ".hg", ".DS_Store", "Thumbs.db"];
 
-/// 검색(rg)·listFiles(ignore 크레이트) 공통 제외 글롭 — files.exclude + search.exclude 기본값
+/// 검색(rg)·quickOpen 걷기(ignore 크레이트) 공통 제외 글롭 — files.exclude + search.exclude 기본값
 /// (node_modules 등). rg 의 -g 와 ignore::overrides 는 같은 글롭 문법·같은 부정(!) 의미다.
 const EXCLUDE_GLOBS: [&str; 8] = [
     "!**/.git",
@@ -54,7 +54,7 @@ const EXCLUDE_GLOBS: [&str; 8] = [
 /// ignore 파일은 워크스페이스 안의 것만 존중한다 — VS Code 기본과 동일
 /// (useIgnoreFiles=true, useParentIgnoreFiles/useGlobalIgnoreFiles=false).
 /// --no-require-git 만 주면 부모·글로벌 gitignore 까지 새어 들어와 파일이 조용히 사라진다.
-/// listFiles 의 WalkBuilder 설정(list_files)은 이 인자들의 라이브러리 대응이다.
+/// quickOpen 걷기의 WalkBuilder 설정(list_files)은 이 인자들의 라이브러리 대응이다.
 fn rg_exclude_args() -> Vec<&'static str> {
     let mut args = vec!["--hidden", "--no-require-git", "--no-ignore-parent", "--no-ignore-global"];
     for g in EXCLUDE_GLOBS {
@@ -315,13 +315,6 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
             out.sort();
             Ok(json!(out))
         }
-        "listFiles" => {
-            // 부팅이 이 호출을 await 하므로 실패 시 앱이 안 뜬다. 외부 rg 없이 데몬 안에서
-            // 걷는다 (ignore 크레이트 = rg 의 walk) — 원격에 rg 가 없어도 같은 결과·같은 속도
-            let root = root.to_path_buf();
-            let files = tokio::task::spawn_blocking(move || list_files(&root)).await.map_err(err)??;
-            Ok(json!(files))
-        }
         "search" => search(root, p).await,
         // git repo 가 아니어도 앱은 떠야 한다 — 빈 상태로 강등
         "gitStatus" => Ok(git_status(root)
@@ -488,10 +481,68 @@ async fn git_status(root: &Path) -> Result<Value, String> {
     Ok(json!({"branch": branch, "head": head, "dirty": !changes.is_empty(), "changes": changes}))
 }
 
-/// listFiles 의 파일 수 상한 — 규칙을 다 적용해도 이 위로는 (gitignore 없는 홈 디렉터리 등)
+/// quickOpen 걷기의 파일 수 상한 — 규칙을 다 적용해도 이 위로는 (gitignore 없는 홈 디렉터리 등)
 /// 빠른 열기 목록의 가치보다 걷는 비용이 크다. VS Code 의 maxResults 자리. 부분 목록이 되면
 /// 빠른 열기만 손해다 (탐색기는 readDir, 검색은 rg)
 const WALK_MAX: usize = 50_000;
+
+/// quickOpen 응답 상한 — VS Code anythingQuickAccess MAX_RESULTS. 와이어로 나가는 것은 항상 이 이하
+const QUICK_MAX: usize = 512;
+
+/// 세션의 빠른 열기 파일 목록 캐시 (와이어 v12). None = 아직 안 걸었다 — 첫 quickOpen 이 걷는다.
+/// 걷는 동안 락을 쥐므로 뒤따르는 키 입력 요청은 같은 결과를 기다린다 (VS Code 의 cache
+/// promise 대응). 무효화(fresh)는 프론트가 판단한다 — 데몬은 이벤트를 세지 않는다
+pub(crate) type QuickCache = tokio::sync::Mutex<Option<Arc<Vec<String>>>>;
+
+/// quickOpen RPC (와이어 v12) — 캐시(없거나 fresh 면 다시 걷는다)에서 pattern 을 거른다.
+/// 파일명 subsequence 매치가 앞(하이라이트 = 파일명 안 인덱스), 전체 경로 매치가 뒤(하이라이트
+/// 없음) — 종전 프론트 QuickInput 의 규칙 그대로. QUICK_MAX 에서 자르고 limitHit
+pub(crate) async fn quick_open(p: &Value, root: &Path, cache: &QuickCache) -> Result<Value, String> {
+    let pattern: Vec<char> = p["pattern"].as_str().unwrap_or("").chars().flat_map(char::to_lowercase).collect();
+    let fresh = p["fresh"].as_bool().unwrap_or(false);
+    let files = {
+        let mut slot = cache.lock().await;
+        if fresh || slot.is_none() {
+            let root = root.to_path_buf();
+            let files = tokio::task::spawn_blocking(move || list_files(&root)).await.map_err(err)??;
+            *slot = Some(Arc::new(files));
+        }
+        Arc::clone(slot.as_ref().unwrap())
+    };
+    let mut name_hits = Vec::new();
+    let mut path_hits = Vec::new();
+    for path in files.iter() {
+        if name_hits.len() > QUICK_MAX {
+            break;
+        }
+        let name = path.rsplit('/').next().unwrap_or(path);
+        if let Some(hl) = subsequence(name, &pattern) {
+            name_hits.push(json!({"path": path, "highlights": hl}));
+        } else if path_hits.len() <= QUICK_MAX && subsequence(path, &pattern).is_some() {
+            path_hits.push(json!({"path": path, "highlights": []}));
+        }
+    }
+    name_hits.append(&mut path_hits);
+    let limit_hit = name_hits.len() > QUICK_MAX;
+    name_hits.truncate(QUICK_MAX);
+    Ok(json!({"items": name_hits, "limitHit": limit_hit}))
+}
+
+/// 대소문자 무시 subsequence 매칭 — 매치 문자들의 UTF-16 인덱스(프론트 하이라이트 좌표계).
+/// 빈 패턴은 빈 매치(전부 통과)
+fn subsequence(target: &str, pattern: &[char]) -> Option<Vec<usize>> {
+    let mut out = Vec::with_capacity(pattern.len());
+    let mut pi = 0;
+    let mut u16 = 0;
+    for c in target.chars() {
+        if pi < pattern.len() && c.to_lowercase().eq(std::iter::once(pattern[pi])) {
+            out.push(u16);
+            pi += 1;
+        }
+        u16 += c.len_utf16();
+    }
+    (pi == pattern.len()).then_some(out)
+}
 
 /// 빠른 열기용 전체 파일 목록 — ignore 크레이트의 병렬 walk (rg --files 와 같은 엔진).
 /// 설정은 rg_exclude_args 의 라이브러리 대응: hidden 포함, 워크스페이스 안 ignore 파일만
@@ -528,10 +579,12 @@ fn list_files(root: &Path) -> Result<Vec<String>, String> {
             ignore::WalkState::Continue
         })
     });
-    let files = out.into_inner().unwrap();
+    let mut files = out.into_inner().unwrap();
     if files.len() >= WALK_MAX {
-        eprintln!("superlight-daemon: listFiles 상한 {WALK_MAX} — 부분 목록");
+        eprintln!("superlight-daemon: quickOpen 걷기 상한 {WALK_MAX} — 부분 목록");
     }
+    // 병렬 walk 는 순서가 비결정적 — 후보 순서가 키 입력마다 흔들리지 않게 한 번 정렬
+    files.sort();
     Ok(files)
 }
 
@@ -562,7 +615,7 @@ async fn run(root: &Path, bin: &str, args: &[&str]) -> Result<String, String> {
         let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
         if stderr.is_empty() {
             // git 은 "nothing to commit" 을 stdout 로 낸다 — 빈 에러 대신 그걸 보여준다.
-            // (rg 매치 0건은 stdout 도 비어 있어 Err("") 유지 — search/listFiles 가 의존)
+            // (rg 매치 0건은 stdout 도 비어 있어 Err("") 유지 — search 가 의존)
             Err(String::from_utf8_lossy(&out.stdout).trim().to_string())
         } else {
             Err(stderr)

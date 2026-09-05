@@ -1,5 +1,5 @@
 import { reactive } from '@vue/reactivity';
-import type { DirEntry, ThinBackend } from '../backend/types';
+import type { DirEntry, QuickOpenResult, ThinBackend } from '../backend/types';
 import { ctx, viewOf } from './ctx';
 
 export interface TreeNode {
@@ -32,8 +32,6 @@ export function createFiles(backend: ThinBackend) {
     root: [] as TreeNode[],
     expanded: new Set<string>(),
     selectedPath: null as string | null,
-    /** quick open 용 전체 파일 목록 */
-    allFiles: [] as string[],
     /** 루트 첫 로드 중 — 탐색기가 진행 막대를 보인다 (셸은 로드를 기다리지 않고 마운트된다) */
     loading: true,
     /** 자식 로드가 800ms 를 넘긴 디렉토리 — twistie 가 스피너로 바뀐다 (VS Code asyncDataTree
@@ -53,7 +51,27 @@ export function createFiles(backend: ThinBackend) {
     const entries = sortEntries(await backend.readDir(''));
     files.root = entries.map((e) => ({ name: e.name, path: e.path, kind: e.kind, depth: 0, children: null }));
     files.loading = false;
-    files.allFiles = await backend.listFiles();
+  }
+
+  // Quick Open 목록은 데몬이 걷어 세션 캐시로 든다 (와이어 v12, VS Code 방식) — 프론트는
+  // 무효 여부만 기억했다가 다음 요청에 fresh 로 싣는다. 종전 listFiles 는 init 이 목록 전체
+  // (홈 디렉터리 5만 파일 4MB)를 날라 저속 링크에서 뒤따르는 readDir 응답을 수 초 막았다
+  let quickStale = true;
+
+  async function quickOpen(pattern: string): Promise<QuickOpenResult> {
+    const fresh = quickStale;
+    quickStale = false;
+    try {
+      return await backend.quickOpen(pattern, fresh);
+    } catch (e) {
+      if (fresh) quickStale = true;
+      throw e;
+    }
+  }
+
+  /** 다음 Quick Open 요청이 목록을 다시 걷게 한다 — 걷기 자체는 Ctrl+P 까지 미룬다 */
+  function invalidateQuickOpen(): void {
+    quickStale = true;
   }
 
   const loadingDirs = new Set<string>();
@@ -134,14 +152,11 @@ export function createFiles(backend: ThinBackend) {
     return out;
   }
 
-  async function refreshAllFiles(): Promise<void> {
-    files.allFiles = await backend.listFiles();
-  }
-
-  /** 수동 새로고침 (탐색기 Refresh 버튼) — 로드된 디렉토리 재나열 + Quick Open 목록 재조회.
+  /** 수동 새로고침 (탐색기 Refresh 버튼) — 로드된 디렉토리 재나열 + Quick Open 캐시 무효화.
    *  실패는 삼킨다 (워처·다음 시도가 복구) — refreshDir 병합이라 펼침 상태는 보존된다 */
   async function refreshTree(): Promise<void> {
-    await Promise.allSettled([...loadedDirPaths().map((d) => refreshDir(d)), refreshAllFiles()]);
+    invalidateQuickOpen();
+    await Promise.allSettled(loadedDirPaths().map((d) => refreshDir(d)));
   }
 
   /** 모두 접기 — 펼침 집합만 비운다. 로드된 자식은 유지되어 재펼침에 왕복이 없다 */
@@ -176,7 +191,7 @@ export function createFiles(backend: ThinBackend) {
 
   return {
     files, initFiles, toggleDir, refreshDir, loadedDirPaths,
-    refreshAllFiles, refreshTree, collapseAll, visibleNodes, revealPath,
+    quickOpen, invalidateQuickOpen, refreshTree, collapseAll, visibleNodes, revealPath,
   };
 }
 
@@ -185,6 +200,7 @@ export function createFiles(backend: ThinBackend) {
 export const files = viewOf(() => ctx().files.files);
 export const toggleDir = (node: TreeNode): Promise<void> => ctx().files.toggleDir(node);
 export const refreshTree = (): Promise<void> => ctx().files.refreshTree();
+export const quickOpen = (pattern: string): Promise<QuickOpenResult> => ctx().files.quickOpen(pattern);
 export const collapseAll = (): void => ctx().files.collapseAll();
 export const visibleNodes = (): TreeNode[] => ctx().files.visibleNodes();
 export const revealPath = (path: string): Promise<void> => ctx().files.revealPath(path);

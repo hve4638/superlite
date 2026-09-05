@@ -43,7 +43,7 @@ export function createFileops(
   scmM: ReturnType<typeof createScm>,
 ) {
   const { closePathTabs, remapPaths } = editorsM;
-  const { loadedDirPaths, refreshAllFiles, refreshDir } = filesM;
+  const { loadedDirPaths, invalidateQuickOpen, refreshDir } = filesM;
   const { refreshScm } = scmM;
 
   /** 중첩 생성(a/b/c.ts)의 부모는 미로드일 수 있다 — 리프레시는 로드된 조상에서 시작해야 보인다 */
@@ -58,7 +58,7 @@ export function createFileops(
   async function refreshAfter(paths: string[]): Promise<void> {
     const dirs = [...new Set(paths.map((p) => nearestLoaded(parentOf(p))))];
     await Promise.all(dirs.map((d) => refreshDir(d)));
-    swallow(refreshAllFiles());
+    invalidateQuickOpen();
     swallow(refreshScm());
   }
 

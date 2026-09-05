@@ -1,4 +1,4 @@
-// excludes 스모크 — 트리(files.exclude 기본값)와 검색·listFiles(--hidden + 제외 글롭).
+// excludes 스모크 — 트리(files.exclude 기본값)와 검색·quickOpen 걷기(--hidden + 제외 글롭).
 //   cargo build --workspace 후: node backend/relay/check-excludes.mjs
 import assert from 'node:assert';
 import { spawn } from 'node:child_process';
@@ -84,8 +84,8 @@ try {
   assert.ok(names.includes('.env'), '트리에 dotfile 보임');
   assert.ok(names.includes('dist'), '트리는 gitignore 를 안 따른다 (VS Code 동일)');
 
-  // listFiles: dotfile 포함, .git/node_modules/gitignore 대상 제외
-  const files = await call('listFiles', {});
+  // quickOpen (와이어 v12, 빈 패턴 = 목록 전체): dotfile 포함, .git/node_modules/gitignore 대상 제외
+  const files = (await call('quickOpen', { pattern: '', fresh: true })).items.map((it) => it.path);
   assert.ok(files.includes('.env'), 'Quick Open 에 dotfile 포함');
   assert.ok(files.includes('.github/workflows/ci.yml'), 'Quick Open 에 숨김 디렉토리 하위 포함');
   assert.ok(!files.some((f) => f.startsWith('.git/')), 'Quick Open 에서 .git 제외');
