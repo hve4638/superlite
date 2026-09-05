@@ -1,21 +1,106 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import {
-  scm, openChange, openChangeFile, commit, refreshScm, stage, unstage, requestDiscard, confirmDiscard,
-  cancelDiscard, branches, checkout, CHANGE_LETTER, CHANGE_COLOR, type ScmChange,
+  scm, activeRepo, selectRepo, openChange, openChangeFile, commit, refreshScm, rescanRepos, stage, unstage,
+  requestDiscard, confirmDiscard, cancelDiscard, branches, checkout, CHANGE_LETTER, CHANGE_COLOR,
+  type ScmChange, type ScmRepo,
 } from '../../model/scm';
-import { openContextMenu } from '../../model/workbench';
+import { openContextMenu, showViewlet, workbench } from '../../model/workbench';
+import { revealPath } from '../../model/files';
 import { errText, notify } from '../../model/notifications';
 import FileIcon from '../widgets/FileIcon.vue';
 import ConfirmDialog from '../widgets/ConfirmDialog.vue';
 
 const inputEl = ref<HTMLTextAreaElement>();
-const placeholder = computed(() => `Message (Ctrl+Enter to commit on "${scm.branch}")`);
 
-const staged = computed(() => scm.changes.filter((c) => c.staged));
+/** 선택된 저장소 — 변경·Graph pane 은 이 하나만 보인다 (VS Code Source Control Repositories 뷰 방식) */
+const repo = computed(() => activeRepo());
+/** 저장소가 둘 이상일 때만 리포지토리 pane 이 보인다 (VS Code 기본 동작) */
+const multi = computed(() => scm.repos.length > 1);
+
+/** 저장소 표시 이름 — 루트 저장소는 워크스페이스 이름, 하위는 폴더명 (VS Code 동일) */
+function repoTitle(r: ScmRepo): string {
+  return r.path === '' ? workbench.workspaceName : r.name;
+}
+const placeholder = computed(() => `Message (Ctrl+Enter to commit on "${repo.value?.branch ?? ''}")`);
+const staged = computed(() => repo.value?.changes.filter((c) => c.staged) ?? []);
+const unstaged = computed(() => repo.value?.changes.filter((c) => !c.staged) ?? []);
 /** staged 가 없으면 커밋 불가 — 버튼·헤더 체크·Ctrl+Enter 모두 막는다 */
 const canCommit = computed(() => staged.value.length > 0);
-const unstaged = computed(() => scm.changes.filter((c) => !c.staged));
+function doCommit(): void {
+  if (repo.value && canCommit.value) void commit(repo.value);
+}
+
+// ---- 접기 — 'repos'·'changes'·'graph' pane, 's'·'u' 그룹. 세션 전환·재마운트에 초기화 (ponytail)
+const collapsed = reactive(new Set<string>());
+function toggle(key: string): void {
+  if (collapsed.has(key)) collapsed.delete(key);
+  else collapsed.add(key);
+}
+const twisty = (key: string): string => (collapsed.has(key) ? 'codicon-chevron-right' : 'codicon-chevron-down');
+
+// ---- 선택 — VS Code 리스트처럼 클릭 선택, Ctrl 토글, Shift 범위. 키는 staged 쪽 + 경로
+const keyOf = (c: ScmChange): string => `${c.staged ? 's' : 'u'}:${c.path}`;
+const selected = reactive(new Set<string>());
+let anchor: string | null = null;
+/** 리스트가 포커스를 가진 동안만 활성 선택색 — 커밋 입력에 있을 땐 비활성색 (VS Code 동일) */
+const listActive = ref(false);
+function onFocusIn(e: FocusEvent): void {
+  listActive.value = !(e.target instanceof HTMLTextAreaElement);
+}
+function onFocusOut(e: FocusEvent): void {
+  if (!(e.relatedTarget instanceof Node) || !(e.currentTarget as HTMLElement).contains(e.relatedTarget)) listActive.value = false;
+}
+/** 화면에 보이는 순서의 전체 행 — Shift 범위 선택의 좌표 (접힌 그룹은 제외) */
+function visibleRows(): ScmChange[] {
+  return [...(collapsed.has('s') ? [] : staged.value), ...(collapsed.has('u') ? [] : unstaged.value)];
+}
+function onRowClick(c: ScmChange, e: MouseEvent): void {
+  const k = keyOf(c);
+  if (e.shiftKey && anchor !== null) {
+    const keys = visibleRows().map(keyOf);
+    const a = keys.indexOf(anchor);
+    const b = keys.indexOf(k);
+    if (a !== -1 && b !== -1) {
+      selected.clear();
+      for (let i = Math.min(a, b); i <= Math.max(a, b); i++) selected.add(keys[i]);
+      return;
+    }
+  }
+  if (e.ctrlKey || e.metaKey) {
+    if (selected.has(k)) selected.delete(k);
+    else selected.add(k);
+    anchor = k;
+    return;
+  }
+  selected.clear();
+  selected.add(k);
+  anchor = k;
+  void open(c);
+}
+/** 행 액션의 대상 — 그 행이 선택에 들어 있으면 같은 그룹(staged 쪽)의 선택 전체, 아니면 그 행만 (VS Code 동일) */
+function targets(c: ScmChange): ScmChange[] {
+  if (!selected.has(keyOf(c))) return [c];
+  // WHY: 디렉토리 항목(중첩 저장소)은 명시적으로 그 행을 누른 경우에만 — 범위 선택에 딸려 들어가면
+  //      git add 가 안쪽 저장소를 gitlink 로 박아 버린다 (embedded repository 경고 없이)
+  return scm.changes.filter((x) => x.staged === c.staged && selected.has(keyOf(x)) && (x === c || !x.rel.endsWith('/')));
+}
+/** 그룹 전체 액션의 대상 — 디렉토리 항목(중첩 저장소)은 제외한다 (targets 와 같은 이유) */
+const bulk = (changes: ScmChange[]): ScmChange[] => changes.filter((c) => !c.rel.endsWith('/'));
+/** 변경 목록이 바뀌거나 저장소가 바뀌면 사라진 항목을 선택에서 뺀다 */
+watch(() => repo.value?.changes, (changes) => {
+  const live = new Set((changes ?? []).map(keyOf));
+  for (const k of [...selected]) if (!live.has(k)) selected.delete(k);
+});
+/** 행 열기 — 디렉토리 항목(중첩 저장소가 부모에 남기는 'vendor/nested/')은 파일이 아니라 탐색기에서 드러낸다 */
+async function open(c: ScmChange): Promise<void> {
+  if (c.rel.endsWith('/')) {
+    showViewlet('explorer');
+    await revealPath(c.path.slice(0, -1));
+    return;
+  }
+  await openChange(c);
+}
 
 // VS Code git 확장의 discard 확인 문구 — untracked 는 파일 삭제라 DELETE 로 강조한다
 const discardMessage = computed(() => {
@@ -42,20 +127,30 @@ const discardMessage = computed(() => {
 
 /** 브랜치 전환 — 라벨 아래에 브랜치 목록 메뉴 (현재 브랜치는 비활성) */
 async function pickBranch(e: MouseEvent): Promise<void> {
-  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  const r = repo.value;
+  if (!r) return;
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
   let names: string[];
   try {
-    names = await branches();
+    names = await branches(r);
   } catch (err) {
     notify('error', `Failed to list branches: ${errText(err)}`);
     return;
   }
   if (!names.length) return;
-  openContextMenu(r.left, r.bottom + 4, names.map((name) => ({
-    label: name === scm.branch ? `${name} (current)` : name,
-    enabled: name !== scm.branch,
-    run: () => void checkout(name),
+  openContextMenu(rect.left, rect.bottom + 4, names.map((name) => ({
+    label: name === r.branch ? `${name} (current)` : name,
+    enabled: name !== r.branch,
+    run: () => void checkout(r, name),
   })));
+}
+
+/** 재탐색 — 자동 탐색이 놓친 하위 저장소를 다시 찾는다. 알림은 총 개수 (파일 감시·트리 펼침으로
+ *  이미 등록된 것과 구분하지 않는다 — "새로 몇 개" 는 사용자가 기대한 수와 어긋나기 쉽다) */
+async function rescan(): Promise<void> {
+  await rescanRepos();
+  const n = scm.repos.length;
+  notify('info', n === 0 ? 'No git repositories found' : `${n} git repositor${n === 1 ? 'y' : 'ies'} found`);
 }
 
 // WHY: VS Code 는 SCM 뷰를 열면 커밋 입력에 포커스를 준다 — 레퍼런스 스크린샷의
@@ -64,54 +159,127 @@ onMounted(() => inputEl.value?.focus());
 </script>
 
 <template>
-  <div class="scm-view">
-    <section class="pane">
-      <div class="pane-header">
-        <span class="twisty codicon codicon-chevron-down" />
-        <span class="pane-title">Changes</span>
-        <div class="pane-actions">
-          <span class="action codicon codicon-check" :class="{ disabled: !canCommit }" title="Commit" @click="canCommit && commit()" />
-          <span class="action codicon codicon-refresh" title="Refresh" @click="refreshScm()" />
+  <div class="scm-view" :class="{ 'list-active': listActive }" tabindex="0" @focusin="onFocusIn" @focusout="onFocusOut">
+    <!-- 리포지토리 pane — 저장소가 둘 이상일 때만 (VS Code Source Control Repositories 뷰). 행 클릭이 아래 두 pane 의 대상을 정한다 -->
+    <section v-if="multi" class="pane repos-pane" :class="{ collapsed: collapsed.has('repos') }">
+      <div class="pane-header" @click="toggle('repos')">
+        <span class="twisty codicon" :class="twisty('repos')" />
+        <span class="pane-title">Repositories</span>
+        <div class="pane-actions" @click.stop>
+          <span class="action codicon codicon-refresh" title="Rescan Repositories" @click="rescan()" />
         </div>
       </div>
-      <div class="pane-body">
+      <div v-show="!collapsed.has('repos')" class="pane-body">
+        <div
+          v-for="r in scm.repos"
+          :key="r.path"
+          class="repo-row"
+          :class="{ selected: r === repo }"
+          :title="r.path || workbench.workspaceName"
+          @click="selectRepo(r.path)"
+        >
+          <span class="codicon codicon-repo" />
+          <span class="repo-name">{{ repoTitle(r) }}</span>
+          <span class="repo-branch">
+            <span class="codicon codicon-git-branch" />
+            <span>{{ r.branch }}{{ r.dirty ? '*' : '' }}</span>
+          </span>
+        </div>
+      </div>
+    </section>
+    <section v-if="!repo" class="pane">
+      <div class="pane-header">
+        <span class="twisty codicon codicon-chevron-down" />
+        <span class="pane-title">Source Control</span>
+        <div class="pane-actions">
+          <span class="action codicon codicon-refresh" title="Rescan Repositories" @click="rescan()" />
+        </div>
+      </div>
+      <div class="pane-body empty-note">No git repositories found in this folder.</div>
+    </section>
+    <section v-else class="pane" :class="{ collapsed: collapsed.has('changes') }">
+      <div class="pane-header" @click="toggle('changes')">
+        <span class="twisty codicon" :class="twisty('changes')" />
+        <span class="pane-title">Changes</span>
+        <span v-if="multi" class="pane-desc">{{ repoTitle(repo) }}</span>
+        <div class="pane-actions" @click.stop>
+          <span class="action codicon codicon-check" :class="{ disabled: !canCommit }" title="Commit" @click="doCommit()" />
+          <span class="action codicon codicon-refresh" title="Refresh" @click="refreshScm()" />
+          <span v-if="!multi" class="action codicon codicon-repo" title="Rescan Repositories" @click="rescan()" />
+        </div>
+      </div>
+      <div v-show="!collapsed.has('changes')" class="pane-body">
         <div class="input-row">
           <div class="scm-editor">
             <textarea
               ref="inputEl"
-              v-model="scm.commitMessage"
+              v-model="repo.commitMessage"
               rows="1"
               wrap="off"
               spellcheck="false"
-              @keydown.ctrl.enter.prevent="canCommit && commit()"
+              @keydown.ctrl.enter.prevent="doCommit()"
             />
             <!-- WHY: textarea 네이티브 placeholder 는 ellipsis 가 안 돼서 (레퍼런스는 "··· 로 잘림) 오버레이로 그린다 -->
-            <span v-if="!scm.commitMessage" class="placeholder">{{ placeholder }}</span>
+            <span v-if="!repo.commitMessage" class="placeholder">{{ placeholder }}</span>
           </div>
         </div>
         <div class="button-row">
-          <div class="commit-button" :class="{ disabled: !canCommit }" :title="canCommit ? '' : 'Stage changes to commit'" @click="canCommit && commit()">
+          <div class="commit-button" :class="{ disabled: !canCommit }" :title="canCommit ? '' : 'Stage changes to commit'" @click="doCommit()">
             <span class="codicon codicon-check" />
             <span>Commit</span>
           </div>
         </div>
         <template v-if="staged.length">
-          <div class="group-row">
-            <span class="twistie codicon codicon-chevron-down" />
+          <div class="group-row" @click="toggle('s')">
+            <span class="twistie codicon" :class="twisty('s')" />
             <span class="group-label">Staged Changes</span>
             <div class="group-actions">
-              <span class="action codicon codicon-remove" title="Unstage All Changes" @click.stop="unstage()" />
+              <span class="action codicon codicon-remove" title="Unstage All Changes" @click.stop="unstage(staged)" />
             </div>
             <span class="count-badge">{{ staged.length }}</span>
           </div>
+          <template v-if="!collapsed.has('s')">
+            <div
+              v-for="c in staged"
+              :key="'s:' + c.path"
+              class="resource-row"
+              :class="{ selected: selected.has(keyOf(c)) }"
+              :title="c.path"
+              @click="onRowClick(c, $event)"
+            >
+              <FileIcon :name="c.name" />
+              <span class="res-name">{{ c.name }}</span>
+              <span v-if="c.dir" class="res-desc">{{ c.dir }}</span>
+              <span class="letter" :style="{ color: `var(${CHANGE_COLOR[c.kind]})` }">
+                {{ CHANGE_LETTER[c.kind] }}
+              </span>
+              <div class="row-actions">
+                <span v-if="c.kind !== 'deleted'" class="action codicon codicon-go-to-file" title="Open File" @click.stop="openChangeFile(c)" />
+                <span class="action codicon codicon-remove" title="Unstage Changes" @click.stop="unstage(targets(c))" />
+              </div>
+            </div>
+          </template>
+        </template>
+        <div class="group-row" @click="toggle('u')">
+          <span class="twistie codicon" :class="twisty('u')" />
+          <span class="group-label">Changes</span>
+          <div class="group-actions">
+            <span class="action codicon codicon-discard" title="Discard All Changes" @click.stop="requestDiscard(bulk(unstaged))" />
+            <span class="action codicon codicon-add" title="Stage All Changes" @click.stop="stage(bulk(unstaged))" />
+          </div>
+          <span class="count-badge">{{ unstaged.length }}</span>
+        </div>
+        <template v-if="!collapsed.has('u')">
           <div
-            v-for="c in staged"
-            :key="'s:' + c.path"
+            v-for="c in unstaged"
+            :key="'u:' + c.path"
             class="resource-row"
+            :class="{ selected: selected.has(keyOf(c)) }"
             :title="c.path"
-            @click="openChange(c)"
+            @click="onRowClick(c, $event)"
           >
             <FileIcon :name="c.name" />
+            <!-- WHY: VS Code SCM 뷰는 파일명에 데코 색을 쓰지 않는다 (scmViewPane.ts fileDecorations colors:false) -->
             <span class="res-name">{{ c.name }}</span>
             <span v-if="c.dir" class="res-desc">{{ c.dir }}</span>
             <span class="letter" :style="{ color: `var(${CHANGE_COLOR[c.kind]})` }">
@@ -119,56 +287,29 @@ onMounted(() => inputEl.value?.focus());
             </span>
             <div class="row-actions">
               <span v-if="c.kind !== 'deleted'" class="action codicon codicon-go-to-file" title="Open File" @click.stop="openChangeFile(c)" />
-              <span class="action codicon codicon-remove" title="Unstage Changes" @click.stop="unstage([c])" />
+              <span class="action codicon codicon-discard" title="Discard Changes" @click.stop="requestDiscard(targets(c))" />
+              <span class="action codicon codicon-add" title="Stage Changes" @click.stop="stage(targets(c))" />
             </div>
           </div>
         </template>
-        <div class="group-row">
-          <span class="twistie codicon codicon-chevron-down" />
-          <span class="group-label">Changes</span>
-          <div class="group-actions">
-            <span class="action codicon codicon-discard" title="Discard All Changes" @click.stop="requestDiscard()" />
-            <span class="action codicon codicon-add" title="Stage All Changes" @click.stop="stage()" />
-          </div>
-          <span class="count-badge">{{ unstaged.length }}</span>
-        </div>
-        <div
-          v-for="c in unstaged"
-          :key="'u:' + c.path"
-          class="resource-row"
-          :title="c.path"
-          @click="openChange(c)"
-        >
-          <FileIcon :name="c.name" />
-          <!-- WHY: VS Code SCM 뷰는 파일명에 데코 색을 쓰지 않는다 (scmViewPane.ts fileDecorations colors:false) -->
-          <span class="res-name">{{ c.name }}</span>
-          <span v-if="c.dir" class="res-desc">{{ c.dir }}</span>
-          <span class="letter" :style="{ color: `var(${CHANGE_COLOR[c.kind]})` }">
-            {{ CHANGE_LETTER[c.kind] }}
-          </span>
-          <div class="row-actions">
-            <span v-if="c.kind !== 'deleted'" class="action codicon codicon-go-to-file" title="Open File" @click.stop="openChangeFile(c)" />
-            <span class="action codicon codicon-discard" title="Discard Changes" @click.stop="requestDiscard([c])" />
-            <span class="action codicon codicon-add" title="Stage Changes" @click.stop="stage([c])" />
-          </div>
-        </div>
       </div>
     </section>
-    <section class="pane graph-pane">
-      <div class="pane-header">
-        <span class="twisty codicon codicon-chevron-down" />
+    <section v-if="repo" class="pane graph-pane" :class="{ collapsed: collapsed.has('graph') }">
+      <div class="pane-header" @click="toggle('graph')">
+        <span class="twisty codicon" :class="twisty('graph')" />
         <span class="pane-title">Graph</span>
-        <div class="pane-actions">
+        <span v-if="multi" class="pane-desc">{{ repoTitle(repo) }}</span>
+        <div class="pane-actions" @click.stop>
           <span class="action ref-picker" title="Checkout Branch..." @click="pickBranch">
             <span class="codicon codicon-git-branch" />
-            <span class="ref-picker-label">{{ scm.branch || '(no branch)' }}</span>
+            <span class="ref-picker-label">{{ repo.branch || '(no branch)' }}</span>
           </span>
           <span class="action codicon codicon-refresh" title="Refresh" @click="refreshScm()" />
         </div>
       </div>
-      <div class="pane-body">
+      <div v-show="!collapsed.has('graph')" class="pane-body">
         <div
-          v-for="(item, i) in scm.log"
+          v-for="(item, i) in repo.log"
           :key="item.hash"
           class="history-row"
           :class="{ current: i === 0 }"
@@ -177,13 +318,13 @@ onMounted(() => inputEl.value?.focus());
           <svg class="graph" width="22" height="22" viewBox="0 0 22 22">
             <line v-if="i > 0" x1="11" y1="0" x2="11" y2="7" />
             <circle cx="11" cy="11" r="4" />
-            <line v-if="i < scm.log.length - 1" x1="11" y1="15" x2="11" y2="22" />
+            <line v-if="i < repo.log.length - 1" x1="11" y1="15" x2="11" y2="22" />
           </svg>
           <span class="hist-name">{{ item.subject }}</span>
           <span class="hist-desc">{{ item.author }}, {{ item.date }}</span>
-          <span v-if="i === 0 && scm.branch" class="ref-pill">
+          <span v-if="i === 0 && repo.branch" class="ref-pill">
             <span class="codicon codicon-target" />
-            <span class="ref-name">{{ scm.branch }}</span>
+            <span class="ref-name">{{ repo.branch }}</span>
           </span>
         </div>
       </div>
@@ -214,6 +355,69 @@ onMounted(() => inputEl.value?.focus());
   display: flex;
   flex-direction: column;
 }
+/* 리포지토리 pane 은 내용 높이(상한 30%)만 — 변경·Graph 가 나머지를 나눈다. 접힌 pane 은 헤더만 */
+.repos-pane {
+  flex: 0 0 auto;
+  max-height: 30%;
+}
+.pane.collapsed {
+  flex: 0 0 auto;
+}
+/* 저장소 행 — VS Code scm repositories 뷰: repo 아이콘 · 이름 · 오른쪽 브랜치 (dirty 는 *) */
+.repo-row {
+  display: flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px 0 20px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.repo-row:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+.repo-row.selected {
+  background: var(--vscode-list-inactiveSelectionBackground);
+}
+.scm-view.list-active .repo-row.selected {
+  background: var(--vscode-list-activeSelectionBackground);
+  color: var(--vscode-list-activeSelectionForeground);
+}
+.repo-row > .codicon {
+  font-size: 16px;
+  margin-right: 6px;
+  color: var(--vscode-icon-foreground);
+}
+.repo-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.repo-branch {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 8px;
+  opacity: 0.8;
+}
+.repo-branch .codicon {
+  font-size: 14px;
+}
+.scm-view {
+  outline: none;
+}
+/* 선택 — 리스트 포커스 중엔 활성색, 커밋 입력 등 다른 곳에 있으면 비활성색 (VS Code list) */
+.resource-row.selected {
+  background: var(--vscode-list-inactiveSelectionBackground);
+}
+.scm-view.list-active .resource-row.selected {
+  background: var(--vscode-list-activeSelectionBackground);
+  color: var(--vscode-list-activeSelectionForeground);
+}
+.scm-view:has(.multi-repo) .graph-pane {
+  flex: 1 0 auto;
+  min-height: 140px;
+}
 
 /* ── pane 헤더 (paneview.css: 22px / 11px bold uppercase) ── */
 .pane-header {
@@ -241,6 +445,20 @@ onMounted(() => inputEl.value?.focus());
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* 저장소 pane 의 설명 열 (다중 저장소: 브랜치명 / Graph: 저장소명) — VS Code pane 헤더 description */
+.pane-desc {
+  margin-left: 6px;
+  font-weight: 400;
+  text-transform: none;
+  opacity: 0.7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.empty-note {
+  padding: 8px 20px;
+  color: var(--vscode-descriptionForeground);
 }
 .pane-actions {
   margin-left: auto;

@@ -308,7 +308,12 @@ export class MockBackend implements ThinBackend {
     return delay(results);
   }
 
-  gitStatus(): Promise<GitStatus> {
+  // ponytail: mock 의 저장소는 루트 하나 — repo 인자는 받기만 하고 무시한다
+  gitRepos(): Promise<string[]> {
+    return delay(['']);
+  }
+
+  gitStatus(_repo: string): Promise<GitStatus> {
     // 실제 git 처럼 세 스냅샷을 비교한다 — HEAD vs INDEX 가 staged, INDEX vs FILES 가 unstaged
     const changes: GitStatus['changes'] = [];
     const diff = (from: Record<string, string>, to: Record<string, string>, staged: boolean) => {
@@ -326,18 +331,18 @@ export class MockBackend implements ThinBackend {
     return delay({ branch: 'main', head: `mock-${headSerial}`, dirty: changes.length > 0, changes });
   }
 
-  gitOriginalContent(path: string): Promise<string> {
+  gitOriginalContent(_repo: string, path: string): Promise<string> {
     return delay(HEAD[path] ?? '');
   }
 
-  gitCommit(message: string): Promise<void> {
+  gitCommit(_repo: string, message: string): Promise<void> {
     HEAD = { ...INDEX };
     headSerial += 1;
     MOCK_LOG.unshift({ hash: `mock-${headSerial}`, subject: message, author: 'you', date: 'now' });
     return delay(undefined);
   }
 
-  gitStage(paths: string[]): Promise<void> {
+  gitStage(_repo: string, paths: string[]): Promise<void> {
     for (const p of paths) {
       if (p in FILES) INDEX[p] = FILES[p];
       else delete INDEX[p];
@@ -345,7 +350,7 @@ export class MockBackend implements ThinBackend {
     return delay(undefined);
   }
 
-  gitUnstage(paths: string[]): Promise<void> {
+  gitUnstage(_repo: string, paths: string[]): Promise<void> {
     for (const p of paths) {
       if (p in HEAD) INDEX[p] = HEAD[p];
       else delete INDEX[p];
@@ -353,7 +358,7 @@ export class MockBackend implements ThinBackend {
     return delay(undefined);
   }
 
-  gitDiscard(paths: string[], untracked: string[]): Promise<void> {
+  gitDiscard(_repo: string, paths: string[], untracked: string[]): Promise<void> {
     for (const p of paths) {
       if (p in INDEX) FILES[p] = INDEX[p];
       else delete FILES[p];
@@ -362,15 +367,15 @@ export class MockBackend implements ThinBackend {
     return delay(undefined);
   }
 
-  gitLog(limit: number): Promise<GitLogItem[]> {
+  gitLog(_repo: string, limit: number): Promise<GitLogItem[]> {
     return delay(MOCK_LOG.slice(0, limit));
   }
 
-  gitBranches(): Promise<string[]> {
+  gitBranches(_repo: string): Promise<string[]> {
     return delay(['main', 'feature/mock']);
   }
 
-  gitCheckout(_branch: string): Promise<void> {
+  gitCheckout(_repo: string, _branch: string): Promise<void> {
     // ponytail: mock 의 브랜치 전환은 no-op — 목록(gitBranches)은 둘을 돌려주지만 파일 상태는 하나뿐
     return delay(undefined);
   }

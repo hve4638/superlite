@@ -73,6 +73,12 @@ assert.strictEqual(km.lineText.slice(ks, ke).toLowerCase(), 'seam', 'search utf1
 const none = await call('search', { query: 'zzz-no-such-' + 'string-zzz', opts: {} });
 assert.deepStrictEqual(none, [], 'search empty');
 
+// 와이어 v13: 저장소 자동 탐색 — 서빙 루트가 repo 루트이므로 '' 가 들어 있다. repo 인자 생략은 루트
+const repos = await call('gitRepos');
+assert.ok(repos.includes(''), 'gitRepos root');
+const stRepo = await call('gitStatus', { repo: '' });
+assert.ok(typeof stRepo.branch === 'string', 'gitStatus repo=""');
+await assert.rejects(call('gitStatus', { repo: '../x' }), /이탈/, 'gitStatus repo safe_join');
 const st = await call('gitStatus');
 assert.ok(typeof st.branch === 'string' && Array.isArray(st.changes), 'gitStatus');
 assert.match(st.head, /^([0-9a-f]{40}|[0-9a-f]{64})$/, 'gitStatus head 해시'); // sha1 | sha256 repo

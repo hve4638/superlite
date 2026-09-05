@@ -11,7 +11,7 @@ port ThinBackend {
     role: 워크스페이스 이름·루트 경로
   }
   fn readDir(path) -> DirEntry[] {
-    role: 디렉토리 1층 나열 (트리 lazy 로드 단위). files.exclude 기본값(.git 등 VCS 메타)은 숨긴다 — node_modules 는 보인다
+    role: 디렉토리 1층 나열 (트리 lazy 로드 단위). files.exclude 기본값(.git 등 VCS 메타)은 숨긴다 — node_modules 는 보인다. 자식 .git 을 가진 디렉토리 항목은 repo=true (와이어 v13) — 트리 펼침이 곧 하위 저장소 인식
   }
   fn readFile(path, maxBytes?, encoding?, offset?) -> FileContent {
     role: 파일 내용 + 그 시점 디스크 etag. 크기 초과(maxBytes 또는 데몬 기본 상한 50MB)·이진/비 UTF-8 은 에러가 아니라 unopenable(사유 kind·실측 size)로 반환 — 탭은 열리고 편집기 자리에 안내 화면이 뜬다 (etag 는 이때도 온다 — orphan 재검증·재로드용). 실존하지 않는 경로 등 실제 실패만 에러. maxBytes 는 undo 캡처 등 호출측 상한 (초과 파일을 읽어 나르지 않는다). encoding='base64' 면 UTF-8 검증 없이 바이트를 base64 content 로 나른다 (이미지 뷰어 등 — writeFile 이진 통로와 대칭, binary unopenable 은 안 생기고 크기 상한만 남는다). offset 이 있으면(base64 전용, 와이어 v11) 범위 읽기 — 크기 상한 없이 offset 부터 maxBytes 만큼, EOF 넘어가면 짧게 (hex 뷰어 청크). 루트 상대 외에 절대 경로도 허용 — 워크스페이스 밖 파일 열기 (OS 드롭, VS Code 파리티)
@@ -43,31 +43,34 @@ port ThinBackend {
   fn delete(path) {
     role: 파일·디렉토리 삭제 (디렉토리는 재귀, 휴지통 없음 — 안전장치는 프론트 confirm, undo 는 파일 한정)
   }
-  fn gitStatus() -> GitStatus {
-    role: 브랜치 + HEAD 커밋 해시 + 변경 목록 (항목마다 staged 플래그 — 한 파일이 인덱스·워킹트리 양쪽에 변경이 있으면 항목 둘). head 는 diff original 캐시 무효화 키 — 앱 밖 커밋(터미널 git)도 잡는다
+  fn gitRepos() -> repo[] {
+    role: 워크스페이스 안 git 저장소 자동 탐색 (와이어 v13) — 루트 포함, 루트 상대 디렉토리 목록(루트는 ''). 깊이·개수 상한은 데몬 몫 — 더 깊은 저장소는 readDir 의 repo 표식(트리 펼침)으로 닿는다. 이하 git* 의 repo 는 이 목록의 원소, path 계열 인자·결과는 그 저장소 기준 상대 경로
   }
-  fn gitOriginalContent(path) -> content {
+  fn gitStatus(repo) -> GitStatus {
+    role: 브랜치 + HEAD 커밋 해시 + 변경 목록 (항목마다 staged 플래그 — 한 파일이 인덱스·워킹트리 양쪽에 변경이 있으면 항목 둘). head 는 diff original 캐시 무효화 키 — 앱 밖 커밋(터미널 git)도 잡는다. 저장소가 아니면 branch·head 둘 다 '' (unborn 은 branch 가 있다)
+  }
+  fn gitOriginalContent(repo, path) -> content {
     role: diff 의 original 쪽 — HEAD 시점 내용
   }
-  fn gitCommit(message) {
+  fn gitCommit(repo, message) {
     role: 인덱스(staged)만 커밋 — 전체 커밋은 호출측이 gitStage 로 먼저 올린다
   }
-  fn gitStage(paths) {
+  fn gitStage(repo, paths) {
     role: 파일들을 인덱스에 올린다 (삭제도 스테이징)
   }
-  fn gitUnstage(paths) {
+  fn gitUnstage(repo, paths) {
     role: 파일들을 인덱스에서 내린다 (워킹트리 유지)
   }
-  fn gitDiscard(paths, untracked) {
+  fn gitDiscard(repo, paths, untracked) {
     role: 워킹트리 변경 되돌리기 — paths 는 인덱스 내용으로 복원, untracked 는 파일 삭제. 파괴적 — 확인은 호출측
   }
-  fn gitLog(limit) -> GitLogItem[] {
+  fn gitLog(repo, limit) -> GitLogItem[] {
     role: HEAD 부터 최근 커밋 (해시·제목·작성자·상대 시각). unborn/비 git 은 빈 배열
   }
-  fn gitBranches() -> name[] {
+  fn gitBranches(repo) -> name[] {
     role: 로컬 브랜치 이름 목록
   }
-  fn gitCheckout(branch) {
+  fn gitCheckout(repo, branch) {
     role: 브랜치 전환 — 충돌 등 실패는 reject
   }
   fn createTerminal(cols, rows) -> TerminalSession {

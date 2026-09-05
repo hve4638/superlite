@@ -1,20 +1,36 @@
 import { ctx, viewOf } from './ctx'
 import { createEditors } from './editors'
 import { notify } from './notifications'
-import { GitChangeKind, GitLogItem, ThinBackend } from '../backend/types'
+import { DirEntry, GitChangeKind, GitLogItem, ThinBackend } from '../backend/types'
 
-role: SCM 뷰 상태 — git 변경 목록(staged/unstaged 분리), 스테이징·discard·커밋, 최근 커밋 로그, 브랜치 전환, 트리·탭 장식(색/문자). 세션별 팩토리(createScm) + 활성 세션 전달 shim
+role: SCM 뷰 상태 — 저장소 목록(루트·하위·중첩, 각각 ScmRepo)·선택 저장소와 저장소별 git 변경 목록(staged/unstaged 분리), 스테이징·discard·커밋, 최근 커밋 로그, 브랜치 전환, 트리·탭 장식(색/문자). 저장소는 자동 탐색(gitRepos) + 트리 펼침(readDir repo 표식) + 재탐색의 합집합. 변경 항목은 워크스페이스 경로(path)와 저장소 상대 경로(rel)를 함께 가진다. 세션별 팩토리(createScm) + 활성 세션 전달 shim
 
 export type ScmChange
+export type ScmRepo
 export val scm
 export val CHANGE_LETTER
 export val CHANGE_COLOR
 
 export fn createScm(backend, editorsM) {
-  role: 세션별 SCM 모듈 생성 — 변경 클릭이 여는 diff·파일이 같은 세션의 editors 인스턴스로 가도록 묶는다
+  role: 세션별 SCM 모듈 생성 — 변경 클릭이 여는 diff·파일이 같은 세션의 editors 인스턴스로 가도록 묶는다. noteDirEntries: 트리 나열 결과의 repo 표식으로 펼쳐서 보인 저장소를 즉시 등록하고 그 저장소만 상태를 받는다 (files.onDirLoaded 구독자)
 }
 export fn refreshScm() {
-  role: gitStatus 재조회로 변경 목록·head 해시 갱신 — head 변화가 diff original 캐시를 무효화한다. head·브랜치가 움직였을 때만 gitLog 도 다시 받는다 (파일 저장마다 로그를 나르지 않는다). 겹친 조회는 마지막 발행분만 반영 (역순 완료가 head 를 과거로 되돌리지 않게)
+  role: 전 저장소 gitStatus 재조회로 변경 목록·head 해시 갱신 (첫 호출은 gitRepos 자동 탐색 선행) — head 변화가 diff original 캐시를 무효화한다. head·브랜치가 움직였을 때만 gitLog 도 다시 받는다 (파일 저장마다 로그를 나르지 않는다). 겹친 조회는 마지막 발행분만 반영 (역순 완료가 head 를 과거로 되돌리지 않게). 저장소가 아니게 된 항목(branch·head 둘 다 '')은 목록에서 뺀다. 집계(scm.changes 평탄 목록·scm.head 결합 키)를 다시 만든다
+}
+export fn rescanRepos() {
+  role: 재탐색 — 자동 탐색이 놓친 저장소를 gitRepos 로 다시 찾아 합집합, 이후 전체 재조회
+}
+export fn repoOf(path) -> ScmRepo? {
+  role: 워크스페이스 경로가 속한 저장소 — 가장 깊은 저장소 경로가 이긴다 (중첩 저장소)
+}
+export fn relPath(repo, path) -> rel {
+  role: 워크스페이스 경로 → 저장소 상대 경로
+}
+export fn activeRepo() -> ScmRepo? {
+  role: 선택된 저장소(scm.selected) — SCM 뷰의 변경·Graph pane 과 상태바가 이 하나를 보인다. 선택이 없거나 사라졌으면 첫째
+}
+export fn selectRepo(path) {
+  role: 리포지토리 목록 클릭의 명시적 선택. 활성 편집기 파일이 바뀌면 그 파일의 저장소가 자동 선택된다 (VS Code 자동 모드, createScm 안의 watch)
 }
 export fn openChange(change) {
   role: 변경 클릭 — untracked/added 는 파일로, 삭제는 HEAD 내용 읽기 전용 보기, 나머지는 diff 로 연다
@@ -22,14 +38,14 @@ export fn openChange(change) {
 export fn openChangeFile(change) {
   role: 행의 Open File 액션 — diff 가 아니라 파일 자체를 연다
 }
-export fn commit() {
-  role: staged 항목만 커밋 — staged 가 없으면 no-op (ScmView 가 버튼·Ctrl+Enter 를 비활성화). 후 상태 재조회, 실패는 notify
+export fn commit(repo) {
+  role: 저장소의 staged 항목만 커밋 — staged 가 없으면 no-op (ScmView 가 버튼·Ctrl+Enter 를 비활성화). 후 상태 재조회, 실패는 notify
 }
 export fn stage(changes?) {
-  role: 파일별(인자) 또는 unstaged 전체 스테이징 — 실패 notify 후 재조회
+  role: 파일별(인자) 또는 전 저장소 unstaged 전체 스테이징 — 저장소별로 묶어 호출 — 실패 notify 후 재조회
 }
 export fn unstage(changes?) {
-  role: 파일별(인자) 또는 staged 전체 언스테이징
+  role: 파일별(인자) 또는 전 저장소 staged 전체 — 저장소별로 묶어 호출 언스테이징
 }
 export fn requestDiscard(changes?) {
   role: discard 확인 대기 상태(scm.discardConfirm) 진입 — 파괴적이라 바로 실행하지 않는다, 대화상자는 ScmView
@@ -40,12 +56,12 @@ export fn confirmDiscard() {
 export fn cancelDiscard() {
   role: discard 확인 취소
 }
-export fn branches() {
-  role: 로컬 브랜치 목록 (브랜치 메뉴 열 때마다 조회)
+export fn branches(repo) {
+  role: 저장소의 로컬 브랜치 목록 (브랜치 메뉴 열 때마다 조회)
 }
-export fn checkout(branch) {
+export fn checkout(repo, branch) {
   role: 브랜치 전환 — 현재 브랜치면 no-op, 실패(충돌 등)는 notify
 }
 export fn decorationFor(path, isDir) -> Decoration? {
-  role: 탐색기·탭에 붙는 git 장식 (디렉토리는 자손 변경 전파)
+  role: 탐색기·탭에 붙는 git 장식 (디렉토리는 자손 변경 전파) — 전 저장소 집계(scm.changes) 기준
 }

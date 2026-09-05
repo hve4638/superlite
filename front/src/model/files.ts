@@ -39,16 +39,27 @@ export function createFiles(backend: ThinBackend) {
     slowDirs: new Set<string>(),
   });
 
+  /** 디렉토리 나열 결과 구독 — SCM 이 repo 표식(와이어 v13)으로 하위 저장소를 즉시 등록한다 */
+  let dirLoaded: ((entries: DirEntry[]) => void) | null = null;
+  function onDirLoaded(cb: (entries: DirEntry[]) => void): void {
+    dirLoaded = cb;
+  }
+  async function readDir(path: string): Promise<DirEntry[]> {
+    const entries = sortEntries(await backend.readDir(path));
+    dirLoaded?.(entries);
+    return entries;
+  }
+
   async function loadChildren(node: TreeNode): Promise<void> {
     if (node.children) return;
-    const entries = sortEntries(await backend.readDir(node.path));
+    const entries = await readDir(node.path);
     node.children = entries.map((e) => ({
       name: e.name, path: e.path, kind: e.kind, depth: node.depth + 1, children: null,
     }));
   }
 
   async function initFiles(): Promise<void> {
-    const entries = sortEntries(await backend.readDir(''));
+    const entries = await readDir('');
     files.root = entries.map((e) => ({ name: e.name, path: e.path, kind: e.kind, depth: 0, children: null }));
     files.loading = false;
   }
@@ -114,7 +125,7 @@ export function createFiles(backend: ThinBackend) {
     if (path !== '' && (!node || node.kind !== 'directory' || !node.children)) return;
     let entries: DirEntry[];
     try {
-      entries = sortEntries(await backend.readDir(path));
+      entries = await readDir(path);
     } catch {
       return; // 디렉터리가 사라진 경우 등 — 부모 리프레시가 노드를 지운다
     }
@@ -190,7 +201,7 @@ export function createFiles(backend: ThinBackend) {
   }
 
   return {
-    files, initFiles, toggleDir, refreshDir, loadedDirPaths,
+    files, initFiles, toggleDir, refreshDir, loadedDirPaths, onDirLoaded,
     quickOpen, invalidateQuickOpen, refreshTree, collapseAll, visibleNodes, revealPath,
   };
 }

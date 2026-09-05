@@ -397,32 +397,35 @@ export class WsBackend implements ThinBackend {
   search(query: string, opts?: { caseSensitive?: boolean }): Promise<FileSearchResult[]> {
     return this.call('search', { query, opts: opts ?? {} });
   }
-  gitStatus(): Promise<GitStatus> {
-    return this.call('gitStatus');
+  gitRepos(): Promise<string[]> {
+    return this.call('gitRepos');
   }
-  gitOriginalContent(path: string): Promise<string> {
-    return this.call('gitOriginalContent', { path });
+  gitStatus(repo: string): Promise<GitStatus> {
+    return this.call('gitStatus', { repo });
   }
-  gitCommit(message: string): Promise<void> {
-    return this.call('gitCommit', { message });
+  gitOriginalContent(repo: string, path: string): Promise<string> {
+    return this.call('gitOriginalContent', { repo, path });
   }
-  gitStage(paths: string[]): Promise<void> {
-    return this.call('gitStage', { paths });
+  gitCommit(repo: string, message: string): Promise<void> {
+    return this.call('gitCommit', { repo, message });
   }
-  gitUnstage(paths: string[]): Promise<void> {
-    return this.call('gitUnstage', { paths });
+  gitStage(repo: string, paths: string[]): Promise<void> {
+    return this.call('gitStage', { repo, paths });
   }
-  gitDiscard(paths: string[], untracked: string[]): Promise<void> {
-    return this.call('gitDiscard', { paths, untracked });
+  gitUnstage(repo: string, paths: string[]): Promise<void> {
+    return this.call('gitUnstage', { repo, paths });
   }
-  gitLog(limit: number): Promise<GitLogItem[]> {
-    return this.call('gitLog', { limit });
+  gitDiscard(repo: string, paths: string[], untracked: string[]): Promise<void> {
+    return this.call('gitDiscard', { repo, paths, untracked });
   }
-  gitBranches(): Promise<string[]> {
-    return this.call('gitBranches');
+  gitLog(repo: string, limit: number): Promise<GitLogItem[]> {
+    return this.call('gitLog', { repo, limit });
   }
-  gitCheckout(branch: string): Promise<void> {
-    return this.call('gitCheckout', { branch });
+  gitBranches(repo: string): Promise<string[]> {
+    return this.call('gitBranches', { repo });
+  }
+  gitCheckout(repo: string, branch: string): Promise<void> {
+    return this.call('gitCheckout', { repo, branch });
   }
 
   onFsChanges(cb: (changes: FsChange[], overflow: boolean) => void): void {

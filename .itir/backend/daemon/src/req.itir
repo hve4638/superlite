@@ -1,7 +1,7 @@
 // crate::err(main.rs) 참조 — crate:: 는 crate 루트(main.rs 디렉토리) 좌표 '.' 로 정규화된다
 import { err, wire_rel } from '.'
 
-role: RPC 요청 처리 — fs 읽기/쓰기·빠른 열기 검색(quickOpen, 와이어 v12 — 세션 캐시 위 패턴 검색)(etag 낙관적 충돌 검사, readFile/writeFile 은 encoding=base64 이진 읽기/쓰기 겸용 — base64 읽기는 UTF-8 검증을 건너뛰고 크기 상한만 공유. offset 이 오면(와이어 v11, base64 전용) 범위 읽기 — 상한을 타지 않고 offset 부터 maxBytes 만큼, hex 뷰어 청크)·stat(내용 없는 경량 etag + size, v11)·생성/이름변경/삭제, rg 검색, git 상태(staged/unstaged 분리)·스테이징·discard·커밋·로그·브랜치 (와이어 v8). readFile 의 크기 초과·이진(비 UTF-8)은 에러가 아니라 구조화된 unopenable 응답 — 프론트가 탭을 열고 안내 화면을 띄운다. readFile 대형 응답(4KB 이상)은 JSON 이 아니라 바이너리 payload(ReadOut::Payload, 와이어 v6)로 나간다 — 텍스트는 deflate-raw 압축, base64 요청분은 부풀림 없는 원본 바이트 (프레임 조립은 main.rs). 경로는 safe_join 관문 — 단 파일 단건(readFile/stat/writeFile)은 file_path 를 거쳐 절대 경로도 허용한다 (워크스페이스 밖 파일 열기, VS Code 파리티). excludes 는 VS Code 기본값 하드코딩 (설정 시스템 없음)
+role: RPC 요청 처리 — fs 읽기/쓰기·빠른 열기 검색(quickOpen, 와이어 v12 — 세션 캐시 위 패턴 검색)(etag 낙관적 충돌 검사, readFile/writeFile 은 encoding=base64 이진 읽기/쓰기 겸용 — base64 읽기는 UTF-8 검증을 건너뛰고 크기 상한만 공유. offset 이 오면(와이어 v11, base64 전용) 범위 읽기 — 상한을 타지 않고 offset 부터 maxBytes 만큼, hex 뷰어 청크)·stat(내용 없는 경량 etag + size, v11)·생성/이름변경/삭제, rg 검색, git 상태(staged/unstaged 분리)·스테이징·discard·커밋·로그·브랜치 (와이어 v8) — 전부 repo 파라미터(루트 상대 디렉토리, 와이어 v13)로 하위·중첩 저장소를 대상으로 할 수 있고, gitRepos 가 저장소를 자동 탐색하며 readDir 은 자식 .git 을 가진 디렉토리에 repo 표식을 단다. readFile 의 크기 초과·이진(비 UTF-8)은 에러가 아니라 구조화된 unopenable 응답 — 프론트가 탭을 열고 안내 화면을 띄운다. readFile 대형 응답(4KB 이상)은 JSON 이 아니라 바이너리 payload(ReadOut::Payload, 와이어 v6)로 나간다 — 텍스트는 deflate-raw 압축, base64 요청분은 부풀림 없는 원본 바이트 (프레임 조립은 main.rs). 경로는 safe_join 관문 — 단 파일 단건(readFile/stat/writeFile)은 file_path 를 거쳐 절대 경로도 허용한다 (워크스페이스 밖 파일 열기, VS Code 파리티). excludes 는 VS Code 기본값 하드코딩 (설정 시스템 없음)
 
 // 파일 시스템 락 — 쓰기 계열 RPC(write/create/rename/delete)의 직렬화(etag 검사-쓰기 원자성의 근거)와 readFile·stat 의 stat→read 정합. 읽은 뒤 인코딩(deflate·base64)은 락 밖
 val FS_LOCK
@@ -35,6 +35,18 @@ fn file_etag() {
 }
 fn search() {
   role: rg --json 파싱 — 바이트 오프셋을 UTF-16 코드유닛으로 변환 (프론트 slice 좌표계)
+}
+fn git_dir(root, p) -> dir {
+  role: git 계열 RPC 의 작업 디렉토리 — repo 파라미터(와이어 v13, 루트 상대, 없거나 '' 면 루트)를 safe_join 으로 해석. 경로 파라미터는 이 디렉토리 기준
+}
+fn is_repo(dir) -> bool {
+  role: .git 존재 — 디렉토리든 파일(worktree·서브모듈의 gitdir 포인터)이든 저장소
+}
+// 저장소 자동 탐색 깊이(루트=0, 2 까지)·개수 상한(20) — VS Code git.repositoryScanMaxDepth 기본(1)보다 한 단계 넓다. 초과분·더 깊은 저장소는 readDir repo 표식(트리 펼침)으로만 닿는다
+val REPO_SCAN_DEPTH
+val REPO_SCAN_MAX
+fn scan_repos(root) -> repos {
+  role: 하위·중첩 저장소 탐색 — 루트 포함, dot 디렉토리·node_modules·bower_components 는 안 내려가고 저장소 안쪽은 계속 내려간다(중첩), 심링크 미추적. 블로킹 풀
 }
 fn git_status() {
   role: porcelain v2 -z -uall(NUL 구분, untracked 는 파일 단위) 파싱 — 경로 quote 없음, XY 를 인덱스(X, staged)·워킹트리(Y, unstaged) 항목으로 분리(둘 다 있으면 항목 둘, rename/copy 는 added), rename 은 새 경로만(원경로 토큰 소비), branch.oid → head (unborn 은 빈 문자열)

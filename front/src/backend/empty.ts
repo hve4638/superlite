@@ -45,6 +45,9 @@ export class EmptyBackend implements ThinBackend {
   search(): Promise<FileSearchResult[]> {
     return Promise.resolve([]);
   }
+  gitRepos(): Promise<string[]> {
+    return Promise.resolve([]);
+  }
   gitStatus(): Promise<GitStatus> {
     return Promise.resolve({ branch: '', head: '', dirty: false, changes: [] });
   }

@@ -52,6 +52,7 @@ export function createSessionCtx(backend: ThinBackend, browseOnly = false): Sess
   const files = createFiles(backend);
   const editors = createEditors(backend, isActive);
   const scm = createScm(backend, editors);
+  files.onDirLoaded(scm.noteDirEntries);
   const search = createSearch(backend);
   const workbench = createWorkbench(backend);
   const terminals = createTerminals(backend, workbench);

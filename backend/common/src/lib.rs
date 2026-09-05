@@ -45,7 +45,10 @@ pub fn socket_path() -> PathBuf {
 ///    들고 프론트는 패턴별 상위 결과만 받는다 (VS Code 방식). 종전엔 init 이 목록 전체(홈
 ///    디렉터리 5만 파일 4MB)를 날라 저속 링크에서 뒤따르는 readDir 응답을 수 초 막았다.
 ///    구버전 데몬은 quickOpen 을 모르는 메서드로 에러 응답해 Ctrl+P 가 비어 보인다.
-const WIRE_VERSION: u32 = 12;
+/// 13: gitRepos(저장소 자동 탐색) + readDir 디렉토리 항목 repo 표식 + git* 전부 repo 파라미터
+///    (루트 상대 디렉토리, 생략은 루트). 하위 폴더·중첩 저장소를 SCM 이 저장소별로 다룬다.
+///    구버전 데몬은 gitRepos 를 모르는 메서드로 에러 응답해 SCM 뷰가 비어 보인다.
+const WIRE_VERSION: u32 = 13;
 
 /// 0700 전용 디렉터리를 만들어 그 안에 소켓을 둔다.
 #[cfg(unix)]

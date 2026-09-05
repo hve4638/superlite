@@ -13,7 +13,7 @@ import cssWorker from 'monaco-editor/languages/features/css/css.worker?worker';
 import htmlWorker from 'monaco-editor/languages/features/html/html.worker?worker';
 import { editors, languageOf, setApplyExternalEdit, setDisposeModels, updateContent } from '../../model/editors';
 import { backend } from '../../model/host';
-import { scm } from '../../model/scm';
+import { repoOf, relPath } from '../../model/scm';
 import { setBeforeSessionSwitch } from '../../model/sessions';
 import { EDITOR_FONT_SIZE, MONO_FONT_FAMILY } from '../../theme/fonts';
 
@@ -261,13 +261,15 @@ setBeforeSessionSwitch(() => {
   }
 });
 
-/** diff original(HEAD 시점) 모델 — HEAD 해시(scm.head)가 바뀌면 무효화되는 버전 키 캐시.
+/** diff original(HEAD 시점) 모델 — 소속 저장소의 HEAD 해시가 바뀌면 무효화되는 버전 키 캐시.
  *  이전 버전 모델은 살아 있는 diff 에디터에 물려 있을 수 있어 dispose 하지 않는다
  *  (커밋 횟수만큼의 소규모 누수 — mock 규모에서 무시 가능). */
 const originals = new Map<string, { version: string; model: monaco.editor.ITextModel }>();
 
 export async function originalModelFor(path: string): Promise<monaco.editor.ITextModel> {
-  const version = scm.head;
+  // 중첩 저장소면 가장 깊은 저장소가 파일의 주인이다 — 그 저장소 기준 상대 경로로 HEAD 내용을 읽는다
+  const repo = repoOf(path);
+  const version = repo?.head ?? '';
   const cached = originals.get(path);
   // '' (비 git·일시 조회 실패)는 내용을 식별하지 못한다 — 캐시·URI 재사용 불가, 매번 다시 읽는다
   if (cached && version !== '' && cached.version === version) return cached.model;
@@ -275,10 +277,10 @@ export async function originalModelFor(path: string): Promise<monaco.editor.ITex
   const uri = monaco.Uri.parse(`git-original://v${version}/${path}`);
   let model = version === '' ? undefined : (monaco.editor.getModel(uri) ?? undefined);
   if (!model) {
-    const content = await backend.gitOriginalContent(path);
+    const content = repo ? await backend.gitOriginalContent(repo.path, relPath(repo, path)) : '';
     // WHY: 왕복 중 HEAD 가 움직였으면 이 내용이 어느 해시의 것인지 불명 — (hash,path)=내용
     //      불변식을 지키기 위해 새 head 로 다시 시도한다
-    if (scm.head !== version) return originalModelFor(path);
+    if ((repoOf(path)?.head ?? '') !== version) return originalModelFor(path);
     model = monaco.editor.getModel(uri) ?? undefined; // WHY: await 중 동시 호출이 먼저 만들었을 수 있다
     if (model) {
       if (version === '') model.setValue(content); // '' URI 는 과거 '' 시점의 내용일 수 있다

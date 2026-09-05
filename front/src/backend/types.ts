@@ -18,6 +18,8 @@ export interface DirEntry {
   /** 루트 기준 상대 경로 (구분자 '/') */
   path: string;
   kind: 'file' | 'directory';
+  /** 디렉토리가 git 저장소 루트(.git 보유)면 true (와이어 v13) — 트리 펼침이 곧 하위 저장소 인식 */
+  repo?: boolean;
 }
 
 export interface SearchMatch {
@@ -161,23 +163,30 @@ export interface ThinBackend {
   browseDir?(path: string): Promise<string[]>;
   /** 단순 부분 문자열 검색. 대소문자 무시 여부는 옵션. */
   search(query: string, opts?: { caseSensitive?: boolean }): Promise<FileSearchResult[]>;
-  gitStatus(): Promise<GitStatus>;
+  /**
+   * 워크스페이스 안의 git 저장소 자동 탐색 (와이어 v13) — 루트 포함, 루트 상대 디렉토리 목록
+   * (루트는 ''). 깊이·개수 상한은 데몬 몫 — 더 깊은 저장소는 readDir 의 repo 표식으로 닿는다.
+   * 이하 git* 의 repo 는 이 목록의 원소이고, path 계열 인자·결과는 그 저장소 기준 상대 경로다.
+   */
+  gitRepos(): Promise<string[]>;
+  /** 저장소가 아니면 branch·head 둘 다 '' (unborn 은 branch 가 있다) */
+  gitStatus(repo: string): Promise<GitStatus>;
   /** HEAD 시점 파일 내용 (diff 뷰의 original 쪽). untracked 면 빈 문자열. */
-  gitOriginalContent(path: string): Promise<string>;
+  gitOriginalContent(repo: string, path: string): Promise<string>;
   /** 인덱스(staged)만 커밋. 전체 커밋은 호출측이 gitStage 로 먼저 올린다 (VS Code smart commit). */
-  gitCommit(message: string): Promise<void>;
+  gitCommit(repo: string, message: string): Promise<void>;
   /** 파일들을 인덱스에 올린다 (삭제도 스테이징). 빈 배열은 no-op */
-  gitStage(paths: string[]): Promise<void>;
+  gitStage(repo: string, paths: string[]): Promise<void>;
   /** 파일들을 인덱스에서 내린다 (워킹트리는 그대로) */
-  gitUnstage(paths: string[]): Promise<void>;
+  gitUnstage(repo: string, paths: string[]): Promise<void>;
   /** 워킹트리 변경 되돌리기 — paths 는 인덱스 내용으로 복원, untracked 는 파일 삭제. 파괴적 — 확인은 호출측 */
-  gitDiscard(paths: string[], untracked: string[]): Promise<void>;
+  gitDiscard(repo: string, paths: string[], untracked: string[]): Promise<void>;
   /** HEAD 부터 최근 커밋 목록 (unborn/비 git 은 빈 배열) */
-  gitLog(limit: number): Promise<GitLogItem[]>;
+  gitLog(repo: string, limit: number): Promise<GitLogItem[]>;
   /** 로컬 브랜치 이름 목록 */
-  gitBranches(): Promise<string[]>;
+  gitBranches(repo: string): Promise<string[]>;
   /** 브랜치 전환 (git checkout). 충돌 등 실패는 reject */
-  gitCheckout(branch: string): Promise<void>;
+  gitCheckout(repo: string, branch: string): Promise<void>;
   createTerminal(cols: number, rows: number): TerminalSession;
   /**
    * 기존 데몬 터미널을 이 연결의 핸들로 잡는다 (탭을 다른 창으로 옮기기, 옵셔널 — WsBackend 만).

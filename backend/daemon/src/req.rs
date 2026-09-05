@@ -181,7 +181,14 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
                 //      file 로 보인다. metadata() 는 따라간다 (깨진 링크는 file 취급).
                 let is_dir = std::fs::metadata(ent.path()).map(|m| m.is_dir()).unwrap_or(false);
                 let kind = if is_dir { "directory" } else { "file" };
-                out.push(json!({"name": name, "path": path, "kind": kind}));
+                // repo(와이어 v13): 자식 .git 이 있는 디렉토리 — 트리 펼침이 곧 하위 저장소 인식이다
+                // (.git 자체는 FILES_EXCLUDED 로 숨겨져 프론트가 직접 볼 수 없다). 루트 첫 나열이
+                // 직계 자식 저장소를, 이후 펼침이 더 깊은 저장소를 알린다. 최초 탐색은 gitRepos
+                if is_dir && is_repo(&ent.path()) {
+                    out.push(json!({"name": name, "path": path, "kind": kind, "repo": true}));
+                } else {
+                    out.push(json!({"name": name, "path": path, "kind": kind}));
+                }
             }
             Ok(Value::Array(out))
         }
@@ -316,53 +323,63 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
             Ok(json!(out))
         }
         "search" => search(root, p).await,
-        // git repo 가 아니어도 앱은 떠야 한다 — 빈 상태로 강등
-        "gitStatus" => Ok(git_status(root)
+        // 하위·중첩 저장소 탐색 (와이어 v13) — 루트 포함, 상대 경로 목록 (루트는 '')
+        "gitRepos" => {
+            let root = root.to_path_buf();
+            let repos = tokio::task::spawn_blocking(move || scan_repos(&root)).await.map_err(err)?;
+            Ok(json!(repos))
+        }
+        // git repo 가 아니어도 앱은 떠야 한다 — 빈 상태로 강등 (프론트는 branch·head 둘 다 빈
+        // 응답을 '저장소 아님' 으로 읽어 목록에서 뺀다 — unborn 은 branch 가 있다)
+        "gitStatus" => Ok(git_status(&git_dir(root, p)?)
             .await
             .unwrap_or_else(|_| json!({"branch": "", "head": "", "dirty": false, "changes": []}))),
         "gitOriginalContent" => {
+            let dir = git_dir(root, p)?;
             let path = req_path(p)?;
-            safe_join(root, path)?; // 검증만 — git 에는 상대 경로를 그대로 넘긴다
+            safe_join(&dir, path)?; // 검증만 — git 에는 상대 경로를 그대로 넘긴다
             // untracked/신규 파일이면 git show 가 실패한다 → 빈 문자열 (계약)
-            match run(root, "git", &["show", &format!("HEAD:{path}")]).await {
+            match run(&dir, "git", &["show", &format!("HEAD:{path}")]).await {
                 Ok(s) => Ok(json!(s)),
                 Err(_) => Ok(json!("")),
             }
         }
         // 인덱스(스테이징) 만 커밋 — 전체 커밋은 프론트가 gitStage(전부) 를 먼저 보낸다
         "gitCommit" => {
-            run(root, "git", &["commit", "-m", p["message"].as_str().unwrap_or("")]).await?;
+            run(&git_dir(root, p)?, "git", &["commit", "-m", p["message"].as_str().unwrap_or("")]).await?;
             Ok(Value::Null)
         }
-        "gitStage" => git_paths_cmd(root, p, &["add", "-A", "--"]).await,
+        "gitStage" => git_paths_cmd(&git_dir(root, p)?, p, &["add", "-A", "--"]).await,
         "gitUnstage" => {
+            let dir = git_dir(root, p)?;
             // unborn HEAD 에서는 reset 이 실패한다 — 인덱스에서만 빼는 rm --cached 로 강등
-            match git_paths_cmd(root, p, &["reset", "-q", "HEAD", "--"]).await {
+            match git_paths_cmd(&dir, p, &["reset", "-q", "HEAD", "--"]).await {
                 Ok(v) => Ok(v),
-                Err(_) => git_paths_cmd(root, p, &["rm", "--cached", "-r", "-q", "--"]).await,
+                Err(_) => git_paths_cmd(&dir, p, &["rm", "--cached", "-r", "-q", "--"]).await,
             }
         }
         // 워킹트리 변경 되돌리기 — 추적 파일은 인덱스 내용으로 복원, untracked 는 삭제.
         // 파괴적 조작 — 확인 대화상자는 프론트 책임
         "gitDiscard" => {
-            let tr = req_paths(root, p, "paths")?;
-            let ut = req_paths(root, p, "untracked")?;
+            let dir = git_dir(root, p)?;
+            let tr = req_paths(&dir, p, "paths")?;
+            let ut = req_paths(&dir, p, "untracked")?;
             if !tr.is_empty() {
                 let mut args = vec!["checkout", "-q", "--"];
                 args.extend(tr);
-                run(root, "git", &args).await?;
+                run(&dir, "git", &args).await?;
             }
             if !ut.is_empty() {
                 let mut args = vec!["clean", "-f", "-q", "--"];
                 args.extend(ut);
-                run(root, "git", &args).await?;
+                run(&dir, "git", &args).await?;
             }
             Ok(Value::Null)
         }
         "gitLog" => {
             let n = p["limit"].as_u64().unwrap_or(50).to_string();
             // %x1f 구분 — subject(%s) 는 한 줄이라 행 단위 파싱이 안전하다
-            let out = run(root, "git", &["log", "--format=%H%x1f%s%x1f%an%x1f%ar", "-n", &n]).await;
+            let out = run(&git_dir(root, p)?, "git", &["log", "--format=%H%x1f%s%x1f%an%x1f%ar", "-n", &n]).await;
             // unborn/비 git 은 빈 목록
             let out = out.unwrap_or_default();
             let items: Vec<Value> = out
@@ -378,12 +395,12 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
             Ok(json!(items))
         }
         "gitBranches" => {
-            let out = run(root, "git", &["for-each-ref", "refs/heads", "--format=%(refname:short)"]).await?;
+            let out = run(&git_dir(root, p)?, "git", &["for-each-ref", "refs/heads", "--format=%(refname:short)"]).await?;
             Ok(json!(out.lines().collect::<Vec<_>>()))
         }
         "gitCheckout" => {
             let name = p["branch"].as_str().ok_or("branch 필요")?;
-            run(root, "git", &["checkout", "-q", name]).await?;
+            run(&git_dir(root, p)?, "git", &["checkout", "-q", name]).await?;
             Ok(Value::Null)
         }
         _ => Err(format!("unknown method: {method}")),
@@ -434,6 +451,68 @@ async fn search(root: &Path, p: &Value) -> Result<Value, String> {
     Ok(Value::Array(
         files.into_iter().map(|(path, ms)| json!({"path": path, "matches": ms})).collect(),
     ))
+}
+
+/// git 계열 RPC 의 작업 디렉토리 — repo 파라미터(와이어 v13, 루트 상대 디렉토리, 없거나 '' 면
+/// 루트). 경로 파라미터(paths 등)는 이 디렉토리 기준 상대 경로다 — safe_join 이 루트 안임을 보장
+fn git_dir(root: &Path, p: &Value) -> Result<PathBuf, String> {
+    match p["repo"].as_str() {
+        None | Some("") => Ok(root.to_path_buf()),
+        Some(rel) => safe_join(root, rel),
+    }
+}
+
+/// .git 이 있으면 저장소 — 디렉토리(일반)든 파일(worktree·서브모듈의 gitdir 포인터)이든
+fn is_repo(dir: &Path) -> bool {
+    dir.join(".git").exists()
+}
+
+/// 저장소 자동 탐색 깊이 (루트=0, 자식=1). VS Code git.repositoryScanMaxDepth 기본(1)보다 한
+/// 단계 넓다 — 모음 폴더 아래 한 겹의 그룹 폴더까지. 더 깊은 저장소는 트리 펼침(readDir repo
+/// 표식)으로 닿는다
+const REPO_SCAN_DEPTH: usize = 2;
+/// 자동 탐색이 돌려주는 저장소 수 상한 — 초과분은 버리고 로그 한 줄 (트리 펼침으로는 여전히 등록된다)
+const REPO_SCAN_MAX: usize = 20;
+
+/// 하위·중첩 저장소 탐색 — 루트 포함, 깊이 REPO_SCAN_DEPTH 까지 .git 을 가진 디렉토리의 루트
+/// 상대 경로(루트는 ''). dot 디렉토리·node_modules·bower_components 는 내려가지 않고, 저장소
+/// 안쪽도 계속 내려간다 (중첩 저장소). 심링크 디렉토리는 따라가지 않는다. 블로킹 풀에서 돈다
+fn scan_repos(root: &Path) -> Vec<String> {
+    const SKIP: [&str; 2] = ["node_modules", "bower_components"];
+    let mut out = Vec::new();
+    if is_repo(root) {
+        out.push(String::new());
+    }
+    let mut stack: Vec<(PathBuf, String, usize)> = vec![(root.to_path_buf(), String::new(), 0)];
+    while let Some((dir, rel, depth)) = stack.pop() {
+        if depth >= REPO_SCAN_DEPTH {
+            continue;
+        }
+        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        for ent in rd.flatten() {
+            let name = ent.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') || SKIP.contains(&name.as_str()) {
+                continue;
+            }
+            // symlink_metadata: 심링크 디렉토리는 밖을 가리킬 수 있다 — 탐색 대상 아님
+            if !ent.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            let path = ent.path();
+            let child_rel = if rel.is_empty() { name } else { format!("{rel}/{name}") };
+            if is_repo(&path) {
+                if out.len() >= REPO_SCAN_MAX {
+                    eprintln!("gitRepos: 저장소 {REPO_SCAN_MAX}개 초과 — 나머지는 트리 펼침으로만 등록");
+                    out.sort();
+                    return out;
+                }
+                out.push(child_rel.clone());
+            }
+            stack.push((path, child_rel, depth + 1));
+        }
+    }
+    out.sort();
+    out
 }
 
 async fn git_status(root: &Path) -> Result<Value, String> {

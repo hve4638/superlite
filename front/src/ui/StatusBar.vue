@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { activeTab, base64Bytes, editors, indentOf, languageLabel, toggleViewerAutoReload, viewerAutoReload } from '../model/editors';
-import { scm } from '../model/scm';
+import { activeRepo } from '../model/scm';
 import { connection, stageLabel, failureLabel } from '../model/watch';
 
 // diff 탭도 path 를 가지므로 kind 무관하게 파일 정보를 표시한다 (VS Code 동일)
 const fileTab = computed(() => activeTab());
-const branchLabel = computed(() => (scm.dirty ? `${scm.branch}*` : scm.branch));
+// 활성 편집기 파일이 속한 저장소의 브랜치 (VS Code 동일 — 다중 저장소면 파일을 따라 바뀐다)
+const repo = computed(() => activeRepo());
+const branchLabel = computed(() => (repo.value ? (repo.value.dirty ? `${repo.value.branch}*` : repo.value.branch) : ''));
 
 // 이미지 탭이면 텍스트 항목(Ln/Col·Spaces·인코딩·언어) 대신 해상도·크기·배율을 표시한다
 // (VS Code 이미지 프리뷰 동일 — 해상도는 로드 전이면 아직 없다)
@@ -67,7 +69,7 @@ function fmtSize(bytes: number): string {
         <!-- 영구 실패(원격 ssh)는 재연결하지 않는다 — Reconnecting 대신 실패 단계 표시 -->
         <span v-if="!connection.ok || connection.stage !== null">{{ remoteLabel }}</span>
       </div>
-      <div v-if="scm.branch" class="statusbar-item" :title="`${scm.branch} (Git)`">
+      <div v-if="branchLabel" class="statusbar-item" :title="`${repo!.branch} (Git)`">
         <span class="codicon codicon-source-control" />
         <span>{{ branchLabel }}</span>
       </div>
