@@ -178,10 +178,15 @@ export class MockBackend implements ThinBackend {
     return delay([...seen.values()]);
   }
 
-  readFile(path: string, opts?: { maxBytes?: number; encoding?: 'base64' }): Promise<FileContent> {
+  readFile(path: string, opts?: { maxBytes?: number; encoding?: 'base64'; offset?: number }): Promise<FileContent> {
     const content = FILES[path];
     if (content === undefined) return Promise.reject(new Error(`ENOENT: ${path}`));
     const etag = String(ETAGS.get(path) ?? 0);
+    // 범위 읽기 (hex 뷰어 청크) — 문자열 바이트를 잘라 base64 로
+    if (opts?.offset !== undefined) {
+      const bytes = new TextEncoder().encode(content).slice(opts.offset, opts.offset + (opts.maxBytes ?? Infinity));
+      return delay({ content: btoa(String.fromCharCode(...bytes)), etag });
+    }
     if (opts?.maxBytes !== undefined && content.length > opts.maxBytes) {
       return delay({ unopenable: { kind: 'large', size: content.length }, etag });
     }
@@ -195,7 +200,7 @@ export class MockBackend implements ThinBackend {
 
   stat(path: string): Promise<FileStat> {
     if (!(path in FILES)) return Promise.reject(new Error(`ENOENT: ${path}`));
-    return delay({ etag: String(ETAGS.get(path) ?? 0) });
+    return delay({ etag: String(ETAGS.get(path) ?? 0), size: new TextEncoder().encode(FILES[path]).length });
   }
 
   // ponytail: mock 엔 외부 쓰기 주체가 없어 충돌이 생길 수 없다 — 검사 생략, etag 만 굴린다.

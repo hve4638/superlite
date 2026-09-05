@@ -80,6 +80,14 @@ try {
   assert.strictEqual(h.unopenable?.kind, 'large', '기본 상한 초과 → large');
   assert.strictEqual(h.unopenable?.size, 50 * 1024 * 1024 + 1, 'large 실측 크기');
 
+  // 범위 읽기(와이어 v11) — 기본 상한 초과 파일도 offset+maxBytes 로 잘라 온다, EOF 넘으면 짧게
+  const r = await call('readFile', { path: 'huge.txt', encoding: 'base64', offset: 50 * 1024 * 1024 - 2, maxBytes: 16 });
+  assert.strictEqual(Buffer.from(r.content, 'base64').toString('latin1'), 'aaa', '범위 읽기 — EOF 앞 3바이트');
+  const r0 = await call('readFile', { path: 'bin.dat', encoding: 'base64', offset: 2, maxBytes: 2 });
+  assert.deepStrictEqual([...Buffer.from(r0.content, 'base64')], [0xff, 0xfe], '범위 읽기 — 중간 2바이트');
+  await assert.rejects(call('readFile', { path: 'bin.dat', offset: 0 }), 'offset 은 base64 전용');
+  assert.strictEqual((await call('stat', { path: 'huge.txt' })).size, 50 * 1024 * 1024 + 1, 'stat size');
+
   // 실제 실패(부재)는 여전히 에러
   await assert.rejects(call('readFile', { path: 'no-such.txt' }), '부재 → 에러');
 

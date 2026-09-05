@@ -73,6 +73,21 @@ pub(crate) enum ReadOut {
 /// 압축·프레이밍 이득이 고정 비용을 넘는 지점의 보수적 근사.
 const PAYLOAD_MIN_BYTES: usize = 4096;
 
+/// base64 요청분의 응답 — 대형은 부풀림(1.33x) 없이 원본 바이트를 payload 로, 소형은 base64 JSON
+fn base64_out(bytes: Vec<u8>, meta: &std::fs::Metadata) -> ReadOut {
+    if bytes.len() >= PAYLOAD_MIN_BYTES {
+        return ReadOut::Payload {
+            meta: json!({"etag": file_etag(meta)}),
+            body: bytes,
+            enc: "raw",
+            typ: "base64",
+        };
+    }
+    use base64::Engine as _;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+    ReadOut::Json(json!({"content": b64, "etag": file_etag(meta)}))
+}
+
 pub(crate) async fn read_file(p: &Value, root: &Path) -> Result<ReadOut, String> {
     let path = file_path(root, req_path(p)?)?;
     let _g = WRITE_LOCK.lock().await;
@@ -84,6 +99,19 @@ pub(crate) async fn read_file(p: &Value, root: &Path) -> Result<ReadOut, String>
     // 탭은 열려야 하고, 사유·크기는 안내 화면 문구가 된다. 상한 검사는 읽기 전 —
     // 대용량을 읽어 나른 뒤 버리는 낭비 방지 (maxBytes 는 undo 캡처 등 호출측 상한)
     let max = p["maxBytes"].as_u64().unwrap_or(READ_MAX_BYTES);
+    // 범위 읽기(와이어 v11) — hex 뷰어 청크. 크기 상한을 타지 않고 offset 부터 max 바이트만
+    // 나른다 (EOF 넘어가면 짧게·빈 채로). base64 전용 — 텍스트 경로는 UTF-8 경계가 깨진다
+    if let Some(offset) = p["offset"].as_u64() {
+        if p["encoding"].as_str() != Some("base64") {
+            return Err("offset 은 encoding=base64 전용".into());
+        }
+        use std::io::{Read as _, Seek as _};
+        let mut f = std::fs::File::open(&path).map_err(err)?;
+        f.seek(std::io::SeekFrom::Start(offset)).map_err(err)?;
+        let mut bytes = Vec::new();
+        f.take(max).read_to_end(&mut bytes).map_err(err)?;
+        return Ok(base64_out(bytes, &meta));
+    }
     if meta.len() > max {
         return Ok(ReadOut::Json(json!({
             "unopenable": {"kind": "large", "size": meta.len()},
@@ -93,20 +121,7 @@ pub(crate) async fn read_file(p: &Value, root: &Path) -> Result<ReadOut, String>
     // encoding=base64 는 이진 읽기 (이미지 뷰어 등) — 대형은 base64 부풀림(1.33x) 없이
     // 원본 바이트를 payload 로 나른다 (프론트가 base64 로 복원해 종전 계약 유지)
     match p["encoding"].as_str() {
-        Some("base64") => {
-            let bytes = std::fs::read(&path).map_err(err)?;
-            if bytes.len() >= PAYLOAD_MIN_BYTES {
-                return Ok(ReadOut::Payload {
-                    meta: json!({"etag": file_etag(&meta)}),
-                    body: bytes,
-                    enc: "raw",
-                    typ: "base64",
-                });
-            }
-            use base64::Engine as _;
-            let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
-            return Ok(ReadOut::Json(json!({"content": b64, "etag": file_etag(&meta)})));
-        }
+        Some("base64") => return Ok(base64_out(std::fs::read(&path).map_err(err)?, &meta)),
         Some(other) => return Err(format!("지원하지 않는 encoding: {other}")),
         None => {}
     }
@@ -173,7 +188,8 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
             if !meta.is_file() {
                 return Err("정규 파일이 아니다".into());
             }
-            Ok(json!({"etag": file_etag(&meta)}))
+            // size(와이어 v11) — hex 뷰어가 범위 읽기 전에 전체 길이를 안다
+            Ok(json!({"etag": file_etag(&meta), "size": meta.len()}))
         }
         "writeFile" => {
             // WHY: content 누락을 "" 로 해석하면 깨진 요청이 파일을 비운다 — 명시적 에러

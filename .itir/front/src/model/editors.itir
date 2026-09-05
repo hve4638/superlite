@@ -6,15 +6,19 @@ role: 탭·그룹·문서 상태와 열기/저장/충돌 처리. 열 수 없는 
 
 export type FileTab
 export type DiffTab
+export type HexTab
+export type PreviewTab
 export type Tab
 export type EditorGroup
 export type LayoutNode
 export type LayoutBranch
 export type SplitSide
 export type Doc
+export type HexDoc
 export type EditorsSnapshot
 export type TabHandoff
 export val editors
+export val HEX_CHUNK
 
 export fn createEditors(backend) {
   role: 세션별 에디터 모듈 생성 — 그룹·배치·문서·undo 이력이 팩토리 클로저에 산다. 창 이동(앱): snapshot/restore 는 세션 통째(그룹·배치·문서 버퍼 — JSON 왕복, undo·커서는 잃는다), takeTabForHandoff 는 탭 하나를 닫기 확인·이력 없이 떼어 탭+문서 버퍼로 만든다(마지막 참조면 버퍼·monaco 모델 폐기, 빈 그룹 접기), acceptTab 은 넘어온 탭을 그룹/index 에 붙인다 (이쪽에 같은 문서가 열려 있으면 이쪽 버퍼 유지, 버퍼 없는 탭은 디스크에서 열기)
@@ -31,6 +35,18 @@ export fn openFile(path, opts) -> Bool {
 }
 export fn openFileAt(path, line) {
   role: 열고 지정 라인으로 스크롤 (검색 결과 클릭)
+}
+export fn openHex(path) {
+  role: hex 뷰어 탭('hex:'+path, "x (Hex)") 열기 — 활성 그룹에 고정 탭. 바이트는 docs 와 분리된 path 키 hex 맵(HexDoc)에 두고 HexView 가 ensureHex·loadHexChunk 로 lazy 로드한다 (창 이동·복원·재열기가 같은 경로로 수렴). 텍스트 문서와 공존 — 이진 unopenable 안내의 "Open in Hex Editor" 와 명령 팔레트가 진입점
+}
+export fn ensureHex(path) {
+  role: hex 문서(HexDoc: size + 청크 캐시)가 없으면 stat 으로 크기만 세운다 — 바이트는 통째로 읽지 않는다 (GB 파일). 외부 변경(reloadDocFromDisk)·rename·삭제 시 맵 엔트리를 비우거나 이관해 다음 표시가 다시 읽게 한다
+}
+export fn loadHexChunk(path, idx) {
+  role: HEX_CHUNK(64KB) 단위 범위 읽기(readFile offset, 와이어 v11) — HexView 가 보이는 행의 청크만 요청한다. 진행 중 중복 요청 억제, 경로당 캐시 상한(64 청크) 초과 시 오래된 것부터 폐기, 왕복 중 문서가 갈렸으면 버린다. 실패는 조용히 (다음 스크롤이 재시도)
+}
+export fn openHtmlPreview(path) {
+  role: HTML 프리뷰 탭('preview:'+path, "Preview x") 열기 — 활성 그룹 오른쪽 새 그룹에 (VS Code markdown "Open Preview to the Side"). 이미 열려 있으면 그 탭 활성화. 문서는 같은 path 의 doc.content 를 공유하므로 HtmlPreview 가 편집 버퍼를 실시간 반영한다. 프리뷰·hex 탭은 dirty 표시를 받지 않는다
 }
 export fn openDiff(path, opts?) {
   role: SCM diff 탭 열기 — modified 쪽은 워킹트리 문서 그 자체. opts.deleted 면 워킹트리에 없는 파일 — 문서를 만들지 않고 deleted 탭으로 열어 HEAD 내용을 읽기 전용 편집기로 보여 준다 (MonacoHost 분기, dirty·저장 없음)
@@ -107,6 +123,15 @@ export fn closePathTabs(path) {
 }
 export fn imageMime(path) -> mime? {
   role: 이미지 뷰어로 여는 확장자 판별 (확장자 → MIME, 아니면 null) — VS Code 내장 Media Preview 세트(png·jpg·jpeg·gif·webp·bmp·ico·avif). svg 는 VS Code 기본대로 텍스트. 순수 함수, 세션 무관
+}
+export fn isHtml(path) -> Bool {
+  role: HTML 프리뷰 대상 확장자(.html·.htm) 판별 — 순수 함수, 세션 무관
+}
+export fn tabIdOf(kind, path) -> id {
+  role: 탭 id 규칙 — file 은 path 그대로, 그 외는 kind 접두 ('diff:'·'hex:'·'preview:'). 순수 함수
+}
+export fn tabNameOf(kind, path) -> label {
+  role: 탭 라벨 규칙 — hex "x (Hex)", preview "Preview x", 그 외 파일명 (diff 의 상태 접미는 호출측). 순수 함수
 }
 export fn base64Bytes(b64) -> bytes {
   role: base64 길이 → 원본 바이트 수 (패딩 보정) — statusbar 의 이미지 크기 표시용, 와이어가 크기를 따로 나르지 않는다. 순수 함수, 세션 무관

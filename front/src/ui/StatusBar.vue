@@ -12,10 +12,17 @@ const branchLabel = computed(() => (scm.dirty ? `${scm.branch}*` : scm.branch));
 // (VS Code 이미지 프리뷰 동일 — 해상도는 로드 전이면 아직 없다)
 const image = computed(() => {
   const t = fileTab.value;
-  const data = t ? editors.docs.get(t.path)?.image : undefined;
-  if (!t || data === undefined) return null;
+  if (!t || t.kind === 'hex' || t.kind === 'preview') return null;
+  const data = editors.docs.get(t.path)?.image;
+  if (data === undefined) return null;
   return { view: editors.imageView.get(t.path), size: base64Bytes(data) };
 });
+// hex 탭은 바이트 수만 — 로드 전이면 null (텍스트 항목도 이미지 항목도 아니다)
+const hexSize = computed(() => {
+  const t = fileTab.value;
+  return t && t.kind === 'hex' ? editors.hex.get(t.path)?.size ?? null : null;
+});
+const viewerTab = computed(() => fileTab.value !== null && (fileTab.value.kind === 'hex' || fileTab.value.kind === 'preview'));
 
 // 접속 진행 중 경과 시간 힌트 — 1초 틱 (헬퍼 업로드처럼 오래 걸리는 단계용)
 const now = ref(Date.now());
@@ -85,7 +92,8 @@ function fmtSize(bytes: number): string {
           }}</span>
         </div>
       </template>
-      <template v-else-if="fileTab">
+      <div v-else-if="hexSize !== null" class="statusbar-item"><span>{{ fmtSize(hexSize) }}</span></div>
+      <template v-else-if="fileTab && !viewerTab">
         <div class="statusbar-item">
           <span>Ln {{ editors.cursor.line }}, Col {{ editors.cursor.col }}</span>
         </div>

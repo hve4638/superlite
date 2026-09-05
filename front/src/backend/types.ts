@@ -79,6 +79,8 @@ export type FileContent =
 export interface FileStat {
   /** readFile 의 etag 와 같은 (mtime,size) 기반 불투명 토큰 */
   etag: string;
+  /** 바이트 크기 (와이어 v11) — hex 뷰어가 범위 읽기 전에 전체 길이를 안다 */
+  size: number;
 }
 
 /** conflict 면 쓰지 않았다 — etag 시점 이후 디스크가 바뀌었고 내용도 다르다. */
@@ -117,8 +119,10 @@ export interface ThinBackend {
    *  unopenable 로 온다 — 실존하지 않는 경로 등 실제 실패만 reject 다. maxBytes 는
    *  undo 캡처 등 호출측 상한 (초과 파일을 읽어 나르지 않는다).
    *  encoding: 'base64' 면 UTF-8 검증 없이 바이트를 base64 content 로 나른다 (이미지 뷰어 등 —
-   *  writeFile 이진 통로와 대칭). binary unopenable 은 안 생기고 크기 상한(large)만 남는다. */
-  readFile(path: string, opts?: { maxBytes?: number; encoding?: 'base64' }): Promise<FileContent>;
+   *  writeFile 이진 통로와 대칭). binary unopenable 은 안 생기고 크기 상한(large)만 남는다.
+   *  offset 이 있으면(base64 전용, 와이어 v11) 범위 읽기 — 크기 상한 없이 offset 부터 maxBytes
+   *  만큼, EOF 를 넘으면 짧게 온다 (hex 뷰어 청크). */
+  readFile(path: string, opts?: { maxBytes?: number; encoding?: 'base64'; offset?: number }): Promise<FileContent>;
   /** 내용 없이 실존·변경만 확인하는 경량 검사 — 정규 파일 전용(디렉토리는 reject). orphan 재검증용 */
   stat(path: string): Promise<FileStat>;
   /**

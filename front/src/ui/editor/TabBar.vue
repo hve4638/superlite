@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import type { EditorGroup, Tab } from '../../model/editors';
-import { closeTab, editors, moveTabToGroup, openFile, pinTab, setActiveTab, splitActiveEditor } from '../../model/editors';
+import { closeTab, editors, isHtml, moveTabToGroup, openFile, openHtmlPreview, pinTab, setActiveTab, splitActiveEditor } from '../../model/editors';
 import { notify } from '../../model/notifications';
 import { DND_EDITOR, detachEditorTab, multiWindow, requestTabsMove, sessionRoot, sessions } from '../../model/sessions';
 import { windowLabel } from '../../model/window';
@@ -10,6 +10,12 @@ import { editorDrag, endEditorDrag, startTabDrag } from './tabDnd';
 import FileIcon from '../widgets/FileIcon.vue';
 
 const props = defineProps<{ group: EditorGroup }>();
+
+// 활성 탭이 HTML 편집기면 그룹 액션에 프리뷰 아이콘 (VS Code markdown 의 Open Preview to the Side 자리)
+const htmlActive = computed(() => {
+  const t = props.group.tabs.find((t) => t.id === props.group.activeTabId);
+  return t && t.kind !== 'preview' && isHtml(t.path) ? t.path : null;
+});
 
 function iconName(tab: Tab): string {
   // diff 탭 이름은 "x (Working Tree)" 라서 아이콘은 실제 파일명으로 찾는다
@@ -178,6 +184,9 @@ function onForeignDrop(e: DragEvent) {
       </div>
     </div>
     <div class="group-actions">
+      <span v-if="htmlActive" class="group-action" title="Open Preview to the Side (Ctrl+Shift+V)" @click="openHtmlPreview(htmlActive)">
+        <span class="codicon codicon-open-preview" />
+      </span>
       <span class="group-action" title="Split Editor Right (Ctrl+\)" @click="splitActiveEditor()">
         <span class="codicon codicon-split-horizontal" />
       </span>

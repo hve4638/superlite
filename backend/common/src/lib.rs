@@ -38,7 +38,10 @@ pub fn socket_path() -> PathBuf {
 /// 10: adoptTerminal 추가 — 같은 root 의 다른 세션이 소유한 터미널을 이 세션으로 옮긴다
 ///    (탭을 다른 창으로 끌어 옮기기). 구버전 데몬은 미지 메서드를 일반 경로로 넘겨 에러로
 ///    응답하므로 이동이 조용히 실패한다.
-const WIRE_VERSION: u32 = 10;
+/// 11: readFile 범위 읽기(offset, encoding=base64 전용 — 크기 상한을 타지 않고 offset 부터
+///    maxBytes 만큼) + stat 응답에 size. hex 뷰어가 GB 파일을 청크로 본다. 구버전 데몬은
+///    offset 을 무시하고 파일 전체(또는 large)를 돌려줘 뷰가 조용히 어긋난다.
+const WIRE_VERSION: u32 = 11;
 
 /// 0700 전용 디렉터리를 만들어 그 안에 소켓을 둔다.
 #[cfg(unix)]

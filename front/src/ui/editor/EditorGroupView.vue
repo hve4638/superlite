@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import type { EditorGroup, SplitSide } from '../../model/editors';
-import { editors, moveTabSplit, moveTabToGroup, openFile, openFileSplit } from '../../model/editors';
+import { editors, moveTabSplit, moveTabToGroup, openFile, openFileSplit, openHex } from '../../model/editors';
 import { editorDrag, endEditorDrag } from './tabDnd';
 import TabBar from './TabBar.vue';
 import MonacoHost from './MonacoHost.vue';
 import ImageView from './ImageView.vue';
+import HexView from './HexView.vue';
+import HtmlPreview from './HtmlPreview.vue';
 import FileIcon from '../widgets/FileIcon.vue';
 
 const props = defineProps<{ group: EditorGroup }>();
@@ -57,15 +59,21 @@ const crumbs = computed(() =>
   active.value && active.value.kind === 'file' ? active.value.path.split('/') : [],
 );
 
+// hex·preview 탭 — 문서 상태와 무관하게 편집기 자리에 전용 뷰 (아래 unopenable·image 분기보다 먼저)
+const viewer = computed(() => {
+  const t = active.value;
+  return t && (t.kind === 'hex' || t.kind === 'preview') ? { kind: t.kind, path: t.path } : null;
+});
+
 // 활성 탭 문서의 열 수 없음 사유 — 있으면 monaco 대신 안내 화면 (diff 탭도 같은 문서라 동일)
 const unopenable = computed(() =>
-  active.value ? editors.docs.get(active.value.path)?.unopenable ?? null : null,
+  active.value && !viewer.value ? editors.docs.get(active.value.path)?.unopenable ?? null : null,
 );
 
 // 활성 탭 문서의 이미지 데이터 — 있으면 monaco 대신 이미지 뷰어 (unopenable 과 같은 자리.
 // diff 탭도 워킹트리 이미지를 그대로 보여준다 — 이미지 diff 는 범위 밖)
 const image = computed(() => {
-  const t = active.value;
+  const t = viewer.value ? null : active.value;
   const data = t ? editors.docs.get(t.path)?.image : undefined;
   return t && data !== undefined ? { path: t.path, data } : null;
 });
@@ -101,8 +109,11 @@ const SHORTCUTS = [
       </div>
     </template>
     <div class="editor-body">
+      <!-- hex·HTML 프리뷰 탭 — 편집기 자리에 전용 뷰 (path 키라 탭 전환 시 컴포넌트가 갈린다) -->
+      <HexView v-if="viewer && viewer.kind === 'hex'" :key="viewer.path" :path="viewer.path" />
+      <HtmlPreview v-else-if="viewer" :key="viewer.path" :path="viewer.path" />
       <!-- 이미지 파일 — 편집기 자리에 뷰어. 탭·breadcrumbs 는 그대로 (unopenable 과 동일 배치) -->
-      <ImageView v-if="image" :path="image.path" :data="image.data" />
+      <ImageView v-else-if="image" :path="image.path" :data="image.data" />
       <!-- 열 수 없는 파일(크기 초과·이진) 안내 — 탭·breadcrumbs 는 그대로, 편집기만 대체 -->
       <div v-else-if="unopenable" class="unopenable">
         <p v-if="unopenable.kind === 'large'">
@@ -113,8 +124,10 @@ const SHORTCUTS = [
           The file is not displayed in the text editor because it is either binary or
           uses an unsupported text encoding.
         </p>
+        <!-- hex 뷰어는 청크 읽기라 크기 상한이 없다 — 두 사유 모두 진입점 -->
+        <a class="unopenable-link" @click="active && openHex(active.path)">Open in Hex Editor</a>
       </div>
-      <MonacoHost v-if="group.tabs.length" v-show="!unopenable && !image" :group="group" />
+      <MonacoHost v-if="group.tabs.length" v-show="!unopenable && !image && !viewer" :group="group" />
       <div v-else class="watermark">
         <div class="watermark-grid">
           <template v-for="s in SHORTCUTS" :key="s.label">
@@ -225,9 +238,19 @@ const SHORTCUTS = [
   justify-content: center;
 }
 /* VS Code binary/large 안내 근사 — 중앙 정렬 텍스트 한 줄 */
+.unopenable-link {
+  display: block;
+  margin-top: 8px;
+  color: var(--vscode-textLink-foreground);
+  cursor: pointer;
+}
+.unopenable-link:hover {
+  text-decoration: underline;
+}
 .unopenable {
   flex: 1;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   padding: 0 20px;

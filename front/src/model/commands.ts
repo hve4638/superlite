@@ -1,6 +1,6 @@
 import { openQuickInput, showViewlet, toggleSideBar, togglePanel, workbench } from './workbench';
 import { openFolderDialog } from './host';
-import { closeTab, editors, reopenClosedEditor, saveActive, splitActiveEditor, activeGroup } from './editors';
+import { closeTab, editors, reopenClosedEditor, saveActive, splitActiveEditor, activeGroup, activeTab, openHex, openHtmlPreview, isHtml } from './editors';
 import { createTerminal } from './terminal';
 import { refreshScm } from './scm';
 import { activeSessionEmpty, cycleSession, sessionsEnabled } from './sessions';
@@ -204,6 +204,27 @@ export function setupCommands(): void {
     keybinding: 'Ctrl+PageUp',
     run: () => cycleTab(-1),
   }, 'ctrl+pageup');
+
+  // 활성 탭의 경로를 hex 뷰어로 — 이진 안내 탭의 링크와 같은 진입 (텍스트 파일도 hex 로 볼 수 있다)
+  register({
+    id: 'hexEditor.openFile',
+    title: 'Hex Editor: Open Active File in Hex Editor',
+    run: () => {
+      const t = activeTab();
+      if (t && t.kind !== 'preview') openHex(t.path);
+    },
+  });
+
+  // VS Code markdown 프리뷰의 키를 HTML 에 — 활성 탭이 .html 이 아니면 no-op
+  register({
+    id: 'html.showPreviewToSide',
+    title: 'HTML: Open Preview to the Side',
+    keybinding: 'Ctrl+Shift+V',
+    run: () => {
+      const t = activeTab();
+      if (t && t.kind !== 'preview' && isHtml(t.path)) void openHtmlPreview(t.path);
+    },
+  }, 'ctrl+shift+v');
 
 }
 

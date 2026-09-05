@@ -27,7 +27,53 @@ export interface DiffTab {
   deleted?: boolean;
 }
 
-export type Tab = FileTab | DiffTab;
+/** hex 뷰어 탭 — 바이트는 docs 가 아니라 editors.hex 에 산다 (텍스트 문서와 공존). 편집 없음 */
+export interface HexTab {
+  kind: 'hex';
+  /** 'hex:'+path */
+  id: string;
+  path: string;
+  /** "x (Hex)" */
+  name: string;
+  dirty: boolean;
+  preview: boolean;
+}
+
+/** HTML 프리뷰 탭 — 같은 path 의 doc.content 를 렌더한다 (편집 버퍼 실시간 반영). 편집 없음 */
+export interface PreviewTab {
+  kind: 'preview';
+  /** 'preview:'+path */
+  id: string;
+  path: string;
+  /** "Preview x" */
+  name: string;
+  dirty: boolean;
+  preview: boolean;
+}
+
+export type Tab = FileTab | DiffTab | HexTab | PreviewTab;
+
+/** hex 뷰어 청크 크기 — 범위 읽기(readFile offset) 단위. 4KB 이상이라 항상 payload 프레임으로 온다 */
+export const HEX_CHUNK = 64 * 1024;
+/** 경로당 캐시 청크 상한 — 넘으면 가장 오래된 것부터 버린다 (GB 파일 스크롤에도 메모리 상수) */
+const HEX_CHUNK_CAP = 64;
+
+/** hex 뷰어 문서 — 전체 크기(stat)와 읽어 둔 청크(인덱스 → 바이트). 편집 없음 */
+export interface HexDoc {
+  size: number;
+  chunks: Map<number, Uint8Array>;
+}
+
+/** 탭 id 규칙 — kind 별 접두 (file 은 path 그대로) */
+export function tabIdOf(kind: Tab['kind'], path: string): string {
+  return kind === 'file' ? path : `${kind}:${path}`;
+}
+
+/** 탭 라벨 규칙 — diff 는 호출측이 상태 접미를 붙인다 */
+export function tabNameOf(kind: Tab['kind'], path: string): string {
+  const base = baseName(path);
+  return kind === 'hex' ? `${base} (Hex)` : kind === 'preview' ? `Preview ${base}` : base;
+}
 
 export interface EditorGroup {
   id: number;
@@ -97,6 +143,11 @@ export function imageMime(path: string): string | null {
   return IMAGE_MIMES[name.slice(dot + 1).toLowerCase()] ?? null;
 }
 
+/** HTML 프리뷰 대상 판별 — 순수 함수, 세션 무관 */
+export function isHtml(path: string): boolean {
+  return /\.html?$/i.test(path);
+}
+
 /** base64 길이에서 원본 바이트 수 복원 — 패딩 보정 (와이어가 크기를 따로 나르지 않는다) */
 export function base64Bytes(b64: string): number {
   const pad = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0;
@@ -149,6 +200,11 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
      *  뷰 상태지만 문서(docs)처럼 경로 단위 공유 — 같은 이미지를 보는 그룹들이 함께
      *  움직인다. 해상도(w·h)는 이미지 로드 시점에 채워진다 */
     imageView: new Map<string, { w: number; h: number; zoom: 'fit' | number }>(),
+    /** hex 뷰어 문서 (path 키) — docs 와 분리: 텍스트 문서·이진 unopenable 과 무관하게 같은
+     *  경로를 hex 로도 볼 수 있다. HexView 가 ensureHex(크기)·loadHexChunk(보이는 범위)로
+     *  채우고, 외부 변경·rename·삭제 시 비우거나 이관한다 (비우면 다음 표시가 다시 읽는다).
+     *  창 이동 스냅샷에는 싣지 않는다 — 받는 쪽이 같은 경로로 다시 읽는다 */
+    hex: new Map<string, HexDoc>(),
     /** 열림 직후 특정 라인으로 스크롤할 요청 (검색 결과 클릭 등). MonacoHost 가 소비 후 null 로 되돌린다. */
     pendingReveal: null as { path: string; line: number } | null,
     /** 저장 충돌(디스크가 더 새것) 중인 파일 path — 토스트가 Overwrite/Revert 를 띄운다.
@@ -272,6 +328,79 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     }
     group.activeTabId = id;
     editors.pendingFocus = true;
+  }
+
+  /** hex 뷰어 탭 열기 — 활성 그룹에 고정 탭. 바이트 로드는 HexView 가 ensureHex 로 한다
+   *  (창 이동·복원·재열기 모두 같은 경로로 수렴) */
+  function openHex(path: string): void {
+    const group = activeGroup();
+    const id = tabIdOf('hex', path);
+    if (!group.tabs.some((t) => t.id === id)) {
+      group.tabs.push({ kind: 'hex', id, path, name: tabNameOf('hex', path), dirty: false, preview: false });
+    }
+    group.activeTabId = id;
+  }
+
+  /** hex 문서가 없으면 stat 으로 크기만 세운다 — 바이트는 loadHexChunk 가 보이는 범위만 읽는다 */
+  async function ensureHex(path: string): Promise<void> {
+    if (editors.hex.has(path)) return;
+    try {
+      const { size } = await backend.stat(path);
+      if (!editors.hex.has(path)) editors.hex.set(path, { size, chunks: new Map() });
+    } catch (e) {
+      notify('error', `Unable to open '${baseName(path)}': ${errText(e)}`);
+    }
+  }
+
+  /** 진행 중인 청크 요청 — 같은 청크를 스크롤마다 겹쳐 요청하지 않는다 */
+  const hexPending = new Set<string>();
+
+  /** hex 청크 로드 — 범위 읽기(offset, 와이어 v11). 캐시 상한을 넘으면 가장 오래된 청크부터 버린다.
+   *  실패는 조용히 — 스크롤마다 나는 요청이라 토스트 폭주를 피한다 (다음 스크롤이 재시도) */
+  async function loadHexChunk(path: string, idx: number): Promise<void> {
+    const key = `${path}\0${idx}`;
+    const doc = editors.hex.get(path);
+    if (!doc || doc.chunks.has(idx) || hexPending.has(key)) return;
+    hexPending.add(key);
+    try {
+      const r = await backend.readFile(path, { encoding: 'base64', offset: idx * HEX_CHUNK, maxBytes: HEX_CHUNK });
+      // 왕복 중 외부 변경으로 문서가 갈렸으면(비워졌으면) 옛 바이트를 넣지 않는다
+      if (editors.hex.get(path) !== doc || r.unopenable !== undefined) return;
+      doc.chunks.set(idx, Uint8Array.from(atob(r.content), (c) => c.charCodeAt(0)));
+      for (const k of doc.chunks.keys()) {
+        if (doc.chunks.size <= HEX_CHUNK_CAP) break;
+        if (k !== idx) doc.chunks.delete(k);
+      }
+    } catch {
+      // ponytail: 실패는 다음 스크롤의 재요청에 맡긴다
+    } finally {
+      hexPending.delete(key);
+    }
+  }
+
+  /** HTML 프리뷰 탭 열기 — 활성 그룹 오른쪽 새 그룹에 (VS Code markdown "Open Preview to the Side").
+   *  이미 어느 그룹에든 열려 있으면 그 탭을 활성화한다. 문서는 같은 path 의 doc 을 공유한다 */
+  async function openHtmlPreview(path: string): Promise<void> {
+    const id = tabIdOf('preview', path);
+    for (const g of editors.groups) {
+      if (g.tabs.some((t) => t.id === id)) {
+        g.activeTabId = id;
+        editors.activeGroupId = g.id;
+        return;
+      }
+    }
+    try {
+      await ensureDoc(path);
+    } catch (e) {
+      notify('error', `Unable to open '${baseName(path)}': ${errText(e)}`);
+      return;
+    }
+    const ref = activeGroup();
+    const tab: PreviewTab = { kind: 'preview', id, path, name: tabNameOf('preview', path), dirty: false, preview: false };
+    const group: EditorGroup = { id: nextGroupId++, tabs: [tab], activeTabId: id };
+    editors.groups.splice(editors.groups.indexOf(ref) + 1, 0, group);
+    insertIntoLayout(ref.id, group.id, 'right');
+    editors.activeGroupId = group.id;
   }
 
   function setActiveTab(groupId: number, tabId: string): void {
@@ -426,6 +555,8 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     const entry = editors.recentlyClosed.pop();
     if (!entry) return;
     if (entry.kind === 'diff') await openDiff(entry.path, { deleted: entry.deleted });
+    else if (entry.kind === 'hex') openHex(entry.path);
+    else if (entry.kind === 'preview') await openHtmlPreview(entry.path);
     else await openFile(entry.path);
   }
 
@@ -495,7 +626,8 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     const dirty = doc.content !== doc.savedContent;
     for (const g of editors.groups) {
       for (const t of g.tabs) {
-        if (t.path === path) {
+        // hex·preview 탭은 편집 표면이 아니다 — dirty 점을 받지 않는다
+        if (t.path === path && (t.kind === 'file' || t.kind === 'diff')) {
           t.dirty = dirty;
           if (dirty) t.preview = false;
         }
@@ -528,16 +660,22 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
       editors.imageView.delete(path);
       editors.imageView.set(np, iv);
     }
+    for (const [path, hd] of [...editors.hex]) {
+      const np = mapPath(path);
+      if (np === null) continue;
+      editors.hex.delete(path);
+      editors.hex.set(np, hd);
+    }
     disposeModelsHook(from);
     for (const g of editors.groups) {
       for (const t of g.tabs) {
         const np = mapPath(t.path);
         if (np === null) continue;
-        const newId = t.kind === 'diff' ? `diff:${np}` : np;
+        const newId = tabIdOf(t.kind, np);
         if (g.activeTabId === t.id) g.activeTabId = newId;
         t.id = newId;
         t.path = np;
-        t.name = t.kind === 'diff' ? `${baseName(np)} (Working Tree)` : baseName(np);
+        t.name = t.kind === 'diff' ? `${baseName(np)} (Working Tree)` : tabNameOf(t.kind, np);
       }
     }
     if (editors.saveConflict !== null) {
@@ -572,6 +710,9 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     for (const p of [...editors.imageView.keys()]) {
       if (match(p)) editors.imageView.delete(p);
     }
+    for (const p of [...editors.hex.keys()]) {
+      if (match(p)) editors.hex.delete(p);
+    }
     disposeModelsHook(path);
     if (editors.saveConflict !== null && match(editors.saveConflict)) editors.saveConflict = null;
     for (const p of [...editors.orphaned]) if (match(p)) editors.orphaned.delete(p);
@@ -582,6 +723,8 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
    * 충돌은 저장 시점 검사로 일원화한다 (VS Code 동일).
    */
   function reloadDocFromDisk(path: string, r: FileContent): void {
+    // hex 바이트는 여기 r 로 못 만든다(텍스트/이미지 읽기) — 비워서 HexView 가 다시 읽게 한다
+    editors.hex.delete(path);
     const doc = editors.docs.get(path);
     if (!doc || doc.content !== doc.savedContent) return;
     // 내용이 같아도(touch, 같은 내용 재저장) etag 는 갱신 — 다음 저장의 스퓨리어스 충돌 방지
@@ -753,6 +896,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     const refs = editors.groups.reduce((n, g) => n + g.tabs.filter((t) => t.path === tab.path).length, 0);
     if (refs === 0) {
       editors.docs.delete(tab.path);
+      editors.hex.delete(tab.path);
       editors.orphaned.delete(tab.path);
       disposeModelsHook(tab.path);
     }
@@ -769,15 +913,19 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
       // 넘어온 쪽이 미저장인데 이쪽 버퍼를 지킨다 — 조용히 버리지 않고 알린다
       notify('warning', `Unsaved changes of '${baseName(h.tab.path)}' from the other window were discarded (already open here)`);
     }
-    if (!editors.docs.has(h.tab.path)) {
+    // hex 탭은 문서가 필요 없다 — 바이트는 받는 쪽 HexView 가 다시 읽는다
+    if (!editors.docs.has(h.tab.path) && h.tab.kind !== 'hex') {
       if (!h.doc) {
-        void (h.tab.kind === 'diff' ? openDiff(h.tab.path) : openFile(h.tab.path, { groupId: group.id }));
+        void (h.tab.kind === 'diff' ? openDiff(h.tab.path)
+          : h.tab.kind === 'preview' ? openHtmlPreview(h.tab.path)
+            : openFile(h.tab.path, { groupId: group.id }));
         return;
       }
       editors.docs.set(h.tab.path, h.doc);
     }
-    const doc = editors.docs.get(h.tab.path)!;
-    const tab: Tab = { ...h.tab, dirty: doc.content !== doc.savedContent, preview: false };
+    const doc = editors.docs.get(h.tab.path);
+    const editable = h.tab.kind === 'file' || h.tab.kind === 'diff';
+    const tab: Tab = { ...h.tab, dirty: editable && doc !== undefined && doc.content !== doc.savedContent, preview: false };
     if (!group.tabs.some((t) => t.id === tab.id)) {
       group.tabs.splice(Math.min(index ?? group.tabs.length, group.tabs.length), 0, tab);
     }
@@ -787,7 +935,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
   }
 
   return {
-    editors, activeGroup, activeTab, openFile, openFileAt, openDiff, setActiveTab, pinTab,
+    editors, activeGroup, activeTab, openFile, openFileAt, openDiff, openHex, ensureHex, loadHexChunk, openHtmlPreview, setActiveTab, pinTab,
     openFileSplit, closeTab, confirmCloseSave, confirmCloseDiscard, confirmCloseCancel,
     reopenClosedEditor, moveTabToGroup, moveTabSplit,
     splitActiveEditor, updateContent, setOrphaned, remapPaths, closePathTabs,
@@ -845,6 +993,10 @@ export const openFileAt = (path: string, line: number): Promise<void> =>
   ctx().editors.openFileAt(path, line);
 export const openDiff = (path: string, opts?: { deleted?: boolean }): Promise<void> =>
   ctx().editors.openDiff(path, opts);
+export const openHex = (path: string): void => ctx().editors.openHex(path);
+export const ensureHex = (path: string): Promise<void> => ctx().editors.ensureHex(path);
+export const loadHexChunk = (path: string, idx: number): Promise<void> => ctx().editors.loadHexChunk(path, idx);
+export const openHtmlPreview = (path: string): Promise<void> => ctx().editors.openHtmlPreview(path);
 export const setActiveTab = (groupId: number, tabId: string): void =>
   ctx().editors.setActiveTab(groupId, tabId);
 export const pinTab = (groupId: number, tabId: string): void => ctx().editors.pinTab(groupId, tabId);
