@@ -322,8 +322,8 @@ fn home_dir() -> Option<PathBuf> {
 /// 공통 ssh 명령 골격 — BatchMode(프롬프트 대신 실패) + unix 는 ControlMaster 연결 공유
 /// (같은 호스트 두 번째부터 핸드셰이크 없이 즉시 — 수명 자체 구현 대신 OpenSSH 위임,
 /// decision/process-topology.md 개정). Windows OpenSSH 는 ControlMaster 미지원이라 뺀다
-/// — 접속마다 인증할 뿐 동작은 같다.
-fn ssh_cmd(host: &str) -> Command {
+/// — 접속마다 인증할 뿐 동작은 같다. opts 는 ssh_opts 로 접속 시작 시 한 번 읽어 넘긴다
+fn ssh_cmd(host: &str, opts: &[String]) -> Command {
     let mut c = Command::new("ssh");
     c.arg("-o").arg("BatchMode=yes");
     #[cfg(unix)]
@@ -335,12 +335,8 @@ fn ssh_cmd(host: &str) -> Command {
         c.arg("-o").arg(format!("ControlPath={}/ssh-%C", dir.display()));
         c.arg("-o").arg("ControlPersist=60");
     }
-    // 고정 저장본 — config 보다 명령줄 -o 가 우선하므로 config 가 바뀌거나 사라져도 고정
-    // 시점 설정으로 접속한다 (사용자 결정: 고정 = 저장본으로 접속)
-    if let Some(opts) = load_state().favorites.into_iter().find(|f| f.host == host).and_then(|f| f.options) {
-        for line in opts {
-            c.arg("-o").arg(line);
-        }
+    for line in opts {
+        c.arg("-o").arg(line);
     }
     c.arg(host);
     // CREATE_NO_WINDOW(0x08000000) — GUI 앱(콘솔 없음)이 콘솔 프로그램을 spawn 하면 Windows 가
@@ -351,11 +347,18 @@ fn ssh_cmd(host: &str) -> Command {
     c
 }
 
+/// 호스트의 고정 저장본 ssh 옵션 — config 보다 명령줄 -o 가 우선하므로 config 가 바뀌거나
+/// 사라져도 고정 시점 설정으로 접속한다 (사용자 결정: 고정 = 저장본으로 접속). 고정 안 한
+/// 호스트는 빈 목록. 접속 한 번에 remote.json 을 한 번만 읽도록 호출자가 넘긴다
+pub fn ssh_opts(host: &str) -> Vec<String> {
+    load_state().favorites.into_iter().find(|f| f.host == host).and_then(|f| f.options).unwrap_or_default()
+}
+
 /// 원격 명령 1회 실행 — stdin 을 다 써넣고 닫은 뒤 종료를 기다린다.
 /// write 실패는 무시한다: 원격이 stdin 을 안 읽고 죽는 경로인데, 그때는 어차피
 /// status 가 실패라 에러가 그쪽에서 드러난다.
-async fn run_ssh(host: &str, cmd: &str, stdin_data: &[u8]) -> Result<std::process::Output, String> {
-    let mut child = ssh_cmd(host).arg(cmd).spawn().map_err(|e| format!("ssh 실행 실패: {e}"))?;
+async fn run_ssh(host: &str, opts: &[String], cmd: &str, stdin_data: &[u8]) -> Result<std::process::Output, String> {
+    let mut child = ssh_cmd(host, opts).arg(cmd).spawn().map_err(|e| format!("ssh 실행 실패: {e}"))?;
     let mut si = child.stdin.take().unwrap();
     let _ = si.write_all(stdin_data).await;
     let _ = si.shutdown().await;
@@ -394,12 +397,12 @@ fn stage(tx: Option<&StageTx>, s: &'static str, bytes: Option<u64>) {
     }
 }
 
-pub async fn probe_remote(host: &str, tx: Option<&StageTx>) -> Result<RemoteInfo, String> {
+pub async fn probe_remote(host: &str, opts: &[String], tx: Option<&StageTx>) -> Result<RemoteInfo, String> {
     if !host_ok(host) {
         return Err("잘못된 host".into());
     }
     stage(tx, "ssh", None);
-    let out = run_ssh(host, r#"printf '%s
+    let out = run_ssh(host, opts, r#"printf '%s
 ' "$HOME" "$(uname -s)" "$(uname -m)""#, b"").await?;
     if !out.status.success() {
         return Err(ssh_err(&out));
@@ -458,7 +461,12 @@ fn remote_daemon_bin(info: &RemoteInfo) -> Result<PathBuf, String> {
 /// 다른 빌드끼리 섞이지 않는다 (와이어 버전 대조가 필요 없어진다).
 /// 반환: 원격 셸이 해석할 경로 식 ("$HOME/..." — 원격 홈 경로를 이쪽에서 모른다).
 /// 올리는 바이너리는 원격 OS·아키텍처에 맞춘다 (remote_daemon_bin).
-pub async fn ensure_remote_bin(host: &str, info: &RemoteInfo, tx: Option<&StageTx>) -> Result<String, String> {
+pub async fn ensure_remote_bin(
+    host: &str,
+    opts: &[String],
+    info: &RemoteInfo,
+    tx: Option<&StageTx>,
+) -> Result<String, String> {
     let bin = remote_daemon_bin(info)?;
     let data = std::fs::read(&bin)
         .map_err(|e| format!("데몬 바이너리 읽기 실패 {}: {e}", bin.display()))?;
@@ -468,7 +476,7 @@ pub async fn ensure_remote_bin(host: &str, info: &RemoteInfo, tx: Option<&StageT
     // 존재 검사와 업로드를 나눈다 — 한 번에 하면 이미 있을 때도 stdin 으로 바이너리를 다
     // 보내게 된다 (원격이 안 읽으면 전송이 어중간히 끊긴다). ControlMaster 덕에 두 번째
     // exec 는 왕복 하나 값이다.
-    let probe = run_ssh(host, &format!(r#"test -x "{target}""#), b"").await?;
+    let probe = run_ssh(host, opts, &format!(r#"test -x "{target}""#), b"").await?;
     if !probe.status.success() {
         if probe.status.code() != Some(1) {
             return Err(ssh_err(&probe)); // exit 1 은 "없음", 그 외(255 등)는 접속 실패
@@ -478,7 +486,7 @@ pub async fn ensure_remote_bin(host: &str, info: &RemoteInfo, tx: Option<&StageT
         let up = format!(
             r#"mkdir -p "{dir}" && cat > "{target}.$$" && chmod +x "{target}.$$" && mv "{target}.$$" "{target}""#
         );
-        let out = run_ssh(host, &up, &data).await?;
+        let out = run_ssh(host, opts, &up, &data).await?;
         if !out.status.success() {
             return Err(format!("헬퍼 업로드 실패: {}", ssh_err(&out)));
         }
@@ -493,12 +501,12 @@ pub async fn ensure_remote_bin(host: &str, info: &RemoteInfo, tx: Option<&StageT
 /// EOF 로 물러나고 원격 데몬은 세션을 detach 로 돌린다 (재접속 약속은 원격 데몬의 세션
 /// grace 가 지킨다). attach 를 보내기 전까지는 어느 경로·세션에도 묶이지 않는다 — Spares 가
 /// 미리 만들어 두는 근거.
-pub fn pipe_conn(host: &str, bin: &str, tx: Option<&StageTx>) -> Result<Child, String> {
+pub fn pipe_conn(host: &str, opts: &[String], bin: &str, tx: Option<&StageTx>) -> Result<Child, String> {
     if !host_ok(host) {
         return Err("잘못된 host".into());
     }
     stage(tx, "daemon", None);
-    let mut c = ssh_cmd(host);
+    let mut c = ssh_cmd(host, opts);
     c.arg(format!(r#""{bin}" --pipe"#));
     // 헬퍼 stderr 는 relay 가 읽어 백엔드 로그로 흘리고 마지막 줄을 실패 사유로 쓴다 (lib.rs relay)
     c.stderr(Stdio::piped());
@@ -630,13 +638,13 @@ impl Spares {
     /// 예비 보충 — 슬롯이 비어 있을 때만 pipe_conn 한 번. spawn 은 fork 만이라 즉시 돌아오고
     /// 원격 헬퍼 기동은 뒤에서 진행된다 (소비가 먼저 오면 attach 줄이 파이프에서 기다릴 뿐).
     /// 접속 성립 직후 부른다
-    pub fn fill(&self, host: &str, info: RemoteInfo, bin: String) {
+    pub fn fill(&self, host: &str, opts: &[String], info: RemoteInfo, bin: String) {
         let mut map = self.0.lock().unwrap();
         let st = map.entry(host.to_string()).or_default();
         if st.spare.is_some() {
             return;
         }
-        match pipe_conn(host, &bin, None) {
+        match pipe_conn(host, opts, &bin, None) {
             Ok(c) => st.spare = Some(Held::new(c, info, bin)),
             Err(e) => eprintln!("backend: ssh {host} — 예비 파이프 실패: {e}"),
         }
@@ -649,9 +657,10 @@ pub async fn clean_remote(host: &str) -> Result<String, String> {
     if !host_ok(host) {
         return Err("잘못된 host".into());
     }
-    let info = probe_remote(host, None).await?;
-    let bin = ensure_remote_bin(host, &info, None).await?;
-    let out = run_ssh(host, &format!(r#""{bin}" --clean"#), b"").await?;
+    let opts = ssh_opts(host);
+    let info = probe_remote(host, &opts, None).await?;
+    let bin = ensure_remote_bin(host, &opts, &info, None).await?;
+    let out = run_ssh(host, &opts, &format!(r#""{bin}" --clean"#), b"").await?;
     if !out.status.success() {
         return Err(format!("원격 정리 실패: {}", ssh_err(&out)));
     }

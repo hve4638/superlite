@@ -18,7 +18,7 @@ import {
   moveSession,
   renameSession,
   isRemoteEmpty,
-  remoteHost,
+  withHost,
   multiWindow,
   detachSession,
   detachSessionNearby,
@@ -47,7 +47,7 @@ const descriptions = computed(() => {
 /** 탭 라벨 — 이름은 워크스페이스 정보가 오면 채워진다: 그 전엔 빈 세션만 Welcome, 로드 중인
  *  세션은 공백. 원격 빈 세션(경로 없는 ssh://host)은 이름과 무관하게 "Welcome [host]" */
 function sessionLabel(tab: SessionTab): string {
-  if (isRemoteEmpty(tab.root)) return `Welcome [${remoteHost(tab.root ?? '')}]`;
+  if (isRemoteEmpty(tab.root)) return withHost('Welcome', tab.root ?? '');
   return tab.name || (tab.root === null ? 'Welcome' : '…');
 }
 

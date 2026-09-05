@@ -6,6 +6,7 @@ import { notify } from './notifications';
 import { createSessionCtx, type SessionCtx, type SessionSnapshot } from './session';
 import type { TerminalInstance, TerminalSnapshot } from './terminal';
 import { windowLabel } from './window';
+import { tauri } from './tauri';
 
 /**
  * 워크스페이스 세션 탭 관리자 — 한 창(페이지) 안에서 세션 컨텍스트 여럿을 들고
@@ -56,18 +57,6 @@ export const DND_TERMINAL = 'application/x-superlight-terminal';
 
 export type SessionTab = { id: string; name: string; root: string | null };
 
-type Tauri = {
-  core: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> };
-  event: {
-    listen: (
-      name: string,
-      cb: (e: { payload: unknown }) => void,
-      options?: { target: string },
-    ) => Promise<() => void>;
-  };
-};
-
-const tauri = (window as { __TAURI__?: Tauri }).__TAURI__;
 
 /** 이 창에 보낸 이벤트만 듣는다.
  *  WHY: Tauri 의 listen() 은 대상 없이 등록하면 EventTarget::Any 가 되고, Any 리스너는 native 가
@@ -144,8 +133,9 @@ export function isRemoteEmpty(root: string | null): boolean {
   return root !== null && /^ssh:\/\/[^/]+\/?$/.test(root);
 }
 
-/** 탭 라벨 — 원격은 호스트가 정체성의 절반이라 함께 표시한다 ("proj [omc]") */
-function tabLabel(root: string, name: string): string {
+/** "이름 [host]" 표기 — 원격은 호스트가 정체성의 절반이라 함께 표시한다 ("proj [omc]"). 세션
+ *  탭 이름·원격 빈 세션의 Welcome·시작 페이지 최근 목록이 같은 규칙을 쓴다. 로컬은 이름 그대로 */
+export function withHost(name: string, root: string): string {
   const host = remoteHost(root);
   return host === null ? name : `${name} [${host}]`;
 }
@@ -168,7 +158,7 @@ function addLocal(tab: SessionTab, backend?: ThinBackend): SessionCtx {
     loading.delete(tab.id);
     const t = sessions.list.find((x) => x.id === tab.id);
     if (t && ctx.workbench.workbench.workspaceName && !isRemoteEmpty(t.root))
-      t.name = tabLabel(t.root ?? '', ctx.workbench.workbench.workspaceName);
+      t.name = withHost(t.root ?? '', ctx.workbench.workbench.workspaceName);
     if (t && !t.root && ctx.workbench.workbench.rootPath) t.root = ctx.workbench.workbench.rootPath;
   }, () => {
     // 초기 로드 실패(원격 ssh 접속 실패 등) — 사유는 connection.error 로 탐색기에 보인다
@@ -336,7 +326,7 @@ export function openWebFolder(root: string, mode?: OpenMode): void {
   const replaceId = mode === 'replace' || (mode === undefined && prevEmpty) ? prevId : null;
   const id = genSessionId();
   const base = root.split('/').filter((s) => s !== '').pop() ?? root;
-  addLocal({ id, name: tabLabel(root, base), root });
+  addLocal({ id, name: withHost(root, base), root });
   if (replaceId !== null) {
     const from = sessions.list.findIndex((t) => t.id === id);
     const [tab] = sessions.list.splice(from, 1);

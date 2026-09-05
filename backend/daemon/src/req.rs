@@ -22,8 +22,11 @@ fn file_etag(meta: &std::fs::Metadata) -> String {
 }
 
 // WHY: 요청은 태스크로 병렬 처리된다 — etag 검사→쓰기가 다른 쓰기와 끼어들면 검사가 무의미.
-// ponytail: 전역 쓰기 락 + 락 안 블로킹 fs 호출 — 병목이 실측되면 경로별 락 + spawn_blocking.
-static WRITE_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
+//      읽기(readFile·stat)도 같은 락 — stat→read 의 etag 정합과 orphan 재검증의 응답 순서가
+//      쓰기와의 직렬화에 기댄다. 그래서 '쓰기 락' 이 아니라 파일 시스템 락이다.
+// ponytail: 전역 락 + 락 안 블로킹 fs 호출 — 병목이 실측되면 경로별 락 + spawn_blocking.
+//           읽은 뒤의 인코딩(deflate·base64)은 락 밖에서 한다.
+static FS_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 /// readFile 의 기본 크기 상한 — VS Code 의 텍스트 편집기 상한(50MB)과 동일. 초과는 에러가
 /// 아니라 unopenable(large) 반환이다 — 프론트가 탭을 열고 실측 크기와 함께 안내를 띄운다.
@@ -90,7 +93,7 @@ fn base64_out(bytes: Vec<u8>, meta: &std::fs::Metadata) -> ReadOut {
 
 pub(crate) async fn read_file(p: &Value, root: &Path) -> Result<ReadOut, String> {
     let path = file_path(root, req_path(p)?)?;
-    let _g = WRITE_LOCK.lock().await;
+    let _g = FS_LOCK.lock().await;
     // WHY: stat 이 read 뒤면 etag 가 내용보다 새것일 수 있다 — 그 etag 로 저장하면
     //      최신 내용을 조용히 덮는다. stat 먼저면 최악이 스퓨리어스 충돌(내용 비교
     //      탈출구가 거른다). 데몬 자신의 쓰기와는 락으로 안 겹친다.
@@ -120,12 +123,17 @@ pub(crate) async fn read_file(p: &Value, root: &Path) -> Result<ReadOut, String>
     }
     // encoding=base64 는 이진 읽기 (이미지 뷰어 등) — 대형은 base64 부풀림(1.33x) 없이
     // 원본 바이트를 payload 로 나른다 (프론트가 base64 로 복원해 종전 계약 유지)
-    match p["encoding"].as_str() {
-        Some("base64") => return Ok(base64_out(std::fs::read(&path).map_err(err)?, &meta)),
+    let b64 = match p["encoding"].as_str() {
+        Some("base64") => true,
         Some(other) => return Err(format!("지원하지 않는 encoding: {other}")),
-        None => {}
+        None => false,
+    };
+    let bytes = std::fs::read(&path).map_err(err)?;
+    drop(_g); // 파일은 다 읽었다 — 인코딩(수 MB 면 수십 ms)은 다른 요청을 막지 않고
+    if b64 {
+        return Ok(base64_out(bytes, &meta));
     }
-    match String::from_utf8(std::fs::read(&path).map_err(err)?) {
+    match String::from_utf8(bytes) {
         Ok(content) => {
             if content.len() >= PAYLOAD_MIN_BYTES {
                 // deflate-raw: 브라우저 DecompressionStream('deflate-raw') 대응 (zlib 헤더 없음)
@@ -182,7 +190,7 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
         "stat" => {
             let path = file_path(root, req_path(p)?)?;
             // WHY: readFile 과 같은 락 — orphan 재검증의 응답 순서가 쓰기와의 직렬화에 기댄다
-            let _g = WRITE_LOCK.lock().await;
+            let _g = FS_LOCK.lock().await;
             let meta = std::fs::metadata(&path).map_err(err)?;
             // 정규 파일 전용 — 같은 경로의 디렉토리에 성공하면 재검증이 "파일 실존" 으로 오판한다
             if !meta.is_file() {
@@ -207,7 +215,7 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
                 None => content.as_bytes().into(),
             };
             let path = file_path(root, req_path(p)?)?;
-            let _g = WRITE_LOCK.lock().await;
+            let _g = FS_LOCK.lock().await;
             // 낙관적 충돌 검사 (VS Code FILE_MODIFIED_SINCE 상당). etag 없으면 무조건 쓴다
             // (덮어쓰기·신규 파일). 파일이 사라진 경우는 쓰기로 진행 — 저장이 파일을 되살린다.
             if let Some(expected) = p["etag"].as_str() {
@@ -230,7 +238,7 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
         }
         "createFile" => {
             let path = safe_join(root, req_path(p)?)?;
-            let _g = WRITE_LOCK.lock().await;
+            let _g = FS_LOCK.lock().await;
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent).map_err(err)?; // "a/b/c.ts" 중첩 생성 (VS Code 동일)
             }
@@ -244,7 +252,7 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
         }
         "createDir" => {
             let path = safe_join(root, req_path(p)?)?;
-            let _g = WRITE_LOCK.lock().await;
+            let _g = FS_LOCK.lock().await;
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent).map_err(err)?;
             }
@@ -261,7 +269,7 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
             }
             let from = safe_join(root, from_rel)?;
             let to = safe_join(root, to_rel)?;
-            let _g = WRITE_LOCK.lock().await;
+            let _g = FS_LOCK.lock().await;
             // WHY: std::fs::rename 은 기존 파일을 소리 없이 덮는다 — 대상 존재는 명시적 에러.
             //      symlink_metadata: 깨진 심링크도 "존재" 다 (덮으면 링크가 사라진다)
             if std::fs::symlink_metadata(&to).is_ok() {
@@ -276,7 +284,7 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
                 return Err("빈 경로 — 루트는 지울 수 없다".into());
             }
             let path = safe_join(root, rel)?;
-            let _g = WRITE_LOCK.lock().await;
+            let _g = FS_LOCK.lock().await;
             // 루트 안을 가리키는 심링크는 링크 자신을 지운다 (is_dir() 은 링크를 따라가므로
             // symlink_metadata). 루트 밖을 가리키는 링크는 safe_join 이 거른다 — fail-closed.
             let meta = std::fs::symlink_metadata(&path).map_err(err)?;

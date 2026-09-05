@@ -1,7 +1,8 @@
 import { effect, reactive } from '@vue/reactivity';
 import { notify } from './notifications';
 import { openFolder } from './host';
-import { isRemoteEmpty, remoteHost, sessions, sessionsKind } from './sessions';
+import { isRemoteEmpty, remoteHost, sessions, sessionsKind, withHost } from './sessions';
+import { tauri } from './tauri';
 
 /**
  * 시작 페이지의 최근 목록 (ticket start-page-recents) — 최근 연 폴더 MRU(개별 root)와 세션
@@ -23,15 +24,13 @@ const RECENTS_MAX = 10;
 const BUNDLES_MAX = 5;
 const WEB_KEY = 'superlight.state';
 
-type Tauri = { core: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } };
-const tauri = (window as { __TAURI__?: Tauri }).__TAURI__;
 
-/** 표시 이름 — root 의 마지막 요소, 원격은 "이름 [host]" (세션 탭 라벨과 같은 규칙) */
+/** 표시 이름 — root 의 마지막 요소, 원격은 "이름 [host]" (세션 탭 라벨과 같은 규칙, withHost) */
 export function recentLabel(root: string): string {
   const host = remoteHost(root);
   const path = host === null ? root : root.slice(`ssh://${host}`.length);
   const base = path.split('/').filter((s) => s !== '').pop() ?? path;
-  return host === null ? base : `${base} [${host}]`;
+  return withHost(base, root);
 }
 
 // ---- 웹 저장소 (native Persisted 와 같은 모양)

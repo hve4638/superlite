@@ -6,6 +6,7 @@ import { ctx, viewOf } from './ctx';
 import { daemonClean } from './daemon';
 import { errText, notify } from './notifications';
 import type { SessionCtx } from './session';
+import { tauri } from './tauri';
 import {
   activateSession,
   activeSessionCtx,
@@ -138,10 +139,6 @@ function requestPath(rootPath: string, abs: string): { full: string; wire: strin
 /** 활성 세션의 백엔드 — 종전 싱글턴 이름 유지 (monaco·QuickInput·commands 가 쓴다) */
 export const backend: ThinBackend = viewOf(() => ctx().backend);
 
-type TauriInvoke = {
-  core: { invoke: (cmd: string, args?: object) => Promise<void> };
-};
-
 /** 활성 탭이 빈 세션이면 그 id — 폴더 열기가 새 탭 대신 그 자리를 교체하게 하는 인자 */
 function replaceTarget(): string | undefined {
   return activeSessionEmpty() ? sessions.activeId : undefined;
@@ -185,7 +182,6 @@ export function openFolder(root: string, opts: { mode?: OpenMode } = {}): void {
   const active = sessions.list.find((t) => t.id === sessions.activeId);
   const host = active?.root ? remoteHost(active.root) : null;
   if (host !== null && !root.startsWith('ssh://')) root = `ssh://${host}${root}`;
-  const tauri = (window as { __TAURI__?: TauriInvoke }).__TAURI__;
   if (tauri) {
     // 빈 탭은 native 가 제자리 교체(replace id), 비어 있지 않은 탭의 대체는 invoke 뒤
     // 이전 탭을 닫는 front 뒷정리다 (native replace 는 root 없는 세션만 받는다)
@@ -215,7 +211,6 @@ export function openFolder(root: string, opts: { mode?: OpenMode } = {}): void {
 /** OS 폴더 다이얼로그 열기 (앱 전용) — 팔레트 커맨드·퀵인풋의 두 번째 Ctrl+O 가
  *  공유한다. 활성 빈 탭의 교체 판단(replace)을 한 곳에 모은다 */
 export function openFolderDialog(): void {
-  const tauri = (window as { __TAURI__?: TauriInvoke }).__TAURI__;
   void tauri?.core.invoke('open_folder', { replace: replaceTarget() });
 }
 

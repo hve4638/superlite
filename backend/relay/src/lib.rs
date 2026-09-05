@@ -452,6 +452,8 @@ async fn connect_remote(
     use futures_util::{SinkExt, StreamExt};
     let browse_only = path.is_empty();
     let enter = spares.enter(&host);
+    // 고정 저장본 ssh 옵션 — 접속 한 번에 한 번만 읽는다 (probe·helper·pipe·예비 보충이 공유)
+    let opts = ssh::ssh_opts(&host);
     let mut early: Vec<String> = Vec::new();
     let ready = match spares.take(&host).await {
         Some(sp) => {
@@ -461,11 +463,11 @@ async fn connect_remote(
         None => {
             let (stage_tx, mut stage_rx) = tokio::sync::mpsc::unbounded_channel();
             let conn = {
-                let host = host.clone();
+                let (host, opts) = (host.clone(), opts.clone());
                 tokio::spawn(async move {
-                    let info = ssh::probe_remote(&host, Some(&stage_tx)).await?;
-                    let bin = ssh::ensure_remote_bin(&host, &info, Some(&stage_tx)).await?;
-                    Ok::<_, String>((ssh::pipe_conn(&host, &bin, Some(&stage_tx))?, info, bin))
+                    let info = ssh::probe_remote(&host, &opts, Some(&stage_tx)).await?;
+                    let bin = ssh::ensure_remote_bin(&host, &opts, &info, Some(&stage_tx)).await?;
+                    Ok::<_, String>((ssh::pipe_conn(&host, &opts, &bin, Some(&stage_tx))?, info, bin))
                 })
             };
             loop {
@@ -506,7 +508,7 @@ async fn connect_remote(
     };
     let root = ssh::expand_home(&info.home, if browse_only { "/~" } else { &path });
     // 다음 접속용 예비 보충 — 첫 접속 뒤에도, 소비 직후에도
-    spares.fill(&host, info, bin);
+    spares.fill(&host, &opts, info, bin);
     let (r, w) = (child.stdout.take().unwrap(), child.stdin.take().unwrap());
     // stderr 는 백엔드 로그로 흘리면서 마지막 줄을 남긴다 ("데몬 기동 실패 (5초): …" 등)
     let stderr = child.stderr.take().unwrap();

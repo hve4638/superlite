@@ -24,13 +24,17 @@ fn update_state(op, query) -> list {
 fn record_recent(host, path) {
   role: 최근 폴더 기록 — relay 가 원격 폴더 세션 attach 성공 시 데몬이 돌려준 정규화 경로로 부른다. 최신순·중복 제거·10개 상한 (VS Code Remote Explorer 의 호스트 하위 최근 폴더)
 }
-fn ssh_cmd(host) {
+fn ssh_cmd(host, opts) {
   role: 공통 ssh 골격 — BatchMode(프롬프트 대신 실패) + unix 는 ControlMaster/ControlPersist 연결 공유 (수명 자체 구현 대신 OpenSSH 위임 — decision/process-topology.md 개정. 마스터 소켓은 데몬 IPC 와 같은 0700 디렉터리). Windows OpenSSH 는 ControlMaster 미지원이라 뺀다 — 접속마다 인증할 뿐 동작 동일. Windows 는 CREATE_NO_WINDOW 로 spawn — GUI 앱이 콘솔 자식을 띄울 때 생기는 빈 콘솔 창 깜빡임 방지. 고정된 즐겨찾기는 저장본 옵션을 -o 로 재투입 — 명령줄이 config 보다 우선하므로 config 변경·삭제와 무관하게 고정 시점 설정으로 접속
 }
 class RemoteInfo {
   role: 원격 기본 정보 — home·os(std OS 표기)·arch(std ARCH 표기). 데몬 바이너리 선택 키
 }
-fn probe_remote(host, tx?) -> info {
+fn ssh_opts(host) -> opts {
+  role: 호스트의 고정 저장본 ssh 옵션(remote.json favorites[].options) — 접속 시작 시 한 번 읽어 probe·helper·pipe·예비 보충(fill)이 같은 값을 쓴다 (종전엔 ssh_cmd 가 호출마다 재파싱). 고정 안 한 호스트는 빈 목록
+}
+
+fn probe_remote(host, opts, tx?) -> info {
   role: 접속마다 exec 한 번으로 $HOME·uname -s·uname -m 조회, darwin→macos·arm64→aarch64 정규화. 단계 'ssh' 통보
 }
 export class StageTx {
@@ -45,13 +49,13 @@ fn expand_home(home, path) -> path {
 fn remote_daemon_bin(info) -> path {
   role: 원격 OS·arch 용 데몬 바이너리 — 로컬과 같으면 로컬 데몬, 다르면 형제 파일 superlight-daemon-<os>-<arch> (Windows 배포 세트가 musl 정적 linux-x86_64 데몬을 동봉 — build.sh). 없으면 파일명·위치를 담은 오류
 }
-fn ensure_remote_bin(host, info, tx?) -> remote_path {
+fn ensure_remote_bin(host, opts, info, tx?) -> remote_path {
   role: 원격 헬퍼(=데몬 바이너리) 배치 보장 — $HOME/.cache/code-superlight/bin/<내용해시>/ 에 없으면 remote_daemon_bin 산출물을 ssh stdin 으로 업로드. 해시 키라 재빌드=재배포·빌드 혼용 없음. 단계 'helper'(존재 확인)·'upload'(bytes 동봉, 없을 때만) 통보
 }
 fn clean_remote(host) -> report {
   role: 원격 문제 데몬 정리 — probe_remote → ensure_remote_bin → `ssh host superlight-daemon --clean` exec, stdout 반환. 헬퍼가 곧 원격의 데몬이므로 정리 명령도 같은 바이너리
 }
-fn pipe_conn(host, bin, tx?) -> child {
+fn pipe_conn(host, opts, bin, tx?) -> child {
   role: 원격 데몬 파이프 연결 — 배치된 헬퍼 경로(ensure_remote_bin 결과)로 `ssh host superlight-daemon --pipe` spawn (단계 'daemon' 통보). child 의 stdin/stdout 이 데몬 와이어 (relay 가 로컬 소켓 자리에 물린다). kill_on_drop — relay 종료 = ssh 종료 → 원격 데몬 세션 detach. attach 를 보내기 전까지 어느 경로·세션에도 묶이지 않는다 — 예비(Spares)로 미리 만들어 둘 수 있는 근거
 }
 export class Spares {
@@ -62,7 +66,7 @@ export class Spares {
   fn take(host) -> Spare? {
     role: 예비 소비 — ssh child 가 이미 죽었으면(try_wait) None (fallback: 기존 접속 경로). ping 태스크를 멈추고 stdin 을 child 로 되돌려 온전한 child 로 넘긴다
   }
-  fn fill(host, info, bin) {
+  fn fill(host, opts, info, bin) {
     role: 예비 보충 — 슬롯이 비어 있을 때만 pipe_conn 한 번 (spawn 은 fork 뿐이라 즉시, 원격 헬퍼 기동은 뒤에서 진행). 접속 성립 직후 relay 가 부른다 (첫 접속 뒤에도, 소비 직후에도)
   }
 }

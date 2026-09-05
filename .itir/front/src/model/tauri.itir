@@ -1,0 +1,3 @@
+role: Tauri 전역(__TAURI__) 접근자 — 타입(core.invoke·event.listen·window.getCurrentWindow)과 전역 조회를 한 곳에. 앱에서만 정의, 웹·mock 은 undefined. "앱인가" 판정은 하지 않는다 (window.inApp·sessions env.kind 가 각자 판정). leaf — 아무것도 import 하지 않는다
+
+export val tauri

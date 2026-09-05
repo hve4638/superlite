@@ -1,19 +1,9 @@
 import { reactive } from '@vue/reactivity';
+import { tauri } from './tauri';
 
 // Tauri 창 제어 (앱 전용) — withGlobalTauri 전역으로 현재 창을 다룬다.
 // 브라우저에서는 inApp=false 이고 TitleBar 가 창 제어 버튼 자체를 숨긴다.
-type TauriWindow = {
-  label: string;
-  minimize(): Promise<void>;
-  toggleMaximize(): Promise<void>;
-  close(): Promise<void>;
-  isMaximized(): Promise<boolean>;
-  onResized(handler: () => void): Promise<() => void>;
-};
-
-const current = (
-  window as { __TAURI__?: { window: { getCurrentWindow(): TauriWindow } } }
-).__TAURI__?.window.getCurrentWindow();
+const current = tauri?.window.getCurrentWindow();
 
 export const inApp = current !== undefined;
 

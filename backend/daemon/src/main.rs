@@ -122,7 +122,7 @@ async fn main() {
     // first_pipe_instance 는 같은 사용자의 중복 기동(락이 막는다)이 아니라 타 프로세스의
     // 이름 선점을 드러내는 용도 — panic 대신 로그를 남겨 crash loop 의 원인이 보이게 한다
     #[cfg(windows)]
-    let mut listener = match tokio::net::windows::named_pipe::ServerOptions::new()
+    let listener = match tokio::net::windows::named_pipe::ServerOptions::new()
         .first_pipe_instance(true)
         .create(&sock)
     {
