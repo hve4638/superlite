@@ -182,7 +182,7 @@ fn record_bundles(state: &AppState) {
             .into_iter()
             .map(|w| {
                 list.iter()
-                    .filter(|(id, r)| windows.get(id) == Some(w) && !is_empty_root(r.as_deref()))
+                    .filter(|(id, r)| owns(&windows, id, w) && !is_empty_root(r.as_deref()))
                     .filter_map(|(_, r)| r.clone())
                     .collect()
             })
@@ -231,7 +231,7 @@ fn infos_for(state: &AppState, label: &str) -> Vec<SessionInfo> {
     let list = state.sessions.lock().unwrap();
     let windows = state.windows.lock().unwrap();
     list.iter()
-        .filter(|(id, _)| windows.get(id).map(String::as_str) == Some(label))
+        .filter(|(id, _)| owns(&windows, id, label))
         .map(|(id, root)| info_of(id, root.as_deref()))
         .collect()
 }
@@ -271,7 +271,7 @@ fn drop_window(app: &tauri::AppHandle, state: &AppState, label: &str) {
     {
         let mut list = state.sessions.lock().unwrap();
         let mut windows = state.windows.lock().unwrap();
-        list.retain(|(id, _)| windows.get(id).map(String::as_str) != Some(label));
+        list.retain(|(id, _)| !owns(&windows, id, label));
         windows.retain(|_, w| w != label);
     }
     state.handoffs.lock().unwrap().remove(label);
@@ -289,6 +289,30 @@ fn rand_hex() -> String {
     let mut buf = [0u8; 16];
     getrandom::fill(&mut buf).expect("난수 생성 실패");
     buf.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// 세션 등록 — id 발급·소속 창 기록·레지스트리 끝에 push. sessions Vec 과 windows 맵을 함께
+/// 갱신하는 불변식은 여기(와 open_workspace 의 슬롯 교체)에만 둔다. 두 락을 잡고 부른다
+fn push_session(
+    list: &mut Vec<(String, Option<PathBuf>)>,
+    windows: &mut HashMap<String, String>,
+    label: &str,
+    root: Option<PathBuf>,
+) -> String {
+    let id = rand_hex();
+    windows.insert(id.clone(), label.to_string());
+    list.push((id.clone(), root));
+    id
+}
+
+/// 세션 id 가 창 label 소속인가
+fn owns(windows: &HashMap<String, String>, id: &str, label: &str) -> bool {
+    windows.get(id).map(String::as_str) == Some(label)
+}
+
+/// 창 소속 엔트리의 레지스트리 인덱스 — 레지스트리 순서대로
+fn slots_of(list: &[(String, Option<PathBuf>)], windows: &HashMap<String, String>, label: &str) -> Vec<usize> {
+    (0..list.len()).filter(|&i| owns(windows, &list[i].0, label)).collect()
 }
 
 fn new_window_label(state: &AppState) -> String {
@@ -392,22 +416,22 @@ fn open_workspace(app: &tauri::AppHandle, state: &AppState, label: &str, root: P
             let _ = app.emit_to(owner.as_str(), "session-focus", id);
             return;
         }
-        let session = rand_hex();
         // 교체 대상은 여전히 빈 세션(루트 없음 또는 경로 없는 원격 ssh://host)이어야 하고
         // 이 창 소속이어야 한다 — 경합(그 사이 다른 열기로 교체됨)이면 push
         let slot = replace.and_then(|rid| {
-            list.iter().position(|(id, r)| {
-                id == rid && is_empty_root(r.as_deref()) && windows.get(id).map(String::as_str) == Some(label)
-            })
+            list.iter().position(|(id, r)| id == rid && is_empty_root(r.as_deref()) && owns(&windows, id, label))
         });
         match slot {
             Some(i) => {
+                let session = rand_hex();
                 windows.remove(&list[i].0);
-                list[i] = (session.clone(), Some(root));
+                windows.insert(session.clone(), label.to_string());
+                list[i] = (session, Some(root));
             }
-            None => list.push((session.clone(), Some(root))),
+            None => {
+                push_session(&mut list, &mut windows, label, Some(root));
+            }
         }
-        windows.insert(session, label.to_string());
     }
     emit_sessions(app, state);
 }
@@ -466,9 +490,8 @@ fn open_empty_session(app: tauri::AppHandle, window: tauri::WebviewWindow) {
     let state = app.state::<AppState>();
     {
         let mut list = state.sessions.lock().unwrap();
-        let id = rand_hex();
-        state.windows.lock().unwrap().insert(id.clone(), window.label().to_string());
-        list.push((id, None));
+        let mut windows = state.windows.lock().unwrap();
+        push_session(&mut list, &mut windows, window.label(), None);
     }
     emit_sessions(&app, &state);
 }
@@ -494,9 +517,7 @@ fn move_in_window(
     id: &str,
     to: usize,
 ) -> bool {
-    let slots: Vec<usize> = (0..list.len())
-        .filter(|&i| windows.get(&list[i].0).map(String::as_str) == Some(label))
-        .collect();
+    let slots = slots_of(list, windows, label);
     let mut sub: Vec<(String, Option<PathBuf>)> = slots.iter().map(|&i| list[i].clone()).collect();
     if !move_entry(&mut sub, id, to) {
         return false;
@@ -568,10 +589,13 @@ fn deliver_handoff(app: &tauri::AppHandle, state: &AppState, to: &str, handoff: 
 /// 옮기려 할 때, 이미 떠난 세션에 대한 늦은 요청을 구조적으로 거절한다 (dropEffect 전파를
 /// 신뢰하지 않는다). 다른 창의 세션을 닫거나 옮기는 것도 막는다
 fn owned_by(state: &AppState, id: &str, label: &str) -> Result<(), String> {
-    match state.windows.lock().unwrap().get(id) {
-        Some(w) if w == label => Ok(()),
-        Some(_) => Err("이 창의 세션이 아니다".into()),
-        None => Err("세션 없음".into()),
+    let windows = state.windows.lock().unwrap();
+    if owns(&windows, id, label) {
+        Ok(())
+    } else if windows.contains_key(id) {
+        Err("이 창의 세션이 아니다".into())
+    } else {
+        Err("세션 없음".into())
     }
 }
 
@@ -644,9 +668,7 @@ async fn move_session_to_window(
         let item = list.remove(i);
         windows.insert(id.clone(), to_window.clone());
         // 대상 창 소속 엔트리들 사이의 to_index 자리에 — 넘치면 그 창의 마지막 뒤 (없으면 끝)
-        let slots: Vec<usize> = (0..list.len())
-            .filter(|&k| windows.get(&list[k].0).map(String::as_str) == Some(to_window.as_str()))
-            .collect();
+        let slots = slots_of(&list, &windows, &to_window);
         let at = match slots.get(to_index) {
             Some(&k) => k,
             None => slots.last().map(|&k| k + 1).unwrap_or(list.len()),
@@ -682,13 +704,12 @@ async fn detach_tabs(
     };
     let state = app.state::<AppState>();
     let label = new_window_label(&state);
-    let session = rand_hex();
-    obj.insert("toSession".into(), serde_json::Value::String(session.clone()));
-    {
+    let session = {
         let mut list = state.sessions.lock().unwrap();
-        state.windows.lock().unwrap().insert(session.clone(), label.clone());
-        list.push((session.clone(), Some(root)));
-    }
+        let mut windows = state.windows.lock().unwrap();
+        push_session(&mut list, &mut windows, &label, Some(root))
+    };
+    obj.insert("toSession".into(), serde_json::Value::String(session.clone()));
     deliver_handoff(&app, &state, &label, handoff);
     if let Err(e) = build_window(&app, &state, &label, Some((x, y))) {
         // 롤백 — 생기지 않은 창의 세션·핸드오프를 지운다 (front 는 실패를 받아 탭을 되돌린다)
@@ -795,7 +816,7 @@ async fn open_bundle(app: tauri::AppHandle, window: tauri::WebviewWindow, roots:
         let mut windows = state.windows.lock().unwrap();
         let here_nonempty = list
             .iter()
-            .any(|(id, r)| windows.get(id) == Some(&from) && !is_empty_root(r.as_deref()));
+            .any(|(id, r)| owns(&windows, id, &from) && !is_empty_root(r.as_deref()));
         let fresh: Vec<PathBuf> =
             parsed.into_iter().filter(|root| !list.iter().any(|(_, r)| r.as_ref() == Some(root))).collect();
         if fresh.is_empty() {
@@ -804,16 +825,13 @@ async fn open_bundle(app: tauri::AppHandle, window: tauri::WebviewWindow, roots:
         let label = if here_nonempty {
             new_window_label(&state)
         } else {
-            list.retain(|(id, _)| windows.get(id) != Some(&from));
+            list.retain(|(id, _)| !owns(&windows, id, &from));
             windows.retain(|_, w| w != &from);
             from.clone()
         };
         let mut added = Vec::new();
         for root in fresh {
-            let id = rand_hex();
-            windows.insert(id.clone(), label.clone());
-            list.push((id.clone(), Some(root)));
-            added.push(id);
+            added.push(push_session(&mut list, &mut windows, &label, Some(root)));
         }
         (label, added)
     };
@@ -1053,14 +1071,10 @@ fn main() {
                     // plain: Windows verbatim 루트는 '/' 와이어 경로·자식 cwd 를 깨뜨린다
                     let root = superlight_common::plain(root);
                     remember_recent(&state, &root);
-                    let id = rand_hex();
-                    windows.insert(id.clone(), MAIN_WINDOW.to_string());
-                    list.push((id, Some(root)));
+                    push_session(&mut list, &mut windows, MAIN_WINDOW, Some(root));
                 }
                 if list.is_empty() {
-                    let id = rand_hex();
-                    windows.insert(id.clone(), MAIN_WINDOW.to_string());
-                    list.push((id, None));
+                    push_session(&mut list, &mut windows, MAIN_WINDOW, None);
                 }
             }
             build_window(app.handle(), &state, MAIN_WINDOW, None)?;

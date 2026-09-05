@@ -102,6 +102,18 @@ fn close_if_empty() {
 fn drop_window() {
   role: 창 닫힘(Destroyed — X 또는 close_if_empty) — 그 창 소속 세션을 레지스트리에서 빼고(재-attach 차단 → 데몬 grace 후 회수) 대기 핸드오프도 버린다. focused 가 그 창이었으면 살아 있는 창으로 되돌린다 (두 번째 실행이 유령 세션을 만들지 않게). 다른 창은 영향 없음
 }
+fn push_session(list, windows, label, root) -> id {
+  role: 세션 등록 — id 발급·소속 창 기록·레지스트리 끝에 push. sessions Vec 과 windows 맵을 함께 갱신하는 불변식을 한 곳에 (open_workspace 의 빈 세션 슬롯 교체만 예외). 호출자가 두 락을 잡고 부른다
+}
+
+fn owns(windows, id, label) -> bool {
+  role: 세션이 그 창 소속인가 — 창 단위 목록·정리·소유 검사가 전부 이 술어를 쓴다
+}
+
+fn slots_of(list, windows, label) -> indices {
+  role: 창 소속 엔트리의 레지스트리 인덱스 목록 (레지스트리 순서) — move_in_window 의 재배열 자리, move_session_to_window 의 삽입 자리 계산
+}
+
 fn new_window_label() {
   role: 분리 창 label 발급 — w1, w2 … (첫 창은 main)
 }

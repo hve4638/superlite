@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import type { EditorGroup, SplitSide } from '../../model/editors';
+import type { Doc, EditorGroup, SplitSide } from '../../model/editors';
 import { editors, moveTabSplit, moveTabToGroup, openFile, openFileSplit, openHex } from '../../model/editors';
 import { editorDrag, endEditorDrag } from './tabDnd';
 import TabBar from './TabBar.vue';
@@ -59,23 +59,22 @@ const crumbs = computed(() =>
   active.value && active.value.kind === 'file' ? active.value.path.split('/') : [],
 );
 
-// hex·preview 탭 — 문서 상태와 무관하게 편집기 자리에 전용 뷰 (아래 unopenable·image 분기보다 먼저)
-const viewer = computed(() => {
+/** 활성 탭이 monaco 대신 편집기 자리에 띄우는 것 — 탭·breadcrumbs 는 그대로. 우선순위는
+ *  탭 종류(hex·preview — 문서 상태와 무관한 전용 뷰) > 이미지 데이터 > 열 수 없음 사유이고,
+ *  null 이면 monaco. diff 탭도 같은 문서라 이미지·안내가 동일하다 (이미지 diff 는 범위 밖).
+ *  종류가 늘면 여기 분기 하나와 템플릿 분기 하나 — monaco 가림(v-show="!overlay")은 자동 */
+type Overlay =
+  | { kind: 'hex' | 'preview'; path: string }
+  | { kind: 'image'; path: string; data: string }
+  | { kind: 'unopenable'; reason: NonNullable<Doc['unopenable']> };
+const overlay = computed<Overlay | null>(() => {
   const t = active.value;
-  return t && (t.kind === 'hex' || t.kind === 'preview') ? { kind: t.kind, path: t.path } : null;
-});
-
-// 활성 탭 문서의 열 수 없음 사유 — 있으면 monaco 대신 안내 화면 (diff 탭도 같은 문서라 동일)
-const unopenable = computed(() =>
-  active.value && !viewer.value ? editors.docs.get(active.value.path)?.unopenable ?? null : null,
-);
-
-// 활성 탭 문서의 이미지 데이터 — 있으면 monaco 대신 이미지 뷰어 (unopenable 과 같은 자리.
-// diff 탭도 워킹트리 이미지를 그대로 보여준다 — 이미지 diff 는 범위 밖)
-const image = computed(() => {
-  const t = viewer.value ? null : active.value;
-  const data = t ? editors.docs.get(t.path)?.image : undefined;
-  return t && data !== undefined ? { path: t.path, data } : null;
+  if (!t) return null;
+  if (t.kind === 'hex' || t.kind === 'preview') return { kind: t.kind, path: t.path };
+  const doc = editors.docs.get(t.path);
+  if (doc?.image !== undefined) return { kind: 'image', path: t.path, data: doc.image };
+  if (doc?.unopenable) return { kind: 'unopenable', reason: doc.unopenable };
+  return null;
 });
 
 /** 안내 문구용 크기 표기 — 상한이 수십 MB 라 MB 고정으로 충분하다 */
@@ -109,16 +108,15 @@ const SHORTCUTS = [
       </div>
     </template>
     <div class="editor-body">
-      <!-- hex·HTML 프리뷰 탭 — 편집기 자리에 전용 뷰 (path 키라 탭 전환 시 컴포넌트가 갈린다) -->
-      <HexView v-if="viewer && viewer.kind === 'hex'" :key="viewer.path" :path="viewer.path" />
-      <HtmlPreview v-else-if="viewer" :key="viewer.path" :path="viewer.path" />
-      <!-- 이미지 파일 — 편집기 자리에 뷰어. 탭·breadcrumbs 는 그대로 (unopenable 과 동일 배치) -->
-      <ImageView v-else-if="image" :path="image.path" :data="image.data" />
-      <!-- 열 수 없는 파일(크기 초과·이진) 안내 — 탭·breadcrumbs 는 그대로, 편집기만 대체 -->
-      <div v-else-if="unopenable" class="unopenable">
-        <p v-if="unopenable.kind === 'large'">
+      <!-- overlay 종류별 뷰 (hex·preview 는 path 키라 탭 전환 시 컴포넌트가 갈린다) -->
+      <HexView v-if="overlay?.kind === 'hex'" :key="overlay.path" :path="overlay.path" />
+      <HtmlPreview v-else-if="overlay?.kind === 'preview'" :key="overlay.path" :path="overlay.path" />
+      <ImageView v-else-if="overlay?.kind === 'image'" :path="overlay.path" :data="overlay.data" />
+      <!-- 열 수 없는 파일(크기 초과·이진) 안내 -->
+      <div v-else-if="overlay?.kind === 'unopenable'" class="unopenable">
+        <p v-if="overlay.reason.kind === 'large'">
           The file is not displayed in the text editor because it is too large
-          ({{ fmtMB(unopenable.size) }}).
+          ({{ fmtMB(overlay.reason.size) }}).
         </p>
         <p v-else>
           The file is not displayed in the text editor because it is either binary or
@@ -127,7 +125,7 @@ const SHORTCUTS = [
         <!-- hex 뷰어는 청크 읽기라 크기 상한이 없다 — 두 사유 모두 진입점 -->
         <a class="unopenable-link" @click="active && openHex(active.path)">Open in Hex Editor</a>
       </div>
-      <MonacoHost v-if="group.tabs.length" v-show="!unopenable && !image && !viewer" :group="group" />
+      <MonacoHost v-if="group.tabs.length" v-show="!overlay" :group="group" />
       <div v-else class="watermark">
         <div class="watermark-grid">
           <template v-for="s in SHORTCUTS" :key="s.label">

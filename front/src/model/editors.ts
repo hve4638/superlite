@@ -645,26 +645,23 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
    * rename 반영 — from(파일 또는 디렉토리) 아래의 열린 문서·탭 경로를 to 로 이관한다.
    * 내용·dirty·etag 유지 (rename 은 mtime·size 를 안 바꾸므로 etag 가 계속 유효하다).
    */
+  /** 경로 키 상태 맵 전부 (문서 + 뷰어 상태) — rename 이관(remapPaths)·삭제 정리(closePathTabs)·
+   *  창 이동 정리(takeTabForHandoff)가 같은 목록을 순회한다. 뷰 상태를 가진 뷰어가 늘면 여기에만
+   *  추가한다. docs 는 restore 가 재할당하므로 매번 읽는다 */
+  function pathMaps(): Map<string, unknown>[] {
+    return [editors.docs, editors.imageView, editors.hex];
+  }
+
   function remapPaths(from: string, to: string): void {
     const mapPath = (p: string) =>
       p === from ? to : p.startsWith(`${from}/`) ? to + p.slice(from.length) : null;
-    for (const [path, doc] of [...editors.docs]) {
-      const np = mapPath(path);
-      if (np === null) continue;
-      editors.docs.delete(path);
-      editors.docs.set(np, doc);
-    }
-    for (const [path, iv] of [...editors.imageView]) {
-      const np = mapPath(path);
-      if (np === null) continue;
-      editors.imageView.delete(path);
-      editors.imageView.set(np, iv);
-    }
-    for (const [path, hd] of [...editors.hex]) {
-      const np = mapPath(path);
-      if (np === null) continue;
-      editors.hex.delete(path);
-      editors.hex.set(np, hd);
+    for (const m of pathMaps()) {
+      for (const [path, v] of [...m]) {
+        const np = mapPath(path);
+        if (np === null) continue;
+        m.delete(path);
+        m.set(np, v);
+      }
     }
     disposeModelsHook(from);
     for (const g of editors.groups) {
@@ -704,14 +701,8 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
         if (match(t.path)) closeTab(g.id, t.id, true);
       }
     }
-    for (const p of [...editors.docs.keys()]) {
-      if (match(p)) editors.docs.delete(p);
-    }
-    for (const p of [...editors.imageView.keys()]) {
-      if (match(p)) editors.imageView.delete(p);
-    }
-    for (const p of [...editors.hex.keys()]) {
-      if (match(p)) editors.hex.delete(p);
+    for (const m of pathMaps()) {
+      for (const p of [...m.keys()]) if (match(p)) m.delete(p);
     }
     disposeModelsHook(path);
     if (editors.saveConflict !== null && match(editors.saveConflict)) editors.saveConflict = null;
@@ -895,8 +886,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     const doc = editors.docs.get(tab.path);
     const refs = editors.groups.reduce((n, g) => n + g.tabs.filter((t) => t.path === tab.path).length, 0);
     if (refs === 0) {
-      editors.docs.delete(tab.path);
-      editors.hex.delete(tab.path);
+      for (const m of pathMaps()) m.delete(tab.path);
       editors.orphaned.delete(tab.path);
       disposeModelsHook(tab.path);
     }

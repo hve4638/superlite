@@ -86,8 +86,10 @@ export class WsBackend implements ThinBackend {
   private requestHandler: ((method: string, params: unknown) => Promise<unknown>) | null = null;
   /** 이번 연결이 재연결인가 — attach 응답(id 0)의 resumed 해석에 쓴다 */
   private isReconnect = false;
-  /** dispose 됨 — 재연결 루프를 멈춘다 (세션 탭 닫기 등 의도적 종료) */
+  /** dispose 됨 — 의도적 종료(세션 탭 닫기). 되돌리지 않는다 */
   private disposed = false;
+  /** 영구 실패(close 4403·4502)로 재연결을 포기함 — reconnect() 만이 되돌린다 */
+  private gaveUp = false;
 
   /** session: 재접속 시 데몬이 같은 세션(터미널)을 이어 붙이는 키 — 앱은 native 레지스트리가,
    *  웹은 sessions.genSessionId 가 발급한다 (페이지 수명 단위 — 새로고침은 새 세션) */
@@ -97,7 +99,7 @@ export class WsBackend implements ThinBackend {
   }
 
   private connect(): void {
-    if (this.disposed) return; // dispose 후 도착한 재시도 타이머
+    if (this.disposed || this.gaveUp) return; // dispose·포기 후 도착한 재시도 타이머
     this.ws = new WebSocket(this.url);
     // 대형 payload 바이너리 프레임 (와이어 v6) — 기본 Blob 은 비동기 읽기가 한 겹 더 든다
     this.ws.binaryType = 'arraybuffer';
@@ -244,7 +246,7 @@ export class WsBackend implements ThinBackend {
       // 같은 결과(원격은 매번 ssh 를 다시 띄운다)라 자동 재시도하지 않고 사유를 UI 에 넘긴다
       // (재접속은 사용자 몫)
       if (ev.code === 4403 || ev.code === 4502) {
-        this.disposed = true;
+        this.gaveUp = true;
         const reason = ev.code === 4403 ? '세션이 등록되어 있지 않다' : ev.reason || '접속 실패';
         for (const p of this.pending.values()) p.reject(new Error(reason));
         this.pending.clear();
@@ -318,11 +320,11 @@ export class WsBackend implements ThinBackend {
     this.send({ method: 'requestReply', params: reply });
   }
 
-  /** 영구 실패(4403·4502) 뒤 사용자 주도 재접속 — disposed 를 풀고 다시 연다. 의도적 dispose
-   *  뒤에는 부르지 않는다 (세션 탭이 이미 없다) */
+  /** 영구 실패(4403·4502) 뒤 사용자 주도 재접속 — 포기를 풀고 다시 연다. 포기 상태가
+   *  아니거나 이미 dispose 된 뒤(세션 탭이 없다)면 무동작 */
   reconnect(): void {
-    if (!this.disposed) return;
-    this.disposed = false;
+    if (this.disposed || !this.gaveUp) return;
+    this.gaveUp = false;
     this.retrying = true;
     this.connect();
   }
