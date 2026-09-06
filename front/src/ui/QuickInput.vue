@@ -26,7 +26,6 @@ interface FolderItem {
   /** 절대 경로 — up 이면 돌아갈 부모('/' 끝), 아니면 진입할 하위 디렉토리 */
   path: string;
   name: string;
-  highlights: number[];
   /** true 면 ".." 상위 이동 행 */
   up?: boolean;
 }
@@ -62,7 +61,8 @@ function initialQuery(mode: string): string {
 }
 
 const query = ref(initialQuery(workbench.quickInput.mode));
-// folder 모드는 -1 = 목록 선택 없음(입력창 상태) — 화살표로만 목록에 들어간다.
+// folder 모드는 -1 = 선택 없음. 타이핑 조각과 접두사가 일치하는 첫 후보로 자동 이동하고
+// (VS Code simpleFileDialog.setActiveItems), 조각이 비거나 일치가 없으면 -1 이다.
 // 파일·커맨드 모드는 종전대로 첫 항목이 기본 포커스다.
 const focusedIndex = ref(workbench.quickInput.mode === 'folder' ? -1 : 0);
 
@@ -181,16 +181,14 @@ const items = computed<Item[]>(() => {
     const out: FolderItem[] = [];
     const listing = dirListing.value;
     if (!listing || listing.dir !== dirPart.value) return out;
-    const frag = fragment.value;
-    // ".." 상위 이동 행 (VS Code simple file dialog 파리티) — 타이핑 중엔 필터 밖이라 숨긴다
-    if (frag === '' && !isFsRoot(listing.dir)) {
+    // WHY: VS Code simpleFileDialog 는 목록을 거르지 않는다(matchOnLabel=false) — 전체 하위
+    //      폴더('..' 포함)를 항상 보이고 타이핑은 선택만 옮긴다 (autoFocusFolder).
+    if (!isFsRoot(listing.dir)) {
       const parent = listing.dir.slice(0, listing.dir.lastIndexOf('/', listing.dir.length - 2) + 1);
-      out.push({ kind: 'folder', path: parent, name: '..', highlights: [], up: true });
+      out.push({ kind: 'folder', path: parent, name: '..', up: true });
     }
     for (const name of listing.names) {
-      const hl = matchSubsequence(name, frag.toLowerCase());
-      if (hl === null) continue;
-      out.push({ kind: 'folder', path: listing.dir + name, name, highlights: hl });
+      out.push({ kind: 'folder', path: listing.dir + name, name });
     }
     return out;
   }
@@ -207,8 +205,27 @@ const items = computed<Item[]>(() => {
 });
 
 watch(query, () => {
-  focusedIndex.value = isFolderMode.value ? -1 : 0;
+  if (!isFolderMode.value) focusedIndex.value = 0;
 });
+
+/** folder 모드 자동 선택 — 조각과 접두사(대소문자 무시)가 일치하는 첫 후보. '..' 는 제외.
+ *  조각이 비면(폴더 진입 직후 `a/b/c/`) 선택 없음. */
+function autoFocusFolder(): void {
+  const frag = fragment.value.toLowerCase();
+  focusedIndex.value = frag === ''
+    ? -1
+    : items.value.findIndex((it) => it.kind === 'folder' && !it.up && it.name.toLowerCase().startsWith(frag));
+}
+// 나열이 늦게 도착해도(타이핑이 나열보다 빠른 경우) 선택을 다시 맞춘다
+watch(dirListing, () => {
+  if (isFolderMode.value) autoFocusFolder();
+});
+
+/** 입력창 선택 범위 — Vue 가 :value 를 반영한 뒤에 잡아야 한다 */
+async function setInputSelection(start: number, end: number): Promise<void> {
+  await nextTick();
+  inputEl.value?.setSelectionRange(start, end);
+}
 
 // 외부(타이틀바 등)에서 열린 채로 모드가 바뀌는 경우 입력값을 재설정
 watch(
@@ -266,16 +283,23 @@ const openTarget = computed<string | null>(() => {
 });
 
 function onInput(e: Event): void {
-  // 선택 중 타이핑 → 선택 해제·입력창 복귀. 목록 하이라이트는 입력창에 반영하지 않는다
-  // (입력창 값은 항상 타이핑 값 — 반영은 목록에서 Enter 로만).
   // normPath: Windows 경로 붙여넣기(C:\ 역슬래시)도 '/' 관례로 받아들인다
-  focusedIndex.value = isFolderMode.value ? -1 : 0;
   query.value = normPath((e.target as HTMLInputElement).value);
+  // folder 모드: 방향키로 반영된 이름은 선택 상태라 타이핑이 덮어쓴다 — 새 조각으로 다시 자동 선택
+  if (isFolderMode.value) autoFocusFolder();
+  else focusedIndex.value = 0;
 }
+
+/** OK 확정 대상 — 선택 후보가 있으면 그 경로(VS Code: selectedItems[0].uri), 없으면 입력 경로 */
+const confirmTarget = computed<string | null>(() => {
+  const it = isFolderMode.value && focusedIndex.value >= 0 ? items.value[focusedIndex.value] : null;
+  if (it && it.kind === 'folder') return isFsRoot(it.path) ? it.path : it.path.replace(/\/$/, '');
+  return openTarget.value;
+});
 
 // 확정 — 입력창 경로의 새 세션. 환경 분기(?folder= 이동 / Tauri native invoke)는 host.openFolder
 function confirmOpen(): void {
-  const target = openTarget.value;
+  const target = confirmTarget.value;
   if (!target) return;
   closeQuickInput();
   openFolder(target);
@@ -283,9 +307,11 @@ function confirmOpen(): void {
 
 function accept(it: Item): void {
   if (it.kind === 'folder') {
-    // 진입·상위 이동 — 입력을 그 경로로 바꾸면 나열이 다시 돈다. 확정은 OK 버튼
-    // (VS Code simple file dialog 파리티: Enter 는 탐색, OK 가 열기)
+    // 진입·상위 이동 — 입력을 그 경로로 바꾸면 나열이 다시 돈다. 확정은 OK 버튼 또는 선택
+    // 없는 상태의 Enter (VS Code simple file dialog 파리티: Enter 는 탐색, OK 가 열기)
     query.value = it.up ? it.path : `${it.path}/`;
+    focusedIndex.value = -1;
+    void setInputSelection(query.value.length, query.value.length);
     return;
   }
   closeQuickInput();
@@ -295,16 +321,22 @@ function accept(it: Item): void {
   else it.cmd.run();
 }
 
-function moveFocus(dir: 1 | -1): void {
+function moveFocus(step: 1 | -1): void {
   const n = items.value.length;
   if (!n) return;
-  // folder 모드: 입력창(-1)에서는 위·아래 모두 첫 항목으로 들어가고, 목록에 들어간 뒤에는
-  // 목록 안에서만 순환한다 — 입력창 복귀는 문자 키 입력(onInput)으로만
-  if (isFolderMode.value && focusedIndex.value < 0) {
-    focusedIndex.value = 0;
-    return;
-  }
-  focusedIndex.value = (focusedIndex.value + dir + n) % n;
+  // 선택 없음(-1)에서 아래는 첫 항목, 위는 마지막 항목 (VS Code 리스트 동작). 이후 순환.
+  focusedIndex.value = focusedIndex.value < 0
+    ? (step > 0 ? 0 : n - 1)
+    : (focusedIndex.value + step + n) % n;
+  if (!isFolderMode.value) return;
+  // folder 모드: 선택 후보 이름을 입력창에 반영하고 그 이름만 선택 상태로 둔다 — 이어서
+  // 타이핑하면 덮어써진다. '..' 는 반영하지 않고 폴더 경로만 남긴다
+  // (VS Code simpleFileDialog.setAutoComplete force 경로).
+  const it = items.value[focusedIndex.value];
+  if (!it || it.kind !== 'folder') return;
+  const dir = dirPart.value;
+  query.value = it.up ? dir : dir + it.name;
+  void setInputSelection(dir.length, query.value.length);
 }
 
 function onKeydown(e: KeyboardEvent): void {
@@ -313,9 +345,7 @@ function onKeydown(e: KeyboardEvent): void {
   switch (e.key) {
     case 'Escape':
       e.preventDefault();
-      // folder 모드에서 선택 중이면 먼저 선택만 해제(타이핑 값 복원) — 한 번 더 누르면 닫힘
-      if (isFolderMode.value && focusedIndex.value >= 0) focusedIndex.value = -1;
-      else closeQuickInput();
+      closeQuickInput();
       return;
     case 'ArrowDown':
       e.preventDefault();
@@ -327,11 +357,10 @@ function onKeydown(e: KeyboardEvent): void {
       return;
     case 'Enter': {
       e.preventDefault();
-      // folder 모드 — 목록 선택 중이면 그 경로('/' 까지)를 입력창에 반영해 계속 탐색,
-      // 입력창 상태면 확정 이동
+      // folder 모드 — 선택 후보가 있으면 그 폴더로 진입(계속 탐색), 없으면 입력 경로를 확정
       if (isFolderMode.value) {
         const it = focusedIndex.value >= 0 ? items.value[focusedIndex.value] : null;
-        if (it && it.kind === 'folder') query.value = it.up ? it.path : `${it.path}/`;
+        if (it && it.kind === 'folder') accept(it);
         else confirmOpen();
         return;
       }
@@ -422,7 +451,7 @@ function keyOf(it: Item): string {
       <button
         v-if="isFolderMode"
         class="qi-ok"
-        :disabled="!openTarget"
+        :disabled="!confirmTarget"
         @mousedown.prevent
         @click="confirmOpen"
       >
@@ -449,12 +478,7 @@ function keyOf(it: Item): string {
           <span v-if="it.dir" class="qi-desc">{{ it.dir }}</span>
         </template>
         <template v-else-if="it.kind === 'folder'">
-          <span class="qi-label">
-            <template v-for="(seg, si) in segments(it.name, it.highlights)" :key="si">
-              <span v-if="seg.hl" class="qi-hl">{{ seg.text }}</span>
-              <template v-else>{{ seg.text }}</template>
-            </template>
-          </span>
+          <span class="qi-label">{{ it.name }}</span>
         </template>
         <template v-else>
           <span class="qi-label">
