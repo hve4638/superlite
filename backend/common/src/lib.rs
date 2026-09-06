@@ -120,6 +120,14 @@ pub fn cache_dir() -> Option<PathBuf> {
     Some(PathBuf::from(home).join(".cache").join("superlite"))
 }
 
+/// 데몬 로그 파일 `$HOME/.cache/superlite/daemon.log` (append) — 데몬을 띄우는 쪽(relay
+/// spawn_daemon, 원격 헬퍼 spawn_self_daemon)이 stderr 로 물린다. 실패면 None (호출측이 null 로)
+pub fn daemon_log_file() -> Option<std::fs::File> {
+    let dir = cache_dir()?;
+    std::fs::create_dir_all(&dir).ok()?;
+    std::fs::OpenOptions::new().append(true).create(true).open(dir.join("daemon.log")).ok()
+}
+
 /// 락 보유 데몬의 pid 파일 — 락 파일과 나란히 (`daemon-<N>.pid`). 락을 쥔 쪽만 쓴다.
 /// WHY: 락 파일 자체에 pid 를 적지 않는다 — Windows 의 배타 락(LockFileEx)은 다른 프로세스의
 ///      읽기까지 막아 `--clean` 이 보유자를 알 수 없고, unix 는 락 없이 열어도 되지만 두

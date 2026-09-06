@@ -22,6 +22,9 @@ export fn open_lock_file(path) -> File {
 export fn cache_dir() -> PathBuf? {
   role: 이 머신의 superlite 캐시 디렉터리 $HOME/.cache/superlite — 헬퍼 배치(bin/)·데몬 로그. 원격 셸이 해석하는 같은 경로 문자열은 relay ssh.rs 가 따로 든다
 }
+export fn daemon_log_file() -> File? {
+  role: 데몬 로그 파일 $HOME/.cache/superlite/daemon.log (append) — 데몬을 띄우는 두 곳(relay spawn_daemon 의 Windows 경로, 원격 헬퍼 spawn_self_daemon)이 stderr 로 물린다. 실패면 None (호출측이 null 로)
+}
 export fn plain(p: PathBuf) -> PathBuf {
   role: Windows canonicalize 의 verbatim(\\?\) 접두사 제거 — verbatim 은 Win32 의 '/' 변환을 꺼서 와이어 상대경로 join·자식 cwd 를 깨뜨린다. 드라이브 경로만, unix 는 항등
 }

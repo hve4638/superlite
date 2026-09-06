@@ -320,25 +320,20 @@ fn spawn_self_daemon() {
     //      영원히 남았다 (실측 2026-09-03: 이후 그 호스트의 모든 접속이 '데몬 기동 실패').
     //      로그는 캐시 밑 파일로 — 실패 시 null
     cmd.stdout(std::process::Stdio::null());
-    cmd.stderr(daemon_log_file().map_or_else(std::process::Stdio::null, std::process::Stdio::from));
+    cmd.stderr(
+        superlite_common::daemon_log_file().map_or_else(std::process::Stdio::null, std::process::Stdio::from),
+    );
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+    // CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP — relay spawn_daemon 과 같은 플래그
     #[cfg(windows)]
-    std::os::windows::process::CommandExt::creation_flags(&mut cmd, 0x0000_0010);
+    std::os::windows::process::CommandExt::creation_flags(&mut cmd, 0x0800_0000 | 0x0000_0200);
     if let Ok(mut child) = cmd.spawn() {
         // 좀비 방지 — 데몬이 이미 있어 즉시 물러난 자식 회수 (헬퍼는 오래 살 수 있다)
         std::thread::spawn(move || {
             let _ = child.wait();
         });
     }
-}
-
-/// 헬퍼가 띄운 데몬의 로그 파일 — 헬퍼 배치 디렉터리(relay ssh::ensure_remote_bin)와 같은
-/// 캐시 밑 `$HOME/.cache/superlite/daemon.log` (append)
-fn daemon_log_file() -> Option<std::fs::File> {
-    let dir = superlite_common::cache_dir()?;
-    std::fs::create_dir_all(&dir).ok()?;
-    std::fs::OpenOptions::new().append(true).create(true).open(dir.join("daemon.log")).ok()
 }
 
 fn acquire_lock(sock: &Path) -> Option<std::fs::File> {

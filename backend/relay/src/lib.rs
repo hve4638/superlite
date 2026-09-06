@@ -160,12 +160,21 @@ fn spawn_daemon() -> Result<(), String> {
     // 로그는 상속 — 개발 중 백엔드 터미널에서 같이 보인다.
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
-    // CREATE_NEW_CONSOLE(0x10) — daemon 이 자기 콘솔 창을 갖고 뜬다 (사용자 결정:
-    // daemon 생존·로그가 창으로 보인다 — 창이 있다 = 데몬이 살아 있다). 콘솔이 분리되므로
-    // 백엔드 터미널의 Ctrl+C 도 전파되지 않는다 — CREATE_NEW_PROCESS_GROUP 은
-    // NEW_CONSOLE 과 함께 주면 무시되는 플래그라 뺐다.
+    // CREATE_NO_WINDOW(0x08000000) | CREATE_NEW_PROCESS_GROUP(0x200) — 콘솔 창 없이 뜬다.
+    // 초기에는 CREATE_NEW_CONSOLE 로 데몬이 자기 창을 갖게 했다 ("창이 있다 = 데몬이 살아
+    // 있다", 로그도 창으로) — 지금은 로그가 daemon.log 로 가고 좀비 정리(--clean)도 있어
+    // 앱마다 딸려 뜨는 콘솔 창이 마찰일 뿐이라 사용자 결정으로 없앴다 (2026-09-07,
+    // daemon-no-console-window). 콘솔이 없으니 Ctrl+C 전파 자체가 없지만 그룹 분리는 남긴다.
+    // 콘솔이 없어 stdio 를 상속할 곳이 없다 — 원격 헬퍼(spawn_self_daemon)와 같게 stdout 은
+    // null, stderr 는 daemon.log (실패면 null).
     #[cfg(windows)]
-    std::os::windows::process::CommandExt::creation_flags(&mut cmd, 0x0000_0010);
+    {
+        std::os::windows::process::CommandExt::creation_flags(&mut cmd, 0x0800_0000 | 0x0000_0200);
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(
+            superlite_common::daemon_log_file().map_or_else(std::process::Stdio::null, std::process::Stdio::from),
+        );
+    }
     let mut child = cmd.spawn().map_err(|e| format!("데몬 spawn 실패 {}: {e}", bin.display()))?;
     // 좀비 방지 — 이미 데몬이 있어 즉시 물러난 자식도 회수해야 한다
     std::thread::spawn(move || {
