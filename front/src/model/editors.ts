@@ -724,7 +724,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
         if (g.activeTabId === t.id) g.activeTabId = newId;
         t.id = newId;
         t.path = np;
-        t.name = t.kind === 'diff' ? `${baseName(np)} (Working Tree)` : tabNameOf(t.kind, np);
+        t.name = t.kind === 'diff' ? `${baseName(np)} (${t.deleted ? 'Deleted' : 'Working Tree'})` : tabNameOf(t.kind, np);
       }
     }
     if (editors.saveConflict !== null) {
@@ -958,7 +958,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     // hex 탭은 문서가 필요 없다 — 바이트는 받는 쪽 HexView 가 다시 읽는다
     if (!editors.docs.has(h.tab.path) && h.tab.kind !== 'hex') {
       if (!h.doc) {
-        void (h.tab.kind === 'diff' ? openDiff(h.tab.path)
+        void (h.tab.kind === 'diff' ? openDiff(h.tab.path, { deleted: h.tab.deleted })
           : h.tab.kind === 'preview' ? openHtmlPreview(h.tab.path)
             : openFile(h.tab.path, { groupId: group.id }));
         return;
