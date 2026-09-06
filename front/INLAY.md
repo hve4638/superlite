@@ -1,5 +1,5 @@
 ---
-name: code-superlight
+name: superlite
 purpose: VS Code UX 를 레퍼런스로 한 초경량 SSH workspace GUI — Vue 3 프론트 + ThinBackend 계약
 entry: [src/main.ts, src/backend/types.ts]
 when:

@@ -1,5 +1,5 @@
 import { tauri } from './tauri'
-role: Tauri 창 제어 (앱 전용) — withGlobalTauri 전역(__TAURI__)으로 현재 창의 최소화·최대화 토글·닫기를 노출하고, resize 이벤트로 최대화 상태를 추적한다 (최대화/복원 아이콘 전환용). windowLabel 은 이 창의 Tauri label(native 주입 __SUPERLIGHT_WINDOW__) — 창 간 탭 이동에서 출처·대상 주소. 브라우저에서는 inApp=false·windowLabel null 이고 TitleBar 가 창 제어 버튼 자체를 숨긴다
+role: Tauri 창 제어 (앱 전용) — withGlobalTauri 전역(__TAURI__)으로 현재 창의 최소화·최대화 토글·닫기를 노출하고, resize 이벤트로 최대화 상태를 추적한다 (최대화/복원 아이콘 전환용). windowLabel 은 이 창의 Tauri label(native 주입 __SUPERLITE_WINDOW__) — 창 간 탭 이동에서 출처·대상 주소. 브라우저에서는 inApp=false·windowLabel null 이고 TitleBar 가 창 제어 버튼 자체를 숨긴다
 
 export val inApp
 export val appWindow

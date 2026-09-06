@@ -1,5 +1,5 @@
-role: 단독 웹서버 bin — env(SUPERLIGHT_HTTP·DIST·TOKEN) 해석, root 정규화, bind 후 lib serve 위임
+role: 단독 웹서버 bin — env(SUPERLITE_HTTP·DIST·TOKEN) 해석, root 정규화, bind 후 lib serve 위임
 
 fn main() {
-  role: env 해석 + TcpListener bind + serve(dist 포함) — 빈 SUPERLIGHT_TOKEN 은 무인증 노출 방지를 위해 즉시 종료. --version 이면 version_line 한 줄 출력 후 종료
+  role: env 해석 + TcpListener bind + serve(dist 포함) — 빈 SUPERLITE_TOKEN 은 무인증 노출 방지를 위해 즉시 종료. --version 이면 version_line 한 줄 출력 후 종료
 }

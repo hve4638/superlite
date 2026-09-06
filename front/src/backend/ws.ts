@@ -502,7 +502,7 @@ export class WsBackend implements ThinBackend {
     this.termEpoch.set(term, this.opened ? this.connEpoch : this.connEpoch + 1);
     const handle = this.termHandle(term);
     void this.call('adoptTerminal', { from: opts.from.session, fromTerm: opts.from.term, term }).catch((e) => {
-      this.termHandlers.get(term)?.(`\r\n[superlight: 터미널 이동 실패 — ${String((e as Error).message ?? e)}]\r\n`);
+      this.termHandlers.get(term)?.(`\r\n[superlite: 터미널 이동 실패 — ${String((e as Error).message ?? e)}]\r\n`);
       this.termExitHandlers.get(term)?.(null);
     });
     return handle;

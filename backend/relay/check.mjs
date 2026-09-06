@@ -1,5 +1,5 @@
 // 계약 스모크 (프론트 WS → 백엔드 → 데몬 전 구간) — 백엔드가 repo 루트를 서빙 중일 때:
-//   cargo run -p superlight-backend   (데몬은 자동 기동)
+//   cargo run -p superlite-backend   (데몬은 자동 기동)
 //   node backend/relay/check.mjs
 import assert from 'node:assert';
 import { readFileSync, rmSync } from 'node:fs';
@@ -9,7 +9,7 @@ const deadline = setTimeout(() => {
   process.exit(1);
 }, 15000);
 
-const ws = new WebSocket(process.env.SUPERLIGHT_WS ?? 'ws://127.0.0.1:8795/ws');
+const ws = new WebSocket(process.env.SUPERLITE_WS ?? 'ws://127.0.0.1:8795/ws');
 let nextId = 1;
 const pending = new Map();
 const termData = [];
@@ -37,7 +37,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 await new Promise((resolve, reject) => {
   ws.onopen = resolve;
-  ws.onerror = () => reject(new Error('백엔드 미기동 — cargo run -p superlight-backend 먼저'));
+  ws.onerror = () => reject(new Error('백엔드 미기동 — cargo run -p superlite-backend 먼저'));
 });
 
 const info = await call('workspace');
@@ -47,7 +47,7 @@ const entries = await call('readDir', { path: '' });
 assert.ok(entries.some((e) => e.name === 'front' && e.kind === 'directory'), 'readDir');
 
 const pkg = await call('readFile', { path: 'front/package.json' });
-assert.ok(pkg.content.includes('"code-superlight"'), 'readFile content');
+assert.ok(pkg.content.includes('"superlite"'), 'readFile content');
 assert.match(pkg.etag, /^\d+-\d+$/, 'readFile etag');
 
 await assert.rejects(call('readFile', { path: '../etc/passwd' }), /이탈/, 'safe_join');
@@ -84,7 +84,7 @@ assert.ok(typeof st.branch === 'string' && Array.isArray(st.changes), 'gitStatus
 assert.match(st.head, /^([0-9a-f]{40}|[0-9a-f]{64})$/, 'gitStatus head 해시'); // sha1 | sha256 repo
 
 const orig = await call('gitOriginalContent', { path: 'front/package.json' });
-assert.ok(orig.includes('"code-superlight"'), 'gitOriginalContent');
+assert.ok(orig.includes('"superlite"'), 'gitOriginalContent');
 
 // WHY: 추적 중인 폴더에 써야 한다 — untracked 폴더 안이면 git 이 폴더로 뭉쳐 보고한다
 await call('writeFile', { path: 'front/.check-tmp', content: 'x' });

@@ -1,4 +1,4 @@
-//! superlight-daemon — 워크스페이스·터미널을 소유하는 단일 상주 프로세스 (v0, 로컬).
+//! superlite-daemon — 워크스페이스·터미널을 소유하는 단일 상주 프로세스 (v0, 로컬).
 //!
 //! 백엔드하고만 로컬 IPC(unix socket / Windows named pipe)로 통신한다 — 네트워크에 노출되지 않는다
 //! (_docs/decision/process-topology.md). 프레이밍은 개행 구분 JSON 한 줄:
@@ -19,7 +19,7 @@
 //! changes 대신 overflow:true — 프론트는 전체 리프레시로 대응한다.
 //!
 //! 데몬→프론트 요청(와이어 v9): 소켓 요청자의 frontRequest 를 세션 프론트에 request 이벤트로
-//! 전달하고 requestReply 를 되돌린다 (front 모듈). PTY 는 SUPERLIGHT_SOCK·SUPERLIGHT_SESSION
+//! 전달하고 requestReply 를 되돌린다 (front 모듈). PTY 는 SUPERLITE_SOCK·SUPERLITE_SESSION
 //! 환경변수로 요청자가 이 데몬·세션을 찾는 좌표를 받는다.
 //!
 //! 모듈: req(RPC 요청 처리) · term(PTY) · watch(파일 감시) · front(프론트 요청 중계).
@@ -53,7 +53,7 @@ use term::{Sink, SinkState, Terms};
 
 /// 연결보다 오래 사는 상태 한 벌 — attach 의 session id 가 키.
 struct Session {
-    /// attach 의 session id — PTY 환경변수(SUPERLIGHT_SESSION)로 요청자에게 알린다.
+    /// attach 의 session id — PTY 환경변수(SUPERLITE_SESSION)로 요청자에게 알린다.
     /// 익명 세션은 None (요청자가 지목할 수 없다)
     id: Option<String>,
     root: PathBuf,
@@ -100,7 +100,7 @@ fn wire_rel(s: &str) -> String {
 async fn main() {
     // --version: 버전·커밋·와이어 한 줄 (버그 리포트·헬퍼 업로드 로그용) — 데몬을 띄우지 않는다
     if std::env::args().any(|a| a == "--version") {
-        println!("{}", superlight_common::version_line("superlight-daemon"));
+        println!("{}", superlite_common::version_line("superlite-daemon"));
         return;
     }
     // --pipe: ssh 헬퍼 모드 — 데몬 본체가 아니라 stdio ↔ 데몬 소켓 중계자로 뜬다
@@ -113,7 +113,7 @@ async fn main() {
         clean::clean_main();
         return;
     }
-    let sock = superlight_common::socket_path();
+    let sock = superlite_common::socket_path();
     // WHY: 단독 보장은 파일 락으로 — connect 검사→unlink→bind 순서는 원자적이지 않아
     //      동시 기동 시 산 데몬의 소켓 파일을 다른 데몬이 지우는 race 가 있다.
     //      락을 쥔 쪽만 소켓 파일을 만들고 지운다. 락은 프로세스 종료와 함께 풀린다.
@@ -135,15 +135,15 @@ async fn main() {
     {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("superlight-daemon: named pipe 생성 실패 {}: {e}", sock.display());
+            eprintln!("superlite-daemon: named pipe 생성 실패 {}: {e}", sock.display());
             return;
         }
     };
-    eprintln!("superlight-daemon: {}", sock.display());
+    eprintln!("superlite-daemon: {}", sock.display());
 
     let sessions: Sessions = Sessions::default();
     let conns = Arc::new(AtomicUsize::new(0));
-    let grace: u64 = std::env::var("SUPERLIGHT_GRACE_SECS")
+    let grace: u64 = std::env::var("SUPERLITE_GRACE_SECS")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(3);
@@ -162,7 +162,7 @@ async fn main() {
             loop {
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 if cfg!(unix) && !sock.exists() {
-                    log_line("superlight-daemon: 소켓 파일 사라짐 — 종료");
+                    log_line("superlite-daemon: 소켓 파일 사라짐 — 종료");
                     std::process::exit(2);
                 }
                 // try_lock: 감시는 누구도 기다리지 않는다 — 다른 태스크가 세션 맵을 영원히 쥐면
@@ -176,7 +176,7 @@ async fn main() {
                     if cfg!(unix) {
                         let _ = std::fs::remove_file(&sock);
                     }
-                    log_line(&format!("superlight-daemon: 유휴 {grace}s — 종료"));
+                    log_line(&format!("superlite-daemon: 유휴 {grace}s — 종료"));
                     std::process::exit(0);
                 }
             }
@@ -187,7 +187,7 @@ async fn main() {
     // 데몬 자체가 유휴 종료하면 그때 함께 죽는다 (백엔드 제어 연결이 있는 한 안 죽는다)
     {
         let sessions = sessions.clone();
-        let session_grace: u64 = std::env::var("SUPERLIGHT_SESSION_GRACE_SECS")
+        let session_grace: u64 = std::env::var("SUPERLITE_SESSION_GRACE_SECS")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(300);
@@ -263,7 +263,7 @@ fn log_line(s: &str) {
     let _ = writeln!(std::io::stderr(), "{s}");
 }
 
-/// ssh 헬퍼 모드 — 백엔드가 `ssh host superlight-daemon --pipe` 로 원격(=이 머신)에
+/// ssh 헬퍼 모드 — 백엔드가 `ssh host superlite-daemon --pipe` 로 원격(=이 머신)에
 /// 이 프로세스를 띄운다 (ws docs/decision/remote-ssh.md). 이 머신의 데몬 소켓에 접속
 /// (부재 시 자기 자신을 데몬으로 spawn)해 stdin/stdout 과 양방향 중계만 한다 — 내용
 /// 해석 없음. 로컬 relay 의 daemon_conn+spawn 대응물이고, "헬퍼가 곧 원격의 데몬"
@@ -272,7 +272,7 @@ fn log_line(s: &str) {
 /// ssh 가 죽으면(네트워크 단절·창 닫기) stdin EOF → 종료. 데몬 쪽 연결 drop 이 세션을
 /// detach 로 돌리고, 세션 grace 안의 재접속(새 헬퍼)이 터미널을 이어받는다.
 async fn pipe_main() {
-    let sock = superlight_common::socket_path();
+    let sock = superlite_common::socket_path();
     let mut stream = None;
     for i in 0..50 {
         #[cfg(unix)]
@@ -289,7 +289,7 @@ async fn pipe_main() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     let Some(stream) = stream else {
-        eprintln!("superlight-daemon --pipe: 데몬 기동 실패 (5초): {}", sock.display());
+        eprintln!("superlite-daemon --pipe: 데몬 기동 실패 (5초): {}", sock.display());
         std::process::exit(1);
     };
     let (mut sock_r, mut sock_w) = tokio::io::split(stream);
@@ -334,20 +334,20 @@ fn spawn_self_daemon() {
 }
 
 /// 헬퍼가 띄운 데몬의 로그 파일 — 헬퍼 배치 디렉터리(relay ssh::ensure_remote_bin)와 같은
-/// 캐시 밑 `$HOME/.cache/code-superlight/daemon.log` (append)
+/// 캐시 밑 `$HOME/.cache/superlite/daemon.log` (append)
 fn daemon_log_file() -> Option<std::fs::File> {
-    let dir = superlight_common::cache_dir()?;
+    let dir = superlite_common::cache_dir()?;
     std::fs::create_dir_all(&dir).ok()?;
     std::fs::OpenOptions::new().append(true).create(true).open(dir.join("daemon.log")).ok()
 }
 
 fn acquire_lock(sock: &Path) -> Option<std::fs::File> {
-    let f = superlight_common::open_lock_file(&superlight_common::lock_path(sock)).ok()?;
+    let f = superlite_common::open_lock_file(&superlite_common::lock_path(sock)).ok()?;
     // WouldBlock 이든 다른 실패든 물러난다 (fail-closed)
     f.try_lock().ok()?;
     // 보유자 pid — `--clean` 이 좀비(락은 쥐고 소켓은 없음)를 지목하는 유일한 근거.
     // 락을 쥔 뒤에만 쓴다 (밀려난 후보가 산 데몬의 pid 를 덮지 않게). 실패해도 데몬은 뜬다
-    let _ = std::fs::write(superlight_common::pid_path(sock), std::process::id().to_string());
+    let _ = std::fs::write(superlite_common::pid_path(sock), std::process::id().to_string());
     Some(f)
 }
 
@@ -521,7 +521,7 @@ async fn handle_conn(
         match method.as_str() {
             "ping" => {} // 생존 신호 — read timeout 리셋이 목적의 전부, 응답 없음
             // 요청자(셸 심)의 프론트 요청 (와이어 v9) — attach 없이 허용. 대상 세션은
-            // params.session 으로 지목 (PTY 환경변수 SUPERLIGHT_SESSION). 응답은 프론트의
+            // params.session 으로 지목 (PTY 환경변수 SUPERLITE_SESSION). 응답은 프론트의
             // requestReply 가 올 때 front::reply 가 이 연결로 돌려준다
             "frontRequest" => {
                 let p = &req["params"];
@@ -558,7 +558,7 @@ async fn handle_conn(
                 // plain: verbatim 루트는 '/' 와이어 경로 join·자식 cwd 를 깨뜨린다 (common 참조)
                 match PathBuf::from(req["params"]["root"].as_str().unwrap_or(""))
                     .canonicalize()
-                    .map(superlight_common::plain)
+                    .map(superlite_common::plain)
                 {
                     Ok(r) => {
                         // resumed — 재접속인데 false 면 세션이 이미 회수됐다는 뜻.

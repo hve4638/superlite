@@ -4,13 +4,13 @@ fn main() {
   role: IPC 확보(락 승자만 — unix 는 unlink 후 socket bind, Windows 는 named pipe 인스턴스 루프) + 유휴 감시 태스크(연결 0 이고 detach 세션도 없어야 종료, unix 는 소켓 파일이 사라져도 종료 — 아무도 접속 못 하는 프로세스는 좀비다. 세션 맵은 try_lock — 감시는 누구도 기다리지 않아 뮤텍스 정체에도 소켓 확인이 멈추지 않는다) + 세션 reaper + accept 루프(태스크). main 은 유휴 감시 JoinHandle 을 기다리다 끝나면(panic 포함) 소켓을 지우고 exit — 종료를 부르는 태스크 하나만 죽고 나머지가 살아남던 좀비 경로를 구조적으로 없앤다 (실측 2026-09-03). --pipe 인자면 데몬 본체 대신 pipe_main 헬퍼 모드, --clean 이면 clean::clean_main, --version 이면 common version_line 한 줄 출력 후 종료 (헬퍼 업로드 로그·버그 리포트용)
 }
 fn pipe_main() {
-  role: ssh 헬퍼 모드 — 백엔드가 `ssh host superlight-daemon --pipe` 로 원격(=이 머신)에 띄운다. 이 머신의 데몬 소켓에 접속(부재 시 자기 자신을 데몬으로 spawn)해 stdin/stdout 과 양방향 중계만 — 내용 해석 없음 (로컬 relay 의 daemon_conn+spawn 대응물, "헬퍼가 곧 원격의 데몬" 대칭의 접점). ssh 사망 = stdin EOF → 종료 → 데몬이 세션을 detach 로 돌리고 세션 grace 안의 재접속이 터미널을 이어받는다. 어느 방향이든 끝나면 stdout flush 후 process::exit — 런타임 반환으로 내리면 stdin 블로킹 읽기가 끝나길 기다려 데몬이 먼저 끊은 경우(attach 실패) relay 와 교착한다
+  role: ssh 헬퍼 모드 — 백엔드가 `ssh host superlite-daemon --pipe` 로 원격(=이 머신)에 띄운다. 이 머신의 데몬 소켓에 접속(부재 시 자기 자신을 데몬으로 spawn)해 stdin/stdout 과 양방향 중계만 — 내용 해석 없음 (로컬 relay 의 daemon_conn+spawn 대응물, "헬퍼가 곧 원격의 데몬" 대칭의 접점). ssh 사망 = stdin EOF → 종료 → 데몬이 세션을 detach 로 돌리고 세션 grace 안의 재접속이 터미널을 이어받는다. 어느 방향이든 끝나면 stdout flush 후 process::exit — 런타임 반환으로 내리면 stdin 블로킹 읽기가 끝나길 기다려 데몬이 먼저 끊은 경우(attach 실패) relay 와 교착한다
 }
 fn spawn_self_daemon() {
   role: 헬퍼가 데몬 본체를 spawn (자기 자신, 인자 없이) — relay 의 spawn_daemon 과 같은 정책. stdout 은 null (상속되면 ssh 채널=와이어를 오염), stderr 는 daemon_log_file (ssh 세션보다 오래 사는 데몬이 끊긴 ssh 파이프에 eprintln 하면 EPIPE panic — 유휴 종료 경로가 소켓만 지운 채 락을 쥐고 남아 그 호스트의 모든 접속이 '데몬 기동 실패'가 됐다)
 }
 fn daemon_log_file() -> File? {
-  role: 헬퍼가 띄운 데몬의 로그 파일 — $HOME/.cache/code-superlight/daemon.log (append). 실패면 None (호출측이 null 로)
+  role: 헬퍼가 띄운 데몬의 로그 파일 — $HOME/.cache/superlite/daemon.log (append). 실패면 None (호출측이 null 로)
 }
 fn acquire_lock() {
   role: 단독 데몬 보장 — connect 검사 대신 OS 파일 락(File::try_lock, 검사→unlink→bind 는 원자적이지 않다). 락 파일은 truncate 없이 연다. 락을 쥔 뒤 pid_path 에 자기 pid 를 쓴다 — --clean 이 좀비를 지목하는 유일한 근거 (밀려난 후보가 산 데몬의 pid 를 덮지 않게 쥔 뒤에만)
@@ -22,7 +22,7 @@ fn wire_rel() {
   role: 와이어 상대 경로 정규화 (크레이트 공용) — Windows 산출 경로의 '\' 를 '/' 로. unix 는 '\' 가 파일명 문자라 불변
 }
 class Session {
-  role: 연결보다 오래 사는 상태 한 벌 — 터미널 맵 + 출력 sink(끊김 중 버퍼링) + root + detach 시각 + 프론트 응답 대기 요청(pending, 와이어 v9) + 빠른 열기 파일 목록 캐시(quick, 와이어 v12 — 재접속에도 남아 첫 Ctrl+P 가 다시 걷지 않는다. 무효화는 프론트가 fresh 로) + 자기 session id(PTY 환경변수 SUPERLIGHT_SESSION 으로 요청자에게 알린다, 익명은 None). attach 의 session id 가 키. sessions 맵 락 아래에서 terms 락을 잡지 않는다 (터미널 하나의 정체가 전역을 얼리지 않게)
+  role: 연결보다 오래 사는 상태 한 벌 — 터미널 맵 + 출력 sink(끊김 중 버퍼링) + root + detach 시각 + 프론트 응답 대기 요청(pending, 와이어 v9) + 빠른 열기 파일 목록 캐시(quick, 와이어 v12 — 재접속에도 남아 첫 Ctrl+P 가 다시 걷지 않는다. 무효화는 프론트가 fresh 로) + 자기 session id(PTY 환경변수 SUPERLITE_SESSION 으로 요청자에게 알린다, 익명은 None). attach 의 session id 가 키. sessions 맵 락 아래에서 terms 락을 잡지 않는다 (터미널 하나의 정체가 전역을 얼리지 않게)
 }
 fn reap_sessions() {
   role: detach 후 grace 를 넘긴 세션 회수 — 터미널 kill 후 맵에서 제거

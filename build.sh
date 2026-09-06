@@ -1,6 +1,6 @@
 #!/bin/sh
 # Windows 배포 세트 빌드 — front dist → cross-compile → <ws>/build/ 에 아래 배치.
-#   superlight-app.exe, WebView2Loader.dll
+#   superlite.exe, WebView2Loader.dll
 #   daemon/windows-x86_64.exe   앱이 로컬에서 띄우는 데몬
 #   daemon/linux-x86_64         musl 정적 linux 데몬 — linux 원격(ssh)에 올려 실행
 #   VERSION                     "0.1.0 (8700a11, built …, wire 13)" 한 줄 — 어느 빌드인지 식별
@@ -43,14 +43,14 @@ fi
 # 빌드 정보(커밋·dirty·시각)는 common 의 build.rs 가 굽는다 — 재실행 조건이 HEAD 변경뿐이라
 # 배포 빌드는 touch 로 강제 재실행해 현재 트리 상태를 정확히 박는다
 touch backend/common/build.rs
-cargo build --release --target x86_64-pc-windows-gnu -p superlight-app -p superlight-daemon
-cargo build --release --target x86_64-unknown-linux-musl -p superlight-daemon
+cargo build --release --target x86_64-pc-windows-gnu -p superlite -p superlite-daemon
+cargo build --release --target x86_64-unknown-linux-musl -p superlite-daemon
 
 rel=target/x86_64-pc-windows-gnu/release
 mkdir -p "$out/daemon"
-cp "$rel/superlight-app.exe" "$rel/WebView2Loader.dll" "$out/"
-cp "$rel/superlight-daemon.exe" "$out/daemon/windows-x86_64.exe"
-cp target/x86_64-unknown-linux-musl/release/superlight-daemon "$out/daemon/linux-x86_64"
+cp "$rel/superlite.exe" "$rel/WebView2Loader.dll" "$out/"
+cp "$rel/superlite-daemon.exe" "$out/daemon/windows-x86_64.exe"
+cp target/x86_64-unknown-linux-musl/release/superlite-daemon "$out/daemon/linux-x86_64"
 # VERSION 은 방금 만든 바이너리 자신의 --version 출력에서 — 별도 계산이 없어 어긋날 수 없다
-"$out/daemon/linux-x86_64" --version | sed 's/^superlight-daemon //' > "$out/VERSION"
-echo "→ $out/ (superlight-app.exe, WebView2Loader.dll, daemon/windows-x86_64.exe, daemon/linux-x86_64, VERSION: $(cat "$out/VERSION"))"
+"$out/daemon/linux-x86_64" --version | sed 's/^superlite-daemon //' > "$out/VERSION"
+echo "→ $out/ (superlite.exe, WebView2Loader.dll, daemon/windows-x86_64.exe, daemon/linux-x86_64, VERSION: $(cat "$out/VERSION"))"

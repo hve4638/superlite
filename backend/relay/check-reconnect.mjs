@@ -19,12 +19,12 @@ mkdirSync(wsRoot);
 
 const env = {
   ...process.env,
-  SUPERLIGHT_SOCK: join(dir, 'daemon.sock'),
-  SUPERLIGHT_HTTP: '127.0.0.1:18793',
-  SUPERLIGHT_GRACE_SECS: '5', // 백엔드 제어 연결이 있는 한 안 죽는다 — 사후 정리용으로만 짧게
-  SUPERLIGHT_SESSION_GRACE_SECS: '2', // reaper 주기 5s — 회수 확인은 최대 ~7s 대기
+  SUPERLITE_SOCK: join(dir, 'daemon.sock'),
+  SUPERLITE_HTTP: '127.0.0.1:18793',
+  SUPERLITE_GRACE_SECS: '5', // 백엔드 제어 연결이 있는 한 안 죽는다 — 사후 정리용으로만 짧게
+  SUPERLITE_SESSION_GRACE_SECS: '2', // reaper 주기 5s — 회수 확인은 최대 ~7s 대기
 };
-const bin = fileURLToPath(new URL('../../target/debug/superlight-backend', import.meta.url));
+const bin = fileURLToPath(new URL('../../target/debug/superlite-backend', import.meta.url));
 const backend = spawn(bin, [wsRoot], { env, stdio: 'ignore' });
 backend.on('error', () => {});
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -100,7 +100,7 @@ try {
   // 5) 유휴 종료: 백엔드가 죽고 세션까지 회수되면 데몬은 자진 종료한다 (소켓 파일 제거가
   //    graceful 종료의 증거). detach 세션이 있는 동안은 안 죽는 조건의 반대편 검증이다.
   backend.kill();
-  const sock = env.SUPERLIGHT_SOCK;
+  const sock = env.SUPERLITE_SOCK;
   let gone = false;
   for (let i = 0; i < 40; i++) {
     await sleep(500);

@@ -41,7 +41,7 @@ self.MonacoEnvironment = {
 
 // WHY: colors 는 tokens.json(Dark Modern)의 실측값. CSS 변수는 monaco 테마에 못 쓰므로
 //      hex 로 풀어 쓴다 — tokens.css 와 이중화되지만 원본은 동일 spec 이다.
-monaco.editor.defineTheme('superlight-dark', {
+monaco.editor.defineTheme('superlite-dark', {
   base: 'vs-dark',
   inherit: true,
   colors: {
@@ -98,7 +98,7 @@ monaco.editor.defineTheme('superlight-dark', {
 
 /** 공유 옵션 — 폰트 기본값은 theme/fonts.ts 단일 소스, 라인 하이라이트 border(#282828) */
 export const EDITOR_OPTIONS: monaco.editor.IStandaloneEditorConstructionOptions = {
-  theme: 'superlight-dark',
+  theme: 'superlite-dark',
   fontSize: EDITOR_FONT_SIZE,
   fontFamily: MONO_FONT_FAMILY,
   lineNumbers: 'on',
@@ -116,7 +116,7 @@ export const EDITOR_OPTIONS: monaco.editor.IStandaloneEditorConstructionOptions 
 // monaco 가 untrusted 로 취급해 5초 뒤 백그라운드 재실측한다 (그 사이 OS 폰트가 바뀌었을
 // 수 있다 — VS Code 동일). serializeFontInfo/restoreFontInfo 는 monaco 배포판에서 빠져
 // 내부 캐시 메서드로 재구성한다 — 시그니처가 바뀌어도 try/catch 로 무해하게 실측 경로가 된다.
-const FONT_CACHE_KEY = 'superlight.editorFontInfo';
+const FONT_CACHE_KEY = 'superlite.editorFontInfo';
 try {
   const raw = localStorage.getItem(FONT_CACHE_KEY);
   if (raw) {

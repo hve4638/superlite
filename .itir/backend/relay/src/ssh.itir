@@ -19,7 +19,7 @@ fn host_list() -> list {
   role: 원격 탐색기 목록 — favorites 는 즐겨찾기 순서(고정 항목은 config 에서 사라져도 남고 drift = 저장본≠현재 블록·ack 한 상태 제외, 고정 안 한 항목은 missing), all 은 config 전체. 즐겨찾기가 비면 panes 를 저장값과 무관하게 favorite 닫힘·all 열림으로 (사용자 결정)
 }
 fn update_state(op, query) -> list {
-  role: superlight 자체 상태 파일(설정 디렉터리의 code-superlight/remote.json) 변경 — fav·unfav(고정도 버림)·pin(즐겨찾기에서만, 현재 블록 스냅샷)·unpin·ack(현재 config 상태를 인정해 경고만 끔)·refresh(저장본을 현재 블록으로 교체)·forget(최근 폴더 한 줄 제거)·pane(접힘 상태). 구 형식(pinned 목록)은 읽을 때 즐겨찾기로 이전. ~/.ssh/config 는 건드리지 않는다
+  role: superlite 자체 상태 파일(설정 디렉터리의 superlite/remote.json) 변경 — fav·unfav(고정도 버림)·pin(즐겨찾기에서만, 현재 블록 스냅샷)·unpin·ack(현재 config 상태를 인정해 경고만 끔)·refresh(저장본을 현재 블록으로 교체)·forget(최근 폴더 한 줄 제거)·pane(접힘 상태). 구 형식(pinned 목록)은 읽을 때 즐겨찾기로 이전. ~/.ssh/config 는 건드리지 않는다
 }
 fn record_recent(host, path) {
   role: 최근 폴더 기록 — relay 가 원격 폴더 세션 attach 성공 시 데몬이 돌려준 정규화 경로로 부른다. 최신순·중복 제거·10개 상한 (VS Code Remote Explorer 의 호스트 하위 최근 폴더)
@@ -50,16 +50,16 @@ fn remote_daemon_bin(info) -> path {
   role: 원격 OS·arch 용 데몬 바이너리 — 로컬과 같은 규칙(lib daemon_bin_for)으로 앱 옆 daemon/<os>-<arch> 를 고른다 (Windows 배포 세트가 musl 정적 daemon/linux-x86_64 를 동봉 — build.sh). 없으면 파일명·위치를 담은 오류
 }
 fn ensure_remote_bin(host, opts, info, tx?) -> remote_path {
-  role: 원격 헬퍼(=데몬 바이너리) 배치 보장 — $HOME/.cache/code-superlight/bin/<내용해시>/ 에 없으면 remote_daemon_bin 산출물을 ssh stdin 으로 업로드. 해시 키라 재빌드=재배포·빌드 혼용 없음. 단계 'helper'(존재 확인)·'upload'(bytes 동봉, 없을 때만) 통보
+  role: 원격 헬퍼(=데몬 바이너리) 배치 보장 — $HOME/.cache/superlite/bin/<내용해시>/ 에 없으면 remote_daemon_bin 산출물을 ssh stdin 으로 업로드. 해시 키라 재빌드=재배포·빌드 혼용 없음. 단계 'helper'(존재 확인)·'upload'(bytes 동봉, 없을 때만) 통보
 }
 fn clean_remote(host) -> report {
-  role: 원격 문제 데몬 정리 — probe_remote → ensure_remote_bin → `ssh host superlight-daemon --clean` exec, stdout 반환. 헬퍼가 곧 원격의 데몬이므로 정리 명령도 같은 바이너리
+  role: 원격 문제 데몬 정리 — probe_remote → ensure_remote_bin → `ssh host superlite-daemon --clean` exec, stdout 반환. 헬퍼가 곧 원격의 데몬이므로 정리 명령도 같은 바이너리
 }
 fn pipe_conn(host, opts, bin, tx?) -> child {
-  role: 원격 데몬 파이프 연결 — 배치된 헬퍼 경로(ensure_remote_bin 결과)로 `ssh host superlight-daemon --pipe` spawn (단계 'daemon' 통보). child 의 stdin/stdout 이 데몬 와이어 (relay 가 로컬 소켓 자리에 물린다). kill_on_drop — relay 종료 = ssh 종료 → 원격 데몬 세션 detach. attach 를 보내기 전까지 어느 경로·세션에도 묶이지 않는다 — 예비(Spares)로 미리 만들어 둘 수 있는 근거
+  role: 원격 데몬 파이프 연결 — 배치된 헬퍼 경로(ensure_remote_bin 결과)로 `ssh host superlite-daemon --pipe` spawn (단계 'daemon' 통보). child 의 stdin/stdout 이 데몬 와이어 (relay 가 로컬 소켓 자리에 물린다). kill_on_drop — relay 종료 = ssh 종료 → 원격 데몬 세션 detach. attach 를 보내기 전까지 어느 경로·세션에도 묶이지 않는다 — 예비(Spares)로 미리 만들어 둘 수 있는 근거
 }
 export class Spares {
-  role: 호스트별 예비 파이프 (ticket ssh-spare-pipe) — 같은 호스트 재접속의 ~500ms(ssh exec 3회 직렬 + 원격 헬퍼 기동)를 없앤다. ControlMaster 가 아끼는 것은 인증뿐이라 relay 안에 접속 결과(attach 전 ssh child + RemoteInfo + 헬퍼 경로)를 호스트 단위로 하나씩 들고 있는다. App 상태로 relay 들이 공유. 예비는 attach 를 보내지 않은 채 보관 (재-attach 는 데몬이 거부) — 경로·세션·watch 는 소비자가 attach 한 줄로 정하므로 어떤 경로든 소비 가능. 예비가 살아 있는 동안 원격 데몬은 연결 수 ≥1 이라 유휴 종료하지 않으므로 만료가 필수 — 그 호스트의 실제 접속이 0 이 된 뒤 SUPERLIGHT_SPARE_SECS(기본 300 = 원격 세션 grace 와 같은 재접속 약속 창)가 지나면 drop → kill_on_drop → 원격 헬퍼 EOF 종료 → 원격 데몬은 기존 grace 규칙으로 물러난다. 예비는 30초 ping 을 보내 데몬의 10분 무입력 종료를 피한다
+  role: 호스트별 예비 파이프 (ticket ssh-spare-pipe) — 같은 호스트 재접속의 ~500ms(ssh exec 3회 직렬 + 원격 헬퍼 기동)를 없앤다. ControlMaster 가 아끼는 것은 인증뿐이라 relay 안에 접속 결과(attach 전 ssh child + RemoteInfo + 헬퍼 경로)를 호스트 단위로 하나씩 들고 있는다. App 상태로 relay 들이 공유. 예비는 attach 를 보내지 않은 채 보관 (재-attach 는 데몬이 거부) — 경로·세션·watch 는 소비자가 attach 한 줄로 정하므로 어떤 경로든 소비 가능. 예비가 살아 있는 동안 원격 데몬은 연결 수 ≥1 이라 유휴 종료하지 않으므로 만료가 필수 — 그 호스트의 실제 접속이 0 이 된 뒤 SUPERLITE_SPARE_SECS(기본 300 = 원격 세션 grace 와 같은 재접속 약속 창)가 지나면 drop → kill_on_drop → 원격 헬퍼 EOF 종료 → 원격 데몬은 기존 grace 규칙으로 물러난다. 예비는 30초 ping 을 보내 데몬의 10분 무입력 종료를 피한다
   fn enter(host) -> Enter {
     role: 실제 접속 시작 표시 (active += 1) — drop 이 곧 leave: active 가 0 이 되면 idle 시각을 찍고 만료 태스크를 예약. 만료 태스크는 그 idle 시각이 그대로일 때만(사이에 접속이 없었을 때만) 항목을 버린다
   }

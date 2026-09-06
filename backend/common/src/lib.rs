@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 /// 데몬 IPC 주소 — unix 는 unix socket 경로, Windows 는 named pipe 이름.
 pub fn socket_path() -> PathBuf {
-    if let Ok(p) = std::env::var("SUPERLIGHT_SOCK") {
+    if let Ok(p) = std::env::var("SUPERLITE_SOCK") {
         return PathBuf::from(p); // 테스트·개발용 우회 — 검증 없음
     }
     ipc_path()
@@ -32,7 +32,7 @@ pub fn socket_path() -> PathBuf {
 ///    gitCommit 이 인덱스만 커밋, gitStatus 항목에 staged 플래그. 구버전 데몬은 새 메서드를
 ///    unknown 으로 삼키고 gitCommit 이 전체 스테이징으로 동작해 부분 커밋이 조용히 깨진다.
 /// 9: 데몬→프론트 요청 통로 — 소켓 요청자의 frontRequest 를 세션 프론트에 request 이벤트로
-///    전달하고 requestReply 로 응답을 되돌린다 + PTY 에 SUPERLIGHT_SOCK·SUPERLIGHT_SESSION 주입.
+///    전달하고 requestReply 로 응답을 되돌린다 + PTY 에 SUPERLITE_SOCK·SUPERLITE_SESSION 주입.
 ///    구버전 데몬은 frontRequest 를 attach 전 요청으로 거부하고 환경변수도 없어 셸 심이 조용히
 ///    실패한다.
 /// 10: adoptTerminal 추가 — 같은 root 의 다른 세션이 소유한 터미널을 이 세션으로 옮긴다
@@ -53,12 +53,12 @@ pub const WIRE_VERSION: u32 = 13;
 /// 릴리스 버전 — 루트 Cargo.toml `[workspace.package] version` 하나에서 온다 (crate 4개가 상속).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// 빌드된 git 커밋 (짧은 해시, 미커밋 변경 시 `-dirty`, git 부재 시 `unknown`) — build.rs 가 굽는다
-pub const COMMIT: &str = env!("SUPERLIGHT_COMMIT");
+pub const COMMIT: &str = env!("SUPERLITE_COMMIT");
 /// 빌드 시각 (UTC ISO-8601) — build.rs 가 굽는다
-pub const BUILT_AT: &str = env!("SUPERLIGHT_BUILT_AT");
+pub const BUILT_AT: &str = env!("SUPERLITE_BUILT_AT");
 
 /// `--version` 한 줄 — 데몬·백엔드가 같은 표기를 쓴다 (헬퍼 업로드 로그·버그 리포트용).
-/// 예: `superlight-daemon 0.1.0 (8700a11f2, built 2026-09-06T05:00:00Z, wire 13)`
+/// 예: `superlite-daemon 0.1.0 (8700a11f2, built 2026-09-06T05:00:00Z, wire 13)`
 pub fn version_line(bin: &str) -> String {
     format!("{bin} {VERSION} ({COMMIT}, built {BUILT_AT}, wire {WIRE_VERSION})")
 }
@@ -71,7 +71,7 @@ fn ipc_path() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|_| std::env::temp_dir());
     let user = std::env::var("USER").unwrap_or_else(|_| "default".into());
-    let dir = base.join(format!("code-superlight-{user}"));
+    let dir = base.join(format!("superlite-{user}"));
     let mut b = std::fs::DirBuilder::new();
     b.mode(0o700);
     let _ = b.create(&dir); // 이미 있으면 무시 — 아래 권한 검사가 방어한다
@@ -90,10 +90,10 @@ fn ipc_path() -> PathBuf {
 #[cfg(windows)]
 fn ipc_path() -> PathBuf {
     let user = std::env::var("USERNAME").unwrap_or_else(|_| "default".into());
-    PathBuf::from(format!(r"\\.\pipe\superlight-{user}-{WIRE_VERSION}"))
+    PathBuf::from(format!(r"\\.\pipe\superlite-{user}-{WIRE_VERSION}"))
 }
 
-/// 데몬 단독 보장용 락 파일 경로 — IPC 주소에서 파생해 SUPERLIGHT_SOCK 우회가 락에도
+/// 데몬 단독 보장용 락 파일 경로 — IPC 주소에서 파생해 SUPERLITE_SOCK 우회가 락에도
 /// 전파된다 (우회가 격리 인스턴스를 만드는 계약 — check 하니스가 기댄다).
 pub fn lock_path(sock: &Path) -> PathBuf {
     #[cfg(unix)]
@@ -103,7 +103,7 @@ pub fn lock_path(sock: &Path) -> PathBuf {
         // pipe 이름은 파일 경로가 아니다 — 평탄화해 %TEMP% 밑 락 파일로.
         // %TEMP% 는 대화형 사용자별 디렉터리다 (서비스 컨텍스트는 MVP 밖)
         let key = sock.to_string_lossy().replace(['\\', '/', ':'], "_");
-        std::env::temp_dir().join(format!("code-superlight-{key}.lock"))
+        std::env::temp_dir().join(format!("superlite-{key}.lock"))
     }
 }
 
@@ -113,11 +113,11 @@ pub fn open_lock_file(path: &Path) -> std::io::Result<std::fs::File> {
     std::fs::OpenOptions::new().write(true).create(true).truncate(false).open(path)
 }
 
-/// 이 머신의 superlight 캐시 디렉터리 `$HOME/.cache/code-superlight` — 헬퍼 배치(bin/)와
+/// 이 머신의 superlite 캐시 디렉터리 `$HOME/.cache/superlite` — 헬퍼 배치(bin/)와
 /// 데몬 로그가 산다. 원격 셸이 해석하는 같은 경로 문자열은 relay ssh.rs 가 따로 든다
 pub fn cache_dir() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
-    Some(PathBuf::from(home).join(".cache").join("code-superlight"))
+    Some(PathBuf::from(home).join(".cache").join("superlite"))
 }
 
 /// 락 보유 데몬의 pid 파일 — 락 파일과 나란히 (`daemon-<N>.pid`). 락을 쥔 쪽만 쓴다.

@@ -1,4 +1,4 @@
-//! superlight-app — Tauri 데스크톱 껍데기. front dist 를 자산으로 번들하고,
+//! superlite — Tauri 데스크톱 껍데기. front dist 를 자산으로 번들하고,
 //! relay(serve)를 loopback 임의 포트로 in-process 기동해 WS endpoint 를 webview 에
 //! 주입한다. 와이어 계약·daemon 분리 수명(tmux 식)은 그대로 — Tauri IPC 전환은 비목표.
 //!
@@ -26,7 +26,7 @@
 //! MRU 와 세션 묶음(한 창에 함께 열려 있던 root 집합) 이력을 남기고, 시작 페이지가 그 목록을
 //! 보여 사용자가 명시적으로 다시 연다 (ticket start-page-recents).
 //!
-//! 실행: superlight-app [워크스페이스루트]  (인자 없으면 빈 세션으로 시작)
+//! 실행: superlite [워크스페이스루트]  (인자 없으면 빈 세션으로 시작)
 
 // 릴리스 Windows 에서 콘솔 창이 같이 뜨지 않게
 #![cfg_attr(all(not(debug_assertions), windows), windows_subsystem = "windows")]
@@ -36,7 +36,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use superlight_backend::SessionRoots;
+use superlite_backend::SessionRoots;
 use tauri::{Emitter, Manager};
 
 /// 세션 레지스트리 — 순서가 곧 탭 순서 (relay 의 SessionRoots::Registry 와 공유).
@@ -120,7 +120,7 @@ fn save_state(path: Option<&Path>, p: &Persisted) {
     let json = serde_json::to_string(p).expect("상태 직렬화는 실패할 수 없다");
     let tmp = path.with_extension("json.tmp");
     if let Err(e) = std::fs::write(&tmp, json).and_then(|()| std::fs::rename(&tmp, path)) {
-        eprintln!("superlight-app: 상태 저장 실패: {e}");
+        eprintln!("superlite: 상태 저장 실패: {e}");
     }
 }
 
@@ -195,7 +195,7 @@ fn record_bundles(state: &AppState) {
     save_state(state.state_file.as_deref(), &p);
 }
 
-/// 세션 탭 표시용 사영 — 부팅 주입(__SUPERLIGHT_SESSIONS__)·list_sessions 응답·
+/// 세션 탭 표시용 사영 — 부팅 주입(__SUPERLITE_SESSIONS__)·list_sessions 응답·
 /// sessions-changed 이벤트 payload 가 전부 이 모양이다
 #[derive(Clone, serde::Serialize)]
 struct SessionInfo {
@@ -351,7 +351,7 @@ fn build_window(
     //      흰 플래시는 창 배경색 + index.html 인라인 배경으로 막는다.
     let boot = serde_json::to_string(&infos_for(state, label)).expect("세션 목록 직렬화는 실패할 수 없다");
     let mut b = tauri::WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::App("index.html".into()))
-        .title("superlight")
+        .title("Superlite")
         .inner_size(1200.0, 800.0)
         // OS 창 헤더 없음 — 창 제어(닫기·최소화·최대화·드래그)는 front TitleBar 가 가진다
         .decorations(false)
@@ -361,7 +361,7 @@ fn build_window(
         // 첫 페인트 전 흰 플래시 방지 — 테마 배경(--vscode-editor-background)과 일치
         .background_color(tauri::window::Color(0x1f, 0x1f, 0x1f, 0xff))
         .initialization_script(format!(
-            "window.__SUPERLIGHT_WS__ = '{}'; window.__SUPERLIGHT_SESSIONS__ = {boot}; window.__SUPERLIGHT_OPEN_ROOT__ = {open_root}; window.__SUPERLIGHT_WINDOW__ = {win};",
+            "window.__SUPERLITE_WS__ = '{}'; window.__SUPERLITE_SESSIONS__ = {boot}; window.__SUPERLITE_OPEN_ROOT__ = {open_root}; window.__SUPERLITE_WINDOW__ = {win};",
             state.ws_url,
             // JSON 문자열로 — 경로 이스케이프 안전 (드라이브 문자엔 특수문자 없지만 관례)
             open_root = serde_json::to_string(&default_open_root()).expect("문자열 직렬화는 실패할 수 없다"),
@@ -444,7 +444,7 @@ async fn open_folder(app: tauri::AppHandle, window: tauri::WebviewWindow, replac
         return Ok(());
     };
     // plain: Windows verbatim 루트는 '/' 와이어 경로·자식 cwd 를 깨뜨린다 (common 참조)
-    let root = superlight_common::plain(dir.path().canonicalize().map_err(|e| format!("경로 확인 실패: {e}"))?);
+    let root = superlite_common::plain(dir.path().canonicalize().map_err(|e| format!("경로 확인 실패: {e}"))?);
     let state = app.state::<AppState>();
     open_workspace(&app, &state, window.label(), root, replace.as_deref());
     Ok(())
@@ -474,7 +474,7 @@ fn parse_root(path: &str) -> Result<PathBuf, String> {
         return Ok(PathBuf::from(path));
     }
     // plain: Windows verbatim 루트는 '/' 와이어 경로·자식 cwd 를 깨뜨린다 (common 참조)
-    let root = superlight_common::plain(
+    let root = superlite_common::plain(
         std::path::Path::new(path).canonicalize().map_err(|e| format!("경로 확인 실패: {e}"))?,
     );
     if !root.is_dir() {
@@ -922,14 +922,14 @@ fn attach_os_drop(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
                     match std::path::Path::new(&dir).canonicalize() {
                         Ok(root) => {
                             let state = app2.state::<AppState>();
-                            open_workspace(&app2, &state, &label2, superlight_common::plain(root), None);
+                            open_workspace(&app2, &state, &label2, superlite_common::plain(root), None);
                         }
-                        Err(e) => eprintln!("superlight-app: 드롭 경로 확인 실패: {e}"),
+                        Err(e) => eprintln!("superlite: 드롭 경로 확인 실패: {e}"),
                     }
                 });
             } else if !files.is_empty() {
                 // 파일 드롭 — 루트 상대화·열기 판단은 front 몫이라 절대 경로만 돌려준다
-                let json = serde_json::json!({ "superlightOsDrop": { "files": files } }).to_string();
+                let json = serde_json::json!({ "superliteOsDrop": { "files": files } }).to_string();
                 unsafe { sender.PostWebMessageAsJson(&windows_core::HSTRING::from(json))? };
             }
             Ok(())
@@ -940,7 +940,7 @@ fn attach_os_drop(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
 
 /// 두 번째 실행 수신 (single-instance) — 넘어온 argv·cwd 로 root 를 정해 마지막으로 포커스된
 /// 창에 새 세션 탭을 추가하고 그 창을 앞으로 가져온다.
-/// "폴더 인자 실행 → 기존 앱에 새 세션" UX — app-installer 의 "CSL로 열기"가 이 경로를 탄다.
+/// "폴더 인자 실행 → 기존 앱에 새 세션" UX — app-installer 의 "Superlite로 열기"가 이 경로를 탄다.
 fn open_second_instance(app: &tauri::AppHandle, argv: Vec<String>, cwd: String) {
     // 상대 경로 인자는 두 번째 프로세스의 cwd 기준 — join 은 절대 경로 인자를 그대로 쓴다
     let root = match argv.get(1) {
@@ -952,8 +952,8 @@ fn open_second_instance(app: &tauri::AppHandle, argv: Vec<String>, cwd: String) 
     // plain: Windows verbatim 루트는 '/' 와이어 경로·자식 cwd 를 깨뜨린다 (common 참조)
     // 경로 오류는 로그만 — 두 번째 실행의 잘못된 인자가 기존 앱을 죽이면 안 된다
     match root.canonicalize() {
-        Ok(root) => open_workspace(app, &state, &label, superlight_common::plain(root), None),
-        Err(e) => eprintln!("superlight-app: 두 번째 실행 경로 확인 실패: {e}"),
+        Ok(root) => open_workspace(app, &state, &label, superlite_common::plain(root), None),
+        Err(e) => eprintln!("superlite: 두 번째 실행 경로 확인 실패: {e}"),
     }
     if let Some(w) = app.get_webview_window(&label) {
         let _ = w.show();
@@ -988,7 +988,7 @@ fn main() {
                 .expect("tokio 런타임 생성 실패")
                 .block_on(async move {
                     let listener = tokio::net::TcpListener::from_std(listener).expect("listener 전환 실패");
-                    superlight_backend::serve(listener, roots, Some(token), None).await;
+                    superlite_backend::serve(listener, roots, Some(token), None).await;
                 });
         });
     }
@@ -1031,7 +1031,7 @@ fn main() {
         .setup(move |app| {
             // 시작은 항상 빈 세션(시작 페이지)이다 — 마지막 워크스페이스 복원은 하지
             // 않는다 (2026-09-02 사용자 결정, ticket app-empty-session). 명시 argv 로 준
-            // 폴더("CSL로 열기"·인자 실행)만 그 폴더를 연다. 명시 인자의 경로 오류는 즉시 실패.
+            // 폴더("Superlite로 열기"·인자 실행)만 그 폴더를 연다. 명시 인자의 경로 오류는 즉시 실패.
             let roots: Vec<PathBuf> = match &cli_root {
                 Some(arg) => {
                     vec![arg.canonicalize().expect("워크스페이스 루트 경로가 존재해야 한다")]
@@ -1047,7 +1047,7 @@ fn main() {
             }) {
                 Ok(p) => Some(p),
                 Err(e) => {
-                    eprintln!("superlight-app: 상태 디렉토리 준비 실패 — 최근 목록 저장 없이 동작: {e}");
+                    eprintln!("superlite: 상태 디렉토리 준비 실패 — 최근 목록 저장 없이 동작: {e}");
                     None
                 }
             };
@@ -1069,7 +1069,7 @@ fn main() {
                 let mut windows = state.windows.lock().unwrap();
                 for root in roots {
                     // plain: Windows verbatim 루트는 '/' 와이어 경로·자식 cwd 를 깨뜨린다
-                    let root = superlight_common::plain(root);
+                    let root = superlite_common::plain(root);
                     remember_recent(&state, &root);
                     push_session(&mut list, &mut windows, MAIN_WINDOW, Some(root));
                 }
@@ -1159,7 +1159,7 @@ mod tests {
 
     #[test]
     fn state_roundtrip_and_version_gate() {
-        let path = std::env::temp_dir().join(format!("superlight-test-{}.json", rand_hex()));
+        let path = std::env::temp_dir().join(format!("superlite-test-{}.json", rand_hex()));
         let p = Persisted { version: 2, recents: paths(&["/a"]), bundles: vec![paths(&["/a", "/b"])] };
         save_state(Some(&path), &p);
         let back = load_state(Some(&path));

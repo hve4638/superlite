@@ -419,7 +419,7 @@ class MockPty implements TerminalSession {
   }
 
   private prompt() {
-    this.out(`\x1b[01;32muser@superlight\x1b[00m:\x1b[01;34m${this.cwd}\x1b[00m$ `);
+    this.out(`\x1b[01;32muser@superlite\x1b[00m:\x1b[01;34m${this.cwd}\x1b[00m$ `);
   }
 
   private run(cmd: string) {
@@ -456,7 +456,7 @@ class MockPty implements TerminalSession {
 
   /** 프롬프트의 표시 길이 (ANSI 색 제외) — 커서 절대 위치 계산의 기준 */
   private promptLen(): number {
-    return `user@superlight:${this.cwd}$ `.length;
+    return `user@superlite:${this.cwd}$ `.length;
   }
 
   /**

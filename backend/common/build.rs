@@ -35,12 +35,12 @@ fn main() {
             println!("cargo:rerun-if-changed={common}/packed-refs");
         }
     }
-    println!("cargo:rustc-env=SUPERLIGHT_COMMIT={commit}");
+    println!("cargo:rustc-env=SUPERLITE_COMMIT={commit}");
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    println!("cargo:rustc-env=SUPERLIGHT_BUILT_AT={}", utc_iso(secs));
+    println!("cargo:rustc-env=SUPERLITE_BUILT_AT={}", utc_iso(secs));
 }
 
 /// UNIX 초 → `YYYY-MM-DDTHH:MM:SSZ` (chrono 의존 없이 — civil-from-days 알고리즘)

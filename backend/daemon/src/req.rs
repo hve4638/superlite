@@ -660,7 +660,7 @@ fn list_files(root: &Path) -> Result<Vec<String>, String> {
     });
     let mut files = out.into_inner().unwrap();
     if files.len() >= WALK_MAX {
-        eprintln!("superlight-daemon: quickOpen 걷기 상한 {WALK_MAX} — 부분 목록");
+        eprintln!("superlite-daemon: quickOpen 걷기 상한 {WALK_MAX} — 부분 목록");
     }
     // 병렬 walk 는 순서가 비결정적 — 후보 순서가 키 입력마다 흔들리지 않게 한 번 정렬
     files.sort();
@@ -759,7 +759,7 @@ fn safe_join(root: &Path, rel: &str) -> Result<PathBuf, String> {
         loop {
             match probe.canonicalize() {
                 // plain: root 도 plain — verbatim 을 안 벗기면 starts_with 가 항상 어긋난다
-                Ok(r) => break Ok(superlight_common::plain(r)),
+                Ok(r) => break Ok(superlite_common::plain(r)),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => match probe.parent() {
                     Some(parent) => probe = parent,
                     None => break Err(e),

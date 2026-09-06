@@ -236,7 +236,7 @@ pub(crate) fn kill_term(mut t: Term) {
     });
 }
 
-/// session — PTY 환경변수 SUPERLIGHT_SESSION 으로 셸에 알릴 세션 id (익명 세션은 None)
+/// session — PTY 환경변수 SUPERLITE_SESSION 으로 셸에 알릴 세션 id (익명 세션은 None)
 pub(crate) fn handle_term(
     method: &str,
     p: &Value,
@@ -280,7 +280,7 @@ pub(crate) fn handle_term(
             if let Some(first) = dropped {
                 if first {
                     let msg = json!({"event": "termData", "term": id,
-                        "data": "\r\n[superlight: 입력 큐 상한 초과 — 초과 입력을 폐기함]\r\n"});
+                        "data": "\r\n[superlite: 입력 큐 상한 초과 — 초과 입력을 폐기함]\r\n"});
                     sink_send(sink, msg.to_string(), true);
                 }
                 // 폐기분도 창은 돌려준다 — 큐를 점유하지 않으므로. 안 돌려주면 프론트의
@@ -339,13 +339,13 @@ fn spawn_term(
     // ConPTY 세계엔 TERM 규약이 없다 — 심어두면 Windows 태생 도구들이 오판한다
     #[cfg(unix)]
     cmd.env("TERM", "xterm-256color");
-    // 요청자(셸 심 `superlight <path>`, ticket cli-open-command)가 이 데몬·세션을 찾는 좌표
-    // (와이어 v9). SUPERLIGHT_SOCK 은 common 의 우회 변수와 같은 이름 — 셸 안에서 띄운
+    // 요청자(셸 심 `superlite <path>`, ticket cli-open-command)가 이 데몬·세션을 찾는 좌표
+    // (와이어 v9). SUPERLITE_SOCK 은 common 의 우회 변수와 같은 이름 — 셸 안에서 띄운
     // 백엔드·심이 socket_path() 만으로 이 데몬(격리 인스턴스 포함)에 붙는다.
     // 원격에서는 원격 데몬이 PTY 를 만드므로 자연히 원격 소켓이 된다
-    cmd.env("SUPERLIGHT_SOCK", superlight_common::socket_path().as_os_str());
+    cmd.env("SUPERLITE_SOCK", superlite_common::socket_path().as_os_str());
     if let Some(sid) = session {
-        cmd.env("SUPERLIGHT_SESSION", sid);
+        cmd.env("SUPERLITE_SESSION", sid);
     }
     let child = pty.slave.spawn_command(cmd).map_err(err)?;
     let mut writer = pty.master.take_writer().map_err(err)?;

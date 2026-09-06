@@ -3726,15 +3726,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
-name = "superlight-app"
+name = "superlite"
 version = "0.1.0"
 dependencies = [
  "getrandom 0.3.4",
  "rfd",
  "serde",
  "serde_json",
- "superlight-backend",
- "superlight-common",
+ "superlite-backend",
+ "superlite-common",
  "tauri",
  "tauri-build",
  "tauri-plugin-single-instance",
@@ -3744,24 +3744,24 @@ dependencies = [
 ]
 
 [[package]]
-name = "superlight-backend"
+name = "superlite-backend"
 version = "0.1.0"
 dependencies = [
  "axum",
  "futures-util",
  "serde",
  "serde_json",
- "superlight-common",
+ "superlite-common",
  "tokio",
  "tower-http",
 ]
 
 [[package]]
-name = "superlight-common"
+name = "superlite-common"
 version = "0.1.0"
 
 [[package]]
-name = "superlight-daemon"
+name = "superlite-daemon"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
@@ -3771,7 +3771,7 @@ dependencies = [
  "notify",
  "portable-pty",
  "serde_json",
- "superlight-common",
+ "superlite-common",
  "tokio",
 ]
 

@@ -1,7 +1,7 @@
 import { backendApiUrl, openFolder } from './host'
 import { OpenMode } from './sessions'
 
-role: 원격 탐색기 (SSH) 모델 — 백엔드 머신의 ~/.ssh/config 호스트 목록(/ssh/hosts)에 superlight 자체 상태(즐겨찾기·고정·최근 폴더·pane 접힘)를 합친 것. FAVORITE = 사용자가 고른 host (즐겨찾기 순), 고정(fix)은 즐겨찾기에서만 — 고정 시점 config 블록의 저장본으로 접속(사라져도 남음), 저장본≠현재 config 면 drift(이탤릭), 고정 안 한 즐겨찾기가 config 에서 사라지면 missing(접속 불가). ALL = config 전체(즐겨찾기는 별 표시). 최근 폴더 = 호스트 행 하위 항목, 클릭이 곧 그 폴더 접속 (VS Code Remote Explorer). pane 접힘은 전역 지속 — 즐겨찾기가 비면 FAVORITE 닫힘·ALL 열림. 상태 파일은 백엔드가 단일 출처 — 변경(/ssh/state) 응답이 곧 갱신 목록. 호스트 접속은 경로 없는 ssh://host 로 원격 빈 세션(시작 페이지)을 연다 — 폴더는 그 세션의 '폴더 열기'가 원격을 탐색해 고른다. 세션과 무관한 앱 전역 상태
+role: 원격 탐색기 (SSH) 모델 — 백엔드 머신의 ~/.ssh/config 호스트 목록(/ssh/hosts)에 superlite 자체 상태(즐겨찾기·고정·최근 폴더·pane 접힘)를 합친 것. FAVORITE = 사용자가 고른 host (즐겨찾기 순), 고정(fix)은 즐겨찾기에서만 — 고정 시점 config 블록의 저장본으로 접속(사라져도 남음), 저장본≠현재 config 면 drift(이탤릭), 고정 안 한 즐겨찾기가 config 에서 사라지면 missing(접속 불가). ALL = config 전체(즐겨찾기는 별 표시). 최근 폴더 = 호스트 행 하위 항목, 클릭이 곧 그 폴더 접속 (VS Code Remote Explorer). pane 접힘은 전역 지속 — 즐겨찾기가 비면 FAVORITE 닫힘·ALL 열림. 상태 파일은 백엔드가 단일 출처 — 변경(/ssh/state) 응답이 곧 갱신 목록. 호스트 접속은 경로 없는 ssh://host 로 원격 빈 세션(시작 페이지)을 연다 — 폴더는 그 세션의 '폴더 열기'가 원격을 탐색해 고른다. 세션과 무관한 앱 전역 상태
 
 export type RemoteHost
 export type HostList

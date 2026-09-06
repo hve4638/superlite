@@ -15,7 +15,7 @@ function onKeydown(e: KeyboardEvent): void {
   }
 }
 async function copy(): Promise<void> {
-  await navigator.clipboard.writeText(`superlight\n${aboutText()}`);
+  await navigator.clipboard.writeText(`Superlite\n${aboutText()}`);
   copied.value = true;
 }
 
@@ -32,7 +32,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown, true));
       <div class="dialog-body">
         <span class="codicon codicon-info" />
         <div class="dialog-text">
-          <div class="dialog-message">superlight</div>
+          <div class="dialog-message">Superlite</div>
           <pre class="dialog-detail">{{ aboutText() }}</pre>
         </div>
       </div>

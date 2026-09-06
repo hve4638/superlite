@@ -13,7 +13,7 @@ fn serve() {
   role: 서버 기동 단일 진입점 — control_loop spawn + /ws·/ssh/hosts 라우터(+옵션 dist ServeDir) axum serve. bin 과 Tauri 앱이 공유한다. root 대신 SessionRoots 를 받는다. App 상태에 ssh::Spares(호스트별 예비 파이프)를 함께 둔다 — relay 들이 공유
 }
 fn authed() {
-  role: /ws 와 /ssh/* 공유 인증 — SUPERLIGHT_TOKEN 설정 시 ?tkn= 일치(일치가 곧 인증 — Origin 검증 생략, tauri:// 오리진 수용), 미설정 시 Origin=Host 검증(브라우저 CSRF), Origin 부재(비브라우저)는 통과
+  role: /ws 와 /ssh/* 공유 인증 — SUPERLITE_TOKEN 설정 시 ?tkn= 일치(일치가 곧 인증 — Origin 검증 생략, tauri:// 오리진 수용), 미설정 시 Origin=Host 검증(브라우저 CSRF), Origin 부재(비브라우저)는 통과
 }
 fn cors() {
   role: /ssh/* 응답에 Access-Control-Allow-Origin '*' — Tauri webview(tauri.localhost 오리진)의 fetch 는 /ws 와 달리 CORS 대상이라 헤더가 없으면 "Failed to fetch". 접근 통제는 authed 가 이미 하므로 권한 확대가 아니다 (토큰 없는 교차 오리진은 403)
@@ -25,7 +25,7 @@ fn state_handler() {
   role: POST /ssh/state?op=&host=(&path=|&open=) — 즐겨찾기·고정·최근·pane 상태 변경 (ssh::update_state 에 쿼리 전체를 넘긴다). 본문 없이 쿼리만 — JSON 본문은 CORS preflight 를 유발한다. 응답은 갱신된 목록 (GET 과 동일 형태)
 }
 fn clean_handler() {
-  role: POST /daemon/clean?host= — 문제 데몬 정리 (superlight-daemon --clean). host 없으면 clean_local, 있으면 ssh::clean_remote. 프론트가 '데몬 기동 실패' 뒤 사용자 승인을 받은 경우에만 부른다 — 자동 호출 없음 (사용자 결정 2026-09-04). 응답 본문은 --clean 의 stdout, 실패는 502 + 사유. 인증은 authed, CORS 는 /ssh/* 와 같다
+  role: POST /daemon/clean?host= — 문제 데몬 정리 (superlite-daemon --clean). host 없으면 clean_local, 있으면 ssh::clean_remote. 프론트가 '데몬 기동 실패' 뒤 사용자 승인을 받은 경우에만 부른다 — 자동 호출 없음 (사용자 결정 2026-09-04). 응답 본문은 --clean 의 stdout, 실패는 502 + 사유. 인증은 authed, CORS 는 /ssh/* 와 같다
 }
 fn version_handler() {
   role: GET /version — 이 빌드의 version·commit·builtAt·wire(WIRE_VERSION)·daemonBin(로컬 데몬 배치 경로, 부재면 오류 문자열) JSON. 프론트 About·시작 페이지가 쓴다. 데몬 와이어 밖 relay 자체 응답이라 WIRE_VERSION 불변, 웹·앱 동일 경로 (release-versioning). 인증·CORS 는 /ssh/* 와 같다
@@ -56,7 +56,7 @@ fn daemon_conn() {
   role: 데몬 소켓 접속. spawn 인자는 제어 루프만 true — relay 까지 spawn 하면 백엔드 하나가 데몬을 두 번 띄우는 race 가 생기므로 relay 는 재시도만 한다 (데몬 부재 시 제어 루프가 곧 재기동)
 }
 fn daemon_bin_for(os, arch) -> path {
-  role: OS·arch 에 맞는 데몬 바이너리 배치 규칙 하나 — 실행 파일 옆 daemon/<os>-<arch>[.exe] (이름은 std::env::consts::OS·ARCH 값 그대로, 매핑 표 없음). 로컬(내 OS·arch)이면 SUPERLIGHT_DAEMON_BIN 우회가 먼저, daemon/ 에 없으면 형제 superlight-daemon 폴백 (cargo 가 target/debug 에 평평하게 놓는다 — check 하니스·cargo run). 원격용은 daemon/ 에 없으면 파일명·위치를 담은 오류
+  role: OS·arch 에 맞는 데몬 바이너리 배치 규칙 하나 — 실행 파일 옆 daemon/<os>-<arch>[.exe] (이름은 std::env::consts::OS·ARCH 값 그대로, 매핑 표 없음). 로컬(내 OS·arch)이면 SUPERLITE_DAEMON_BIN 우회가 먼저, daemon/ 에 없으면 형제 superlite-daemon 폴백 (cargo 가 target/debug 에 평평하게 놓는다 — check 하니스·cargo run). 원격용은 daemon/ 에 없으면 파일명·위치를 담은 오류
 }
 fn daemon_bin_path() {
   role: 로컬 데몬 바이너리 — daemon_bin_for(내 OS, 내 arch)

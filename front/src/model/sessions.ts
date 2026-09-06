@@ -51,9 +51,9 @@ export type Handoff =
 /** 창 간 DnD 의 dataTransfer 타입 — dragover 중 읽을 수 있는 건 타입만이라 종류 식별에 쓴다.
  *  데이터는 JSON: 세션 {window, id}, 에디터 {window, session, root, groupId, tabId},
  *  터미널 {window, session, root, id} */
-export const DND_SESSION = 'application/x-superlight-session';
-export const DND_EDITOR = 'application/x-superlight-editor';
-export const DND_TERMINAL = 'application/x-superlight-terminal';
+export const DND_SESSION = 'application/x-superlite-session';
+export const DND_EDITOR = 'application/x-superlite-editor';
+export const DND_TERMINAL = 'application/x-superlite-terminal';
 
 export type SessionTab = { id: string; name: string; root: string | null };
 

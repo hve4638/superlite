@@ -5,13 +5,13 @@ export val VERSION
 export val COMMIT
 export val BUILT_AT
 export fn version_line(bin) -> String {
-  role: `--version` 한 줄 "superlight-daemon 0.1.0 (8700a11, built <UTC>, wire 13)" — 데몬·백엔드 CLI 가 같은 표기. 버전은 루트 Cargo.toml [workspace.package] 하나에서 상속(CARGO_PKG_VERSION), 커밋은 짧은 해시(미커밋 변경 -dirty, git 부재 unknown). build.rs 재실행 조건은 HEAD·ref 변경뿐이라 dirty 는 마지막 실행 시점 값 — build.sh 가 touch 로 강제한다 (ponytail)
+  role: `--version` 한 줄 "superlite-daemon 0.1.0 (8700a11, built <UTC>, wire 13)" — 데몬·백엔드 CLI 가 같은 표기. 버전은 루트 Cargo.toml [workspace.package] 하나에서 상속(CARGO_PKG_VERSION), 커밋은 짧은 해시(미커밋 변경 -dirty, git 부재 unknown). build.rs 재실행 조건은 HEAD·ref 변경뿐이라 dirty 는 마지막 실행 시점 값 — build.sh 가 touch 로 강제한다 (ponytail)
 }
 export fn socket_path() -> PathBuf {
   role: 데몬 IPC 주소 — unix 는 사용자 전용(0700) 런타임 디렉토리 밑 소켓, Windows 는 사용자별 named pipe 이름. 두 프로세스가 같은 주소를 계산하는 것이 접속 규약. 주소에 와이어 버전(WIRE_VERSION)을 넣어 와이어가 다른 빌드의 백엔드가 구버전 상주 데몬에 조용히 붙지 않게 한다 — 데몬 메서드 추가·의미 변경 시 버전을 올린다 (v11: readFile 범위 읽기 offset + stat size). 같은 이름의 env 를 데몬이 PTY 에 주입해(와이어 v9) 셸 심이 socket_path() 만으로 제 데몬을 찾는다
 }
 export fn lock_path(sock) -> PathBuf {
-  role: 데몬 단독 보장용 락 파일 경로 — IPC 주소에서 파생해 SUPERLIGHT_SOCK 우회(격리 인스턴스)가 락에도 전파된다. Windows 의 pipe 이름은 파일 경로가 아니라 평탄화해 %TEMP% 밑에 둔다
+  role: 데몬 단독 보장용 락 파일 경로 — IPC 주소에서 파생해 SUPERLITE_SOCK 우회(격리 인스턴스)가 락에도 전파된다. Windows 의 pipe 이름은 파일 경로가 아니라 평탄화해 %TEMP% 밑에 둔다
 }
 export fn pid_path(sock) -> PathBuf {
   role: 락 보유 데몬의 pid 파일 경로 — 락 파일과 나란히 (daemon-<N>.pid). 락을 쥔 쪽만 쓴다. 락 파일 자체에 적지 않는 이유: Windows 배타 락은 다른 프로세스의 읽기까지 막아 --clean 이 보유자를 알 수 없다
@@ -20,7 +20,7 @@ export fn open_lock_file(path) -> File {
   role: 락 파일 열기 — 데몬 기동(acquire_lock)과 --clean 의 보유자 탐지(try_lock)가 같은 규칙. truncate(false) 가 계약 — 락을 쥐지 못한 쪽이 열기만으로 내용을 비우면 안 된다
 }
 export fn cache_dir() -> PathBuf? {
-  role: 이 머신의 superlight 캐시 디렉터리 $HOME/.cache/code-superlight — 헬퍼 배치(bin/)·데몬 로그. 원격 셸이 해석하는 같은 경로 문자열은 relay ssh.rs 가 따로 든다
+  role: 이 머신의 superlite 캐시 디렉터리 $HOME/.cache/superlite — 헬퍼 배치(bin/)·데몬 로그. 원격 셸이 해석하는 같은 경로 문자열은 relay ssh.rs 가 따로 든다
 }
 export fn plain(p: PathBuf) -> PathBuf {
   role: Windows canonicalize 의 verbatim(\\?\) 접두사 제거 — verbatim 은 Win32 의 '/' 변환을 꺼서 와이어 상대경로 join·자식 cwd 를 깨뜨린다. 드라이브 경로만, unix 는 항등

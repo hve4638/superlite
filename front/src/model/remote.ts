@@ -3,7 +3,7 @@ import { backendApiUrl, openFolder } from './host';
 import type { OpenMode } from './sessions';
 
 /**
- * 원격 탐색기 (SSH) 모델 — 백엔드 머신의 ~/.ssh/config 호스트 목록에 superlight 자체
+ * 원격 탐색기 (SSH) 모델 — 백엔드 머신의 ~/.ssh/config 호스트 목록에 superlite 자체
  * 상태(즐겨찾기·고정·최근 폴더)를 합친 것. 세션과 무관한 앱 전역 상태다.
  *
  * FAVORITE: 사용자가 고른 host (즐겨찾기 순). 고정(fix)은 즐겨찾기에서만 — 고정 시점의

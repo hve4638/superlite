@@ -1,4 +1,4 @@
-//! `superlight-daemon --clean` — 문제 데몬 정리. 사용자가 앱에서 명시적으로 승인했을 때만
+//! `superlite-daemon --clean` — 문제 데몬 정리. 사용자가 앱에서 명시적으로 승인했을 때만
 //! relay 가 부른다 (로컬은 직접, 원격은 ssh exec). 결과는 stdout 에 한 줄씩 — relay 가
 //! 그대로 프론트에 보인다.
 //!
@@ -9,14 +9,14 @@
 //! - 과거 와이어 버전 (unix, 같은 IPC 디렉터리의 daemon*.lock): 락 보유자가 없는 것만 잔재
 //!   파일 삭제. 살아 있는 옛 데몬은 건드리지 않는다 — 와이어가 다른 데몬의 공존은 정상이고
 //!   (다른 빌드의 백엔드가 쓰는 중일 수 있다), 연결이 없으면 수명 규칙대로 스스로 죽는다.
-//! - 헬퍼 배치 캐시 ($HOME/.cache/code-superlight/bin/<hash>/): 자기 자신이 실행 중인
+//! - 헬퍼 배치 캐시 ($HOME/.cache/superlite/bin/<hash>/): 자기 자신이 실행 중인
 //!   디렉터리 외 전부 삭제 (다음 접속이 다시 올린다).
 
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 pub fn clean_main() {
-    let sock = superlight_common::socket_path();
+    let sock = superlite_common::socket_path();
     clean_current(&sock);
     #[cfg(unix)]
     clean_old_versions(&sock);
@@ -25,13 +25,13 @@ pub fn clean_main() {
 
 /// 락 시도 — Some(파일) 이면 보유자 없음(이 프로세스가 쥠), None 이면 남이 쥐고 있다
 fn try_lock(lock: &Path) -> Option<std::fs::File> {
-    let f = superlight_common::open_lock_file(lock).ok()?;
+    let f = superlite_common::open_lock_file(lock).ok()?;
     f.try_lock().ok()?;
     Some(f)
 }
 
 fn remove_files(sock: &Path) {
-    for p in [sock.to_path_buf(), superlight_common::lock_path(sock), superlight_common::pid_path(sock)] {
+    for p in [sock.to_path_buf(), superlite_common::lock_path(sock), superlite_common::pid_path(sock)] {
         let _ = std::fs::remove_file(p);
     }
 }
@@ -44,7 +44,7 @@ fn connectable(sock: &Path) -> bool {
 }
 
 fn clean_current(sock: &Path) {
-    let lock = superlight_common::lock_path(sock);
+    let lock = superlite_common::lock_path(sock);
     let name = sock.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     if let Some(_held) = try_lock(&lock) {
         // 보유자 없음 — 소켓·pid 파일이 남아 있다면 crash 잔재
@@ -56,7 +56,7 @@ fn clean_current(sock: &Path) {
         println!("{name}: 데몬 정상 응답 — 손대지 않음");
         return;
     }
-    let pid = std::fs::read_to_string(superlight_common::pid_path(sock))
+    let pid = std::fs::read_to_string(superlite_common::pid_path(sock))
         .ok()
         .and_then(|s| s.trim().parse::<u32>().ok());
     let Some(pid) = pid else {
@@ -80,7 +80,7 @@ fn clean_current(sock: &Path) {
 #[cfg(unix)]
 fn clean_old_versions(sock: &Path) {
     let Some(dir) = sock.parent() else { return };
-    let current = superlight_common::lock_path(sock);
+    let current = superlite_common::lock_path(sock);
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for e in entries.flatten() {
         let p = e.path();
@@ -102,7 +102,7 @@ fn clean_old_versions(sock: &Path) {
 /// 헬퍼 배치 캐시 — 자기 실행 파일이 든 디렉터리만 남긴다. 자기 자신이 캐시 밖(로컬 빌드)에서
 /// 실행됐으면 건드리지 않는다 — 이 머신이 남의 원격일 때 올라온 헬퍼는 로컬 정리의 대상이 아니다
 fn clean_bin_cache() {
-    let Some(bin) = superlight_common::cache_dir().map(|d| d.join("bin")) else { return };
+    let Some(bin) = superlite_common::cache_dir().map(|d| d.join("bin")) else { return };
     let own = std::env::current_exe().ok().and_then(|p| p.canonicalize().ok()).and_then(|p| p.parent().map(Path::to_path_buf));
     let Some(own) = own.filter(|o| o.parent().and_then(|p| p.canonicalize().ok()).as_deref() == bin.canonicalize().ok().as_deref()) else { return };
     let Ok(entries) = std::fs::read_dir(&bin) else { return };

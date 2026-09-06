@@ -55,7 +55,7 @@ function bundleMissing(b: RecentEntry[]): boolean {
 
 <template>
   <div class="start-page">
-    <div class="start-title">superlight</div>
+    <div class="start-title">Superlite</div>
     <div class="start-sub">You have not yet opened a folder.</div>
     <!-- 원격 빈 세션의 접속 상태 — 단계 진행 / 실패 단계(연결 자체 vs 그 뒤) / 완료. 실패는 Retry -->
     <div v-if="host !== null" class="start-status" :class="{ failed, connecting }">

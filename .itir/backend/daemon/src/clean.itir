@@ -21,7 +21,7 @@ fn clean_old_versions(sock) {
   role: 같은 IPC 디렉터리의 daemon*.lock 중 현재 것이 아닌 파일 — 락 보유자가 없는 것만 소켓·락·pid 삭제, 보유자가 있으면 '살아 있음 — 손대지 않음' 보고. unix 만 (Windows named pipe 는 프로세스와 함께 사라진다)
 }
 fn clean_bin_cache() {
-  role: $HOME/.cache/code-superlight/bin/<hash>/ 중 자기 실행 파일이 든 디렉터리 외 전부 삭제 — 다음 접속이 다시 올린다. 자기 자신이 캐시 밖(로컬 빌드)에서 실행됐으면 무동작 — 이 머신이 남의 원격일 때 올라온 헬퍼는 로컬 정리 대상이 아니다
+  role: $HOME/.cache/superlite/bin/<hash>/ 중 자기 실행 파일이 든 디렉터리 외 전부 삭제 — 다음 접속이 다시 올린다. 자기 자신이 캐시 밖(로컬 빌드)에서 실행됐으면 무동작 — 이 머신이 남의 원격일 때 올라온 헬퍼는 로컬 정리 대상이 아니다
 }
 fn kill(pid) {
   role: unix SIGKILL(libc) / Windows taskkill /F — 멈춘 프로세스에도 듣는 강제 종료

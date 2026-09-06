@@ -1,4 +1,4 @@
-// /ws 연결 토큰 스모크 — SUPERLIGHT_TOKEN 설정 시 ?tkn= 불일치는 403, 일치는 정상 동작.
+// /ws 연결 토큰 스모크 — SUPERLITE_TOKEN 설정 시 ?tkn= 불일치는 403, 일치는 정상 동작.
 //   cargo build --workspace 후: node backend/relay/check-auth.mjs
 import assert from 'node:assert';
 import { spawn } from 'node:child_process';
@@ -20,12 +20,12 @@ writeFileSync(join(wsRoot, 'a.txt'), 'hello\n');
 const TOKEN = 'check-secret-1';
 const env = {
   ...process.env,
-  SUPERLIGHT_SOCK: join(dir, 'daemon.sock'),
-  SUPERLIGHT_HTTP: '127.0.0.1:18794',
-  SUPERLIGHT_GRACE_SECS: '2',
-  SUPERLIGHT_TOKEN: TOKEN,
+  SUPERLITE_SOCK: join(dir, 'daemon.sock'),
+  SUPERLITE_HTTP: '127.0.0.1:18794',
+  SUPERLITE_GRACE_SECS: '2',
+  SUPERLITE_TOKEN: TOKEN,
 };
-const bin = fileURLToPath(new URL('../../target/debug/superlight-backend', import.meta.url));
+const bin = fileURLToPath(new URL('../../target/debug/superlite-backend', import.meta.url));
 const backend = spawn(bin, [wsRoot], { env, stdio: 'ignore' });
 backend.on('error', () => {}); // ENOENT 는 아래 접속 실패 assert 가 안내한다
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -75,8 +75,8 @@ try {
   assert.ok(/^\d+\.\d+\.\d+$/.test(ver.version) && typeof ver.wire === 'number', '/version 응답 형태');
 
   // 계약의 나머지 절반: 토큰 미설정이면 무토큰 연결이 여전히 붙는다 (로컬 기본 회귀 방지)
-  const envNoToken = { ...env, SUPERLIGHT_HTTP: '127.0.0.1:18791' };
-  delete envNoToken.SUPERLIGHT_TOKEN;
+  const envNoToken = { ...env, SUPERLITE_HTTP: '127.0.0.1:18791' };
+  delete envNoToken.SUPERLITE_TOKEN;
   const backend2 = spawn(bin, [wsRoot], { env: envNoToken, stdio: 'ignore' });
   backend2.on('error', () => {});
   try {

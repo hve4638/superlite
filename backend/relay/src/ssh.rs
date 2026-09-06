@@ -81,7 +81,7 @@ pub fn config_blocks() -> Vec<(String, Vec<String>)> {
 
 // ---------------------------------------------------------------- 즐겨찾기·고정·최근 상태
 
-/// superlight 가 별도로 관리하는 원격 탐색기 상태 (백엔드 머신의 설정 파일) — 즐겨찾기(선택적
+/// superlite 가 별도로 관리하는 원격 탐색기 상태 (백엔드 머신의 설정 파일) — 즐겨찾기(선택적
 /// 고정 스냅샷)·pane 접힘·호스트별 최근 폴더. ~/.ssh/config 는 건드리지 않는다.
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 struct RemoteState {
@@ -153,7 +153,7 @@ fn state_path() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| home_dir().map(|h| h.join(".config")));
-    Some(base?.join("code-superlight").join("remote.json"))
+    Some(base?.join("superlite").join("remote.json"))
 }
 
 fn load_state() -> RemoteState {
@@ -329,7 +329,7 @@ fn ssh_cmd(host: &str, opts: &[String]) -> Command {
     #[cfg(unix)]
     {
         // 마스터 소켓은 데몬 IPC 와 같은 0700 디렉터리 — 타 사용자 탈취 방지가 이미 돼 있다
-        let dir = superlight_common::socket_path();
+        let dir = superlite_common::socket_path();
         let dir = dir.parent().unwrap_or(std::path::Path::new("/tmp"));
         c.arg("-o").arg("ControlMaster=auto");
         c.arg("-o").arg(format!("ControlPath={}/ssh-%C", dir.display()));
@@ -458,8 +458,8 @@ pub async fn ensure_remote_bin(
     let bin = remote_daemon_bin(info)?;
     let data = std::fs::read(&bin)
         .map_err(|e| format!("데몬 바이너리 읽기 실패 {}: {e}", bin.display()))?;
-    let dir = format!("$HOME/.cache/code-superlight/bin/{:016x}", fnv64(&data));
-    let target = format!("{dir}/superlight-daemon");
+    let dir = format!("$HOME/.cache/superlite/bin/{:016x}", fnv64(&data));
+    let target = format!("{dir}/superlite-daemon");
     stage(tx, "helper", None);
     // 존재 검사와 업로드를 나눈다 — 한 번에 하면 이미 있을 때도 stdin 으로 바이너리를 다
     // 보내게 된다 (원격이 안 읽으면 전송이 어중간히 끊긴다). ControlMaster 덕에 두 번째
@@ -484,7 +484,7 @@ pub async fn ensure_remote_bin(
 }
 
 /// 원격 데몬으로의 파이프 연결 — 배치된 헬퍼 경로(ensure_remote_bin 결과)로
-/// `ssh host superlight-daemon --pipe`. 반환된 child 의 stdin/stdout 이 데몬 와이어다
+/// `ssh host superlite-daemon --pipe`. 반환된 child 의 stdin/stdout 이 데몬 와이어다
 /// (relay 가 로컬 소켓 자리에 물린다). kill_on_drop: relay 종료 = ssh 종료 → 원격 --pipe 가
 /// EOF 로 물러나고 원격 데몬은 세션을 detach 로 돌린다 (재접속 약속은 원격 데몬의 세션
 /// grace 가 지킨다). attach 를 보내기 전까지는 어느 경로·세션에도 묶이지 않는다 — Spares 가
@@ -597,7 +597,7 @@ impl Drop for Enter {
 }
 
 fn spare_secs() -> std::time::Duration {
-    let secs = std::env::var("SUPERLIGHT_SPARE_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(300);
+    let secs = std::env::var("SUPERLITE_SPARE_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(300);
     std::time::Duration::from_secs(secs)
 }
 
@@ -639,7 +639,7 @@ impl Spares {
     }
 }
 
-/// 원격 문제 데몬 정리 — 헬퍼 배치 보장 후 `ssh host superlight-daemon --clean`. 헬퍼가
+/// 원격 문제 데몬 정리 — 헬퍼 배치 보장 후 `ssh host superlite-daemon --clean`. 헬퍼가
 /// 곧 원격의 데몬이므로 정리 명령도 같은 바이너리다. 반환은 --clean 의 stdout
 pub async fn clean_remote(host: &str) -> Result<String, String> {
     if !host_ok(host) {

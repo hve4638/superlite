@@ -151,7 +151,7 @@ export function isHtml(path: string): boolean {
 /** 뷰어 자동 갱신 스위치 — 뷰어 종류별, 세션 무관 전역 (localStorage). HTML 은 재렌더가 싸서 on,
  *  PDF 는 재렌더 비용이 커서 off 가 기본 (viewer-cache-refresh). ponytail: 설정 체계(config-system)가
  *  생기면 그쪽으로 옮긴다 */
-const AUTO_RELOAD_KEY = 'superlight.viewerAutoReload';
+const AUTO_RELOAD_KEY = 'superlite.viewerAutoReload';
 export const viewerAutoReload = reactive(loadAutoReload());
 function loadAutoReload(): { html: boolean; pdf: boolean } {
   const d = { html: true, pdf: false };

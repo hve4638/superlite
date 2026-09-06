@@ -10,7 +10,7 @@ export const inApp = current !== undefined;
 /** 이 창의 Tauri label — native 가 주입한다 (창 간 탭 이동에서 출처·대상을 가리키는 주소).
  *  웹·mock 은 null (창 개념 없음) */
 export const windowLabel: string | null =
-  (window as { __SUPERLIGHT_WINDOW__?: string }).__SUPERLIGHT_WINDOW__ ?? current?.label ?? null;
+  (window as { __SUPERLITE_WINDOW__?: string }).__SUPERLITE_WINDOW__ ?? current?.label ?? null;
 
 export const appWindow = reactive({ maximized: false });
 

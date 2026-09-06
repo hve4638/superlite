@@ -49,13 +49,13 @@ export function initOsDrop(): void {
       // WHY: 메시지는 문자열로 — wry IPC 핸들러도 같은 이벤트를 받는데, 문자열이 아니면
       //      오류를 반환해 (구현에 따라) 뒤에 등록된 우리 핸들러까지 건너뛸 수 있다.
       //      우리 쪽 구분은 메시지 내용이 아니라 부속 객체 유무로 한다.
-      post('superlight:os-drop', files);
+      post('superlite:os-drop', files);
     },
     { capture: true },
   );
 
   webview.addEventListener('message', (e) => {
-    const files = (e.data as { superlightOsDrop?: { files?: string[] } })?.superlightOsDrop?.files;
+    const files = (e.data as { superliteOsDrop?: { files?: string[] } })?.superliteOsDrop?.files;
     if (!files) return;
     for (const abs of files) {
       // 루트 밖 파일도 연다 (VS Code 파리티) — 와이어 절대 경로('/' 구분자)로 그대로

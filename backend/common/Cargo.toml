@@ -1,4 +1,4 @@
 [package]
-name = "superlight-common"
+name = "superlite-common"
 version.workspace = true
 edition = "2021"

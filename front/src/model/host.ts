@@ -30,21 +30,21 @@ import {
 //      ?ws → 백엔드 /ws (같은 오리진 — 개발은 vite 프록시, 프론트는 데몬 주소를 모른다).
 //      기본은 mock — differential·기존 테스트 경로를 그대로 두기 위해.
 const params = new URLSearchParams(location.search);
-// 페이지 URL 의 ?tkn= 을 /ws 로 넘긴다 — 백엔드가 SUPERLIGHT_TOKEN 으로 떠 있으면 필수.
+// 페이지 URL 의 ?tkn= 을 /ws 로 넘긴다 — 백엔드가 SUPERLITE_TOKEN 으로 떠 있으면 필수.
 // tkn 이 있다는 것 자체가 실 백엔드 의도다 — ?ws 를 빼먹었다고 조용히 mock 이 되지 않게
 const tkn = params.get('tkn');
 /** 웹 실백엔드 모드 — ?ws 또는 ?tkn 이 있으면 같은 오리진 /ws 에 붙는다 (없으면 mock) */
 const webBackend = params.has('ws') || tkn !== null;
 // Tauri 앱은 자산 로드라 location 이 relay 가 아니다 — 주입된 endpoint 가 최우선.
 // 세션 목록도 함께 주입된다 — native 레지스트리가 발급한 id 만 relay 가 허용한다
-const injected = (window as { __SUPERLIGHT_WS__?: string }).__SUPERLIGHT_WS__;
-const injectedSessions = (window as { __SUPERLIGHT_SESSIONS__?: SessionTab[] }).__SUPERLIGHT_SESSIONS__;
+const injected = (window as { __SUPERLITE_WS__?: string }).__SUPERLITE_WS__;
+const injectedSessions = (window as { __SUPERLITE_SESSIONS__?: SessionTab[] }).__SUPERLITE_SESSIONS__;
 
 /** 'Open Folder' 경로 퀵인풋의 시작 경로 (열린 워크스페이스가 없는 빈 세션에서 쓴다).
  *  native 가 OS 에 맞게 주입한다 — Windows 는 드라이브 루트(예: 'C:/'), 그 외 '/'.
  *  주입이 없으면(웹) '/' — 웹은 보통 부팅 세션 root 에서 시작해 이 값을 안 쓴다. */
 export const openRootDefault: string =
-  (window as { __SUPERLIGHT_OPEN_ROOT__?: string }).__SUPERLIGHT_OPEN_ROOT__ ?? '/';
+  (window as { __SUPERLITE_OPEN_ROOT__?: string }).__SUPERLITE_OPEN_ROOT__ ?? '/';
 
 /** 웹 /ws 주소 — 세션(탭)마다 ?folder= 로 root 를 지정한다 (빈 root 는 서버 기본 root) */
 function webWsUrl(folder: string): string {
@@ -79,7 +79,7 @@ if (injected) {
 }
 
 /**
- * 데몬 소켓 요청자(셸 심 `superlight …`, ticket cli-open-command)가 세션에 보낸 요청의 처리
+ * 데몬 소켓 요청자(셸 심 `superlite …`, ticket cli-open-command)가 세션에 보낸 요청의 처리
  * (와이어 v9). 통로의 첫 핸들러 둘 — notify(알림 표시)·open(경로 열기: 파일은 그 세션
  * 편집기, 폴더는 폴더 열기). 이후 전용 명령은 여기에 method 를 더한다. 결과는 요청자에게
  * 돌아가고 throw 는 에러로 돌아간다. 요청이 온 세션 탭으로 전환한다 (VS Code 가 요청한
@@ -216,7 +216,7 @@ export function openFolderDialog(): void {
 
 /**
  * 강제 정리 확인 — 승인 시 백엔드 POST /daemon/clean(host 는 실패 세션의 root 에서) 로
- * `superlight-daemon --clean` 을 원격(로컬 세션이면 로컬)에서 실행하고, 결과를 알림으로 보인
+ * `superlite-daemon --clean` 을 원격(로컬 세션이면 로컬)에서 실행하고, 결과를 알림으로 보인
  * 뒤 그 세션을 재접속한다. 사용자 승인 없이는 아무것도 죽이지 않는다 (ticket daemon-cleanup)
  */
 export async function confirmDaemonClean(): Promise<void> {

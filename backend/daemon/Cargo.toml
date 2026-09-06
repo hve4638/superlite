@@ -1,10 +1,10 @@
 [package]
-name = "superlight-daemon"
+name = "superlite-daemon"
 version.workspace = true
 edition = "2021"
 
 [dependencies]
-superlight-common = { path = "../common" }
+superlite-common = { path = "../common" }
 base64 = "0.22"
 flate2 = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "process", "sync", "io-util", "io-std", "time"] }

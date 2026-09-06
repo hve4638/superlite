@@ -57,7 +57,7 @@ pub(crate) fn start_watcher(root: PathBuf, tx: UnboundedSender<String>, slot: Wa
         match notify::RecommendedWatcher::new(cb, notify::Config::default().with_follow_symlinks(false)) {
             Ok(w) => w,
             Err(e) => {
-                eprintln!("superlight-daemon: 워처 생성 실패: {e}");
+                eprintln!("superlite-daemon: 워처 생성 실패: {e}");
                 return;
             }
         };
@@ -66,7 +66,7 @@ pub(crate) fn start_watcher(root: PathBuf, tx: UnboundedSender<String>, slot: Wa
     tokio::task::spawn_blocking(move || {
         match watcher.watch(&root, notify::RecursiveMode::Recursive) {
             Ok(()) => *slot.lock().unwrap() = Some(watcher),
-            Err(e) => eprintln!("superlight-daemon: 감시 시작 실패 {}: {e}", root.display()),
+            Err(e) => eprintln!("superlite-daemon: 감시 시작 실패 {}: {e}", root.display()),
         }
     });
 

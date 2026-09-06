@@ -3,7 +3,7 @@ import { openFolder } from './host'
 import { isRemoteEmpty, remoteHost, sessions, sessionsKind, withHost } from './sessions'
 
 import { tauri } from './tauri'
-role: 시작 페이지의 최근 목록 (ticket start-page-recents) — 최근 연 폴더 MRU(개별 root, 최대 10)와 세션 묶음(한 창에 함께 열려 있던 root 집합, 이력 최대 5). 자동 복원은 없고(app-empty-session) 사용자가 여기서 골라 명시적으로 다시 연다. 저장소는 환경별 (decision/state-persistence.md version 2): 앱은 native 가 state.json 을 소유·갱신하고 여기는 list_recents 사영과 forget_*·open_bundle invoke 만, 웹은 앱 데이터 디렉터리가 없어 front 가 같은 스키마를 localStorage('superlight.state')에 두고 세션 목록 변화를 effect 로 추적해 기록한다 (웹은 검증 경로 — 이 환경에서 목록 동작을 볼 수 있어야 한다), mock 은 없음
+role: 시작 페이지의 최근 목록 (ticket start-page-recents) — 최근 연 폴더 MRU(개별 root, 최대 10)와 세션 묶음(한 창에 함께 열려 있던 root 집합, 이력 최대 5). 자동 복원은 없고(app-empty-session) 사용자가 여기서 골라 명시적으로 다시 연다. 저장소는 환경별 (decision/state-persistence.md version 2): 앱은 native 가 state.json 을 소유·갱신하고 여기는 list_recents 사영과 forget_*·open_bundle invoke 만, 웹은 앱 데이터 디렉터리가 없어 front 가 같은 스키마를 localStorage('superlite.state')에 두고 세션 목록 변화를 effect 로 추적해 기록한다 (웹은 검증 경로 — 이 환경에서 목록 동작을 볼 수 있어야 한다), mock 은 없음
 
 export type RecentEntry
 export val recents

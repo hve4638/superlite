@@ -22,7 +22,7 @@ export const recents = reactive({ recents: [] as RecentEntry[], bundles: [] as R
 
 const RECENTS_MAX = 10;
 const BUNDLES_MAX = 5;
-const WEB_KEY = 'superlight.state';
+const WEB_KEY = 'superlite.state';
 
 
 /** 표시 이름 — root 의 마지막 요소, 원격은 "이름 [host]" (세션 탭 라벨과 같은 규칙, withHost) */

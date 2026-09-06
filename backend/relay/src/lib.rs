@@ -1,4 +1,4 @@
-//! superlight-backend 중계 코어 — /ws ↔ 데몬 IPC(unix socket / named pipe) 중계.
+//! superlite-backend 중계 코어 — /ws ↔ 데몬 IPC(unix socket / named pipe) 중계.
 //!
 //! 유일한 네트워크 노출 지점 (_docs/decision/process-topology.md). 데몬을 tmux 방식으로
 //! 자동 기동하고(접속 실패 → spawn → 재시도), 프론트 WS 연결마다 데몬 IPC 연결을
@@ -103,7 +103,7 @@ pub async fn serve(listener: TcpListener, roots: SessionRoots, token: Option<Str
 /// 데몬을 두 번 띄우는 race 가 생긴다. 데몬 부재 시 제어 루프가 곧 재기동하므로
 /// relay 는 재시도만으로 충분하다.
 async fn daemon_conn(spawn: bool) -> Result<DaemonStream, String> {
-    let sock = superlight_common::socket_path();
+    let sock = superlite_common::socket_path();
     for i in 0..50 {
         #[cfg(unix)]
         let conn = DaemonStream::connect(&sock).await;
@@ -124,13 +124,13 @@ async fn daemon_conn(spawn: bool) -> Result<DaemonStream, String> {
 /// OS·아키텍처에 맞는 데몬 바이너리 — 로컬 spawn 과 원격 업로드(ssh 모듈)가 같은 규칙 하나를
 /// 쓴다: 실행 파일 옆 `daemon/<os>-<arch>[.exe]` (이름은 std::env::consts::OS·ARCH 값
 /// 그대로 — build.sh 가 이 배치로 배포 세트를 만든다). 로컬(내 OS·arch)은
-/// SUPERLIGHT_DAEMON_BIN 우회가 먼저고, daemon/ 에 없으면 형제 `superlight-daemon` 으로
+/// SUPERLITE_DAEMON_BIN 우회가 먼저고, daemon/ 에 없으면 형제 `superlite-daemon` 으로
 /// 폴백한다 — cargo 는 target/debug 에 평평하게 놓는다 (check 하니스·cargo run 이 기댄다).
 /// 원격용(다른 OS·arch)은 daemon/ 에 없으면 오류 — 무엇을 어디에 둬야 하는지 알린다.
 pub(crate) fn daemon_bin_for(os: &str, arch: &str) -> Result<PathBuf, String> {
     let local = os == std::env::consts::OS && arch == std::env::consts::ARCH;
     if local {
-        if let Ok(p) = std::env::var("SUPERLIGHT_DAEMON_BIN") {
+        if let Ok(p) = std::env::var("SUPERLITE_DAEMON_BIN") {
             return Ok(PathBuf::from(p));
         }
     }
@@ -140,7 +140,7 @@ pub(crate) fn daemon_bin_for(os: &str, arch: &str) -> Result<PathBuf, String> {
     if p.is_file() {
         Ok(p)
     } else if local {
-        Ok(exe.with_file_name("superlight-daemon"))
+        Ok(exe.with_file_name("superlite-daemon"))
     } else {
         // 짧게 — 프론트에 close 사유(123B 한도)로 그대로 간다. 전체 경로는 로그에
         eprintln!("backend: 원격 데몬 바이너리 없음: {}", p.display());
@@ -252,7 +252,7 @@ fn cors(mut resp: Response) -> Response {
 }
 
 /// 원격 탐색기의 호스트 목록 — 백엔드가 실행된 머신의 ~/.ssh/config (읽기 전용) 에
-/// superlight 자체 상태(즐겨찾기·고정·drift·missing)를 합친 것. /ws 를 거치지 않는 백엔드 자체 응답 —
+/// superlite 자체 상태(즐겨찾기·고정·drift·missing)를 합친 것. /ws 를 거치지 않는 백엔드 자체 응답 —
 /// 주소·연결은 백엔드 소유라는 결정 (decision/remote-ssh.md 2026-08-31)의 첫 표면이다.
 async fn hosts_handler(
     State(app): State<App>,
@@ -283,7 +283,7 @@ async fn state_handler(
     })
 }
 
-/// POST /daemon/clean?host= — 문제 데몬 정리 (`superlight-daemon --clean`). host 가 없으면
+/// POST /daemon/clean?host= — 문제 데몬 정리 (`superlite-daemon --clean`). host 가 없으면
 /// 로컬 데몬 바이너리를 직접, 있으면 ssh 로 원격에서 실행한다. 프론트가 "데몬 기동 실패"
 /// 뒤 사용자 승인을 받은 경우에만 부른다 — 자동으로 부르는 곳은 없다 (사용자 결정
 /// 2026-09-04: 강제 종료는 명시적 승인 하에서만). 응답 본문은 --clean 의 stdout 그대로
@@ -320,10 +320,10 @@ async fn version_handler(
     let daemon = daemon_bin_path().map(|p| p.display().to_string()).unwrap_or_else(|e| e);
     cors(
         Json(json!({
-            "version": superlight_common::VERSION,
-            "commit": superlight_common::COMMIT,
-            "builtAt": superlight_common::BUILT_AT,
-            "wire": superlight_common::WIRE_VERSION,
+            "version": superlite_common::VERSION,
+            "commit": superlite_common::COMMIT,
+            "builtAt": superlite_common::BUILT_AT,
+            "wire": superlite_common::WIRE_VERSION,
             "daemonBin": daemon,
         }))
         .into_response(),
@@ -363,7 +363,7 @@ async fn ws_handler(
             Some((host, path)) => Target::Remote { host, path },
             // plain: Windows verbatim 루트는 '/' 와이어 경로·자식 cwd 를 깨뜨린다 (common 참조)
             None => match std::path::Path::new(folder).canonicalize() {
-                Ok(p) if p.is_dir() => Target::Local(superlight_common::plain(p)),
+                Ok(p) if p.is_dir() => Target::Local(superlite_common::plain(p)),
                 _ => return StatusCode::FORBIDDEN.into_response(),
             },
         },

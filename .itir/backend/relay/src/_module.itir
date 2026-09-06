@@ -1,3 +1,3 @@
-role: 백엔드 진입 계층 — lib(serve: /ws ↔ 데몬 IPC 중계 서버, Tauri 앱이 in-process 로 기동) + bin(env 해석·정적 dist 서빙을 얹은 단독 웹서버). loopback 밖 노출은 SUPERLIGHT_TOKEN 전제
+role: 백엔드 진입 계층 — lib(serve: /ws ↔ 데몬 IPC 중계 서버, Tauri 앱이 in-process 로 기동) + bin(env 해석·정적 dist 서빙을 얹은 단독 웹서버). loopback 밖 노출은 SUPERLITE_TOKEN 전제
 
 import { socket_path, plain } from '../../common/src'

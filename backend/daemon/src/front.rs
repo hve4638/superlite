@@ -4,7 +4,7 @@
 //! 데몬은 method·params 를 해석하지 않는다 — 어떤 요청이 있는지는 프론트 핸들러의 몫.
 //!
 //! 요청자는 attach 없이 frontRequest 만 보내고 끊는다 — attach 는 세션 sink 를 빼앗는다
-//! (tmux 식 탈취). 대상 세션은 PTY 환경변수 SUPERLIGHT_SESSION 이 알려 준다 (term.rs).
+//! (tmux 식 탈취). 대상 세션은 PTY 환경변수 SUPERLITE_SESSION 이 알려 준다 (term.rs).
 //!
 //! ponytail: 타임아웃 없음 — 요청자가 기다리다 끊으면 응답 전송이 조용히 실패할 뿐이다.
 
