@@ -1,4 +1,4 @@
-role: 중계 코어 — 준비된 TcpListener 위에 /ws·/ssh/hosts·/ssh/state·/daemon/clean 라우터를 얹어 serve. 데몬 spawn·attach, 상주 제어 연결 포함. dist 는 옵션 (bin 은 정적 서빙, Tauri 앱은 자산 번들이라 불필요). root 는 세션 해석기(SessionRoots)가 정한다 — 고정 root(bin) 또는 세션 레지스트리 조회(Tauri 앱, decision/workspace-session-tabs.md). root 문자열이 ssh:// 스킴이면 원격 — 해석(Target)은 접속 직전 한 곳에서만 한다
+role: 중계 코어 — 준비된 TcpListener 위에 /ws·/ssh/hosts·/ssh/state·/daemon/clean·/version 라우터를 얹어 serve. 데몬 spawn·attach, 상주 제어 연결 포함. dist 는 옵션 (bin 은 정적 서빙, Tauri 앱은 자산 번들이라 불필요). root 는 세션 해석기(SessionRoots)가 정한다 — 고정 root(bin) 또는 세션 레지스트리 조회(Tauri 앱, decision/workspace-session-tabs.md). root 문자열이 ssh:// 스킴이면 원격 — 해석(Target)은 접속 직전 한 곳에서만 한다
 
 export class SessionRoots {
   role: 세션 id → root 해석기 (rust enum). Fixed 는 모든 세션이 기동 인자의 root 하나(bin·종전 동작), Registry 는 native 쪽이 등록한 세션만 허용 — root 결정권이 native 에 남아 front 가 임의 경로를 지목할 통로가 없다. Registry 는 순서 보존 리스트 — 등록 순서가 곧 세션 탭 순서라 순서의 단일 출처를 레지스트리에 둔다 (세션 수가 한 자리라 선형 탐색으로 충분). 엔트리의 root 는 Option — 루트 없는 빈 세션(시작 페이지)도 레지스트리에 산다 (ticket app-empty-session). 원격 root(ssh://host/path)도 불투명 문자열로 나른다
@@ -26,6 +26,9 @@ fn state_handler() {
 }
 fn clean_handler() {
   role: POST /daemon/clean?host= — 문제 데몬 정리 (superlight-daemon --clean). host 없으면 clean_local, 있으면 ssh::clean_remote. 프론트가 '데몬 기동 실패' 뒤 사용자 승인을 받은 경우에만 부른다 — 자동 호출 없음 (사용자 결정 2026-09-04). 응답 본문은 --clean 의 stdout, 실패는 502 + 사유. 인증은 authed, CORS 는 /ssh/* 와 같다
+}
+fn version_handler() {
+  role: GET /version — 이 빌드의 version·commit·builtAt·wire(WIRE_VERSION)·daemonBin(로컬 데몬 배치 경로, 부재면 오류 문자열) JSON. 프론트 About·시작 페이지가 쓴다. 데몬 와이어 밖 relay 자체 응답이라 WIRE_VERSION 불변, 웹·앱 동일 경로 (release-versioning). 인증·CORS 는 /ssh/* 와 같다
 }
 fn clean_local() -> report {
   role: 로컬 데몬 바이너리(daemon_bin_path)를 --clean 으로 실행해 stdout 반환

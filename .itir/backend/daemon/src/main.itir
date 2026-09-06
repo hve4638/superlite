@@ -1,7 +1,7 @@
 role: 수명과 연결 — 파일 락 단독 보장, accept 루프, 유휴 grace 자진 종료, 연결당 read 루프, 세션 지속(재접속 시 터미널 이어 붙임). 프로세스 수명 = 유휴 감시 태스크 수명 — 감시가 어떤 이유로든 끝나면 프로세스 전체를 내려 좀비(락만 쥔 채 아무도 못 끝내는 프로세스)가 남지 않는다. 문제 데몬의 명시적 정리는 clean 모듈 (--clean). 데몬→프론트 요청(와이어 v9)은 front 모듈 — frontRequest(attach 없이 허용, params.session 으로 대상 세션 지목)·requestReply 디스패치만 여기
 
 fn main() {
-  role: IPC 확보(락 승자만 — unix 는 unlink 후 socket bind, Windows 는 named pipe 인스턴스 루프) + 유휴 감시 태스크(연결 0 이고 detach 세션도 없어야 종료, unix 는 소켓 파일이 사라져도 종료 — 아무도 접속 못 하는 프로세스는 좀비다. 세션 맵은 try_lock — 감시는 누구도 기다리지 않아 뮤텍스 정체에도 소켓 확인이 멈추지 않는다) + 세션 reaper + accept 루프(태스크). main 은 유휴 감시 JoinHandle 을 기다리다 끝나면(panic 포함) 소켓을 지우고 exit — 종료를 부르는 태스크 하나만 죽고 나머지가 살아남던 좀비 경로를 구조적으로 없앤다 (실측 2026-09-03). --pipe 인자면 데몬 본체 대신 pipe_main 헬퍼 모드, --clean 이면 clean::clean_main
+  role: IPC 확보(락 승자만 — unix 는 unlink 후 socket bind, Windows 는 named pipe 인스턴스 루프) + 유휴 감시 태스크(연결 0 이고 detach 세션도 없어야 종료, unix 는 소켓 파일이 사라져도 종료 — 아무도 접속 못 하는 프로세스는 좀비다. 세션 맵은 try_lock — 감시는 누구도 기다리지 않아 뮤텍스 정체에도 소켓 확인이 멈추지 않는다) + 세션 reaper + accept 루프(태스크). main 은 유휴 감시 JoinHandle 을 기다리다 끝나면(panic 포함) 소켓을 지우고 exit — 종료를 부르는 태스크 하나만 죽고 나머지가 살아남던 좀비 경로를 구조적으로 없앤다 (실측 2026-09-03). --pipe 인자면 데몬 본체 대신 pipe_main 헬퍼 모드, --clean 이면 clean::clean_main, --version 이면 common version_line 한 줄 출력 후 종료 (헬퍼 업로드 로그·버그 리포트용)
 }
 fn pipe_main() {
   role: ssh 헬퍼 모드 — 백엔드가 `ssh host superlight-daemon --pipe` 로 원격(=이 머신)에 띄운다. 이 머신의 데몬 소켓에 접속(부재 시 자기 자신을 데몬으로 spawn)해 stdin/stdout 과 양방향 중계만 — 내용 해석 없음 (로컬 relay 의 daemon_conn+spawn 대응물, "헬퍼가 곧 원격의 데몬" 대칭의 접점). ssh 사망 = stdin EOF → 종료 → 데몬이 세션을 detach 로 돌리고 세션 grace 안의 재접속이 터미널을 이어받는다. 어느 방향이든 끝나면 stdout flush 후 process::exit — 런타임 반환으로 내리면 stdin 블로킹 읽기가 끝나길 기다려 데몬이 먼저 끊은 경우(attach 실패) relay 와 교착한다

@@ -1,7 +1,7 @@
 //! superlight-backend — 앱 인스턴스당 1개. 웹(정적) 서빙 + WS 인터페이스.
 //! 중계 본체는 lib(serve) — 여기는 env 해석과 bind 만 한다.
 //!
-//! 실행: superlight-backend [워크스페이스루트]  (기본 cwd)
+//! 실행: superlight-backend [워크스페이스루트]  (기본 cwd)   superlight-backend --version
 //!   SUPERLIGHT_HTTP=127.0.0.1:8795  SUPERLIGHT_DIST=front/dist
 //!   SUPERLIGHT_TOKEN=<토큰>  — 설정 시 /ws 는 ?tkn= 일치 필수 (loopback 밖 노출 전제조건)
 
@@ -11,6 +11,10 @@ use tokio::net::TcpListener;
 
 #[tokio::main]
 async fn main() {
+    if std::env::args().any(|a| a == "--version") {
+        println!("{}", superlight_common::version_line("superlight-backend"));
+        return;
+    }
     let root = std::env::args()
         .nth(1)
         .map(PathBuf::from)

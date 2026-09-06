@@ -5,6 +5,7 @@ import { createTerminal } from './terminal';
 import { refreshScm } from './scm';
 import { activeSessionEmpty, cycleSession, sessionsEnabled } from './sessions';
 import { inApp } from './window';
+import { showAbout } from './version';
 
 export interface Command {
   id: string;
@@ -233,6 +234,11 @@ export function setupCommands(): void {
     },
   }, 'ctrl+shift+v');
 
+  register({
+    id: 'workbench.action.showAboutDialog',
+    title: 'Help: About',
+    run: () => showAbout(),
+  });
 }
 
 function cycleTab(dir: 1 | -1): void {

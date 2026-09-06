@@ -11,6 +11,7 @@ import {
 import { sessions } from '../model/sessions';
 import { cancelDaemonClean, daemonClean } from '../model/daemon';
 import { confirmDaemonClean } from '../model/host';
+import { version } from '../model/version';
 import TitleBar from './TitleBar.vue';
 import ActivityBar from './ActivityBar.vue';
 import SideBar from './SideBar.vue';
@@ -21,6 +22,7 @@ import QuickInput from './QuickInput.vue';
 import ContextMenu from './ContextMenu.vue';
 import Sash from './widgets/Sash.vue';
 import ConfirmDialog from './widgets/ConfirmDialog.vue';
+import AboutDialog from './widgets/AboutDialog.vue';
 import ConflictToast from './widgets/ConflictToast.vue';
 import NotificationToasts from './widgets/NotificationToasts.vue';
 
@@ -118,6 +120,8 @@ onBeforeUnmount(() => window.removeEventListener('resize', onWindowResize));
       @confirm="confirmDaemonClean()"
       @cancel="cancelDaemonClean()"
     />
+    <!-- Help: About — 버전·커밋·와이어·데몬 경로 (ticket release-versioning) -->
+    <AboutDialog v-if="version.aboutOpen" />
     <!-- VS Code 처럼 토스트는 우하단 한 스택 — 새 알림이 아래, 충돌 토스트가 있으면 맨 아래 -->
     <div class="toast-stack">
       <NotificationToasts />

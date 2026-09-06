@@ -5,6 +5,7 @@ import { openFolder, retryActiveConnection } from '../model/host';
 import { forgetBundle, forgetRecent, openBundle, recentLabel, recents, refreshRecents, type RecentEntry } from '../model/recents';
 import { isRemoteEmpty, remoteHost, sessions } from '../model/sessions';
 import { connection, failureLabel, stageLabel } from '../model/watch';
+import { loadVersion, shortVersion } from '../model/version';
 
 /** 원격 빈 세션이면 그 host — 접속 상태 줄을 보인다 (로컬 빈 세션은 연결이 없다) */
 const host = computed(() => {
@@ -31,7 +32,10 @@ function openDefault(): void {
 
 // 최근 목록 (ticket start-page-recents) — 표시될 때와 세션 목록이 바뀔 때 다시 읽는다 (다른 탭에서
 // 폴더를 열어도 이 페이지의 목록이 따라온다). 왼쪽 = 최근 연 단일 폴더 MRU, 오른쪽 = 세션 묶음
-onMounted(() => void refreshRecents());
+onMounted(() => {
+  void refreshRecents();
+  void loadVersion(); // 하단 버전 표기 (release-versioning) — mock 은 null 이라 비운다
+});
 watch(() => sessions.list.map((t) => t.root).join('\0'), () => void refreshRecents());
 /** rtl 말줄임(경로 꼬리를 남기는 트릭)에서 맨 앞 '/' 가 뒤로 밀리지 않게 하는 LTR 마크 */
 const LRM = '\u200E';
@@ -106,11 +110,13 @@ function bundleMissing(b: RecentEntry[]): boolean {
         <span class="hint-key">Ctrl+O</span>
       </div>
     </div>
+    <div v-if="shortVersion() !== null" class="start-version" title="Help: About (command palette)">{{ shortVersion() }}</div>
   </div>
 </template>
 
 <style scoped>
 .start-page {
+  position: relative;
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -266,6 +272,13 @@ function bundleMissing(b: RecentEntry[]): boolean {
   align-items: center;
   justify-content: space-between;
   gap: 18px;
+}
+.start-version {
+  position: absolute;
+  right: 12px;
+  bottom: 8px;
+  font-size: 11px;
+  opacity: 0.55;
 }
 .hint-key {
   padding: 1px 6px;

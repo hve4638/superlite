@@ -98,6 +98,11 @@ fn wire_rel(s: &str) -> String {
 
 #[tokio::main]
 async fn main() {
+    // --version: 버전·커밋·와이어 한 줄 (버그 리포트·헬퍼 업로드 로그용) — 데몬을 띄우지 않는다
+    if std::env::args().any(|a| a == "--version") {
+        println!("{}", superlight_common::version_line("superlight-daemon"));
+        return;
+    }
     // --pipe: ssh 헬퍼 모드 — 데몬 본체가 아니라 stdio ↔ 데몬 소켓 중계자로 뜬다
     if std::env::args().any(|a| a == "--pipe") {
         pipe_main().await;

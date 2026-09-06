@@ -1,5 +1,12 @@
-role: 데몬·백엔드 공유 규약 — IPC 주소(unix socket / Windows named pipe)와 락 파일 경로
+role: 데몬·백엔드 공유 규약 — IPC 주소(unix socket / Windows named pipe)와 락 파일 경로, 빌드 정보(버전·커밋·빌드 시각 — build.rs 가 굽는다, 세 바이너리가 같은 값)
 
+export val WIRE_VERSION
+export val VERSION
+export val COMMIT
+export val BUILT_AT
+export fn version_line(bin) -> String {
+  role: `--version` 한 줄 "superlight-daemon 0.1.0 (8700a11, built <UTC>, wire 13)" — 데몬·백엔드 CLI 가 같은 표기. 버전은 루트 Cargo.toml [workspace.package] 하나에서 상속(CARGO_PKG_VERSION), 커밋은 짧은 해시(미커밋 변경 -dirty, git 부재 unknown). build.rs 재실행 조건은 HEAD·ref 변경뿐이라 dirty 는 마지막 실행 시점 값 — build.sh 가 touch 로 강제한다 (ponytail)
+}
 export fn socket_path() -> PathBuf {
   role: 데몬 IPC 주소 — unix 는 사용자 전용(0700) 런타임 디렉토리 밑 소켓, Windows 는 사용자별 named pipe 이름. 두 프로세스가 같은 주소를 계산하는 것이 접속 규약. 주소에 와이어 버전(WIRE_VERSION)을 넣어 와이어가 다른 빌드의 백엔드가 구버전 상주 데몬에 조용히 붙지 않게 한다 — 데몬 메서드 추가·의미 변경 시 버전을 올린다 (v11: readFile 범위 읽기 offset + stat size). 같은 이름의 env 를 데몬이 PTY 에 주입해(와이어 v9) 셸 심이 socket_path() 만으로 제 데몬을 찾는다
 }

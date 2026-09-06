@@ -88,7 +88,8 @@ pub async fn serve(listener: TcpListener, roots: SessionRoots, token: Option<Str
         .route("/ws", get(ws_handler))
         .route("/ssh/hosts", get(hosts_handler))
         .route("/ssh/state", axum::routing::post(state_handler))
-        .route("/daemon/clean", axum::routing::post(clean_handler));
+        .route("/daemon/clean", axum::routing::post(clean_handler))
+        .route("/version", get(version_handler));
     if let Some(dist) = &dist {
         app = app.fallback_service(ServeDir::new(dist));
     }
@@ -302,6 +303,31 @@ async fn clean_handler(
         Ok(report) => report.into_response(),
         Err(e) => (StatusCode::BAD_GATEWAY, e).into_response(),
     })
+}
+
+/// GET /version — 이 백엔드 빌드의 버전·커밋·빌드 시각·WIRE_VERSION·로컬 데몬 경로 (JSON).
+/// 프론트의 About·시작 페이지가 쓴다. 데몬 와이어(/ws) 밖 relay 자체 응답이라 WIRE_VERSION 은
+/// 불변이고, 웹·앱이 같은 경로를 탄다 (ticket release-versioning). 데몬 경로는 배치 규칙
+/// (daemon_bin_for)의 결과 — 부재면 그 오류 문자열을 그대로 보인다
+async fn version_handler(
+    State(app): State<App>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Response {
+    if !authed(&app, &query, &headers) {
+        return cors(StatusCode::FORBIDDEN.into_response());
+    }
+    let daemon = daemon_bin_path().map(|p| p.display().to_string()).unwrap_or_else(|e| e);
+    cors(
+        Json(json!({
+            "version": superlight_common::VERSION,
+            "commit": superlight_common::COMMIT,
+            "builtAt": superlight_common::BUILT_AT,
+            "wire": superlight_common::WIRE_VERSION,
+            "daemonBin": daemon,
+        }))
+        .into_response(),
+    )
 }
 
 async fn clean_local() -> Result<String, String> {

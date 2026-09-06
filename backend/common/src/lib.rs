@@ -48,7 +48,20 @@ pub fn socket_path() -> PathBuf {
 /// 13: gitRepos(저장소 자동 탐색) + readDir 디렉토리 항목 repo 표식 + git* 전부 repo 파라미터
 ///    (루트 상대 디렉토리, 생략은 루트). 하위 폴더·중첩 저장소를 SCM 이 저장소별로 다룬다.
 ///    구버전 데몬은 gitRepos 를 모르는 메서드로 에러 응답해 SCM 뷰가 비어 보인다.
-const WIRE_VERSION: u32 = 13;
+pub const WIRE_VERSION: u32 = 13;
+
+/// 릴리스 버전 — 루트 Cargo.toml `[workspace.package] version` 하나에서 온다 (crate 4개가 상속).
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// 빌드된 git 커밋 (짧은 해시, 미커밋 변경 시 `-dirty`, git 부재 시 `unknown`) — build.rs 가 굽는다
+pub const COMMIT: &str = env!("SUPERLIGHT_COMMIT");
+/// 빌드 시각 (UTC ISO-8601) — build.rs 가 굽는다
+pub const BUILT_AT: &str = env!("SUPERLIGHT_BUILT_AT");
+
+/// `--version` 한 줄 — 데몬·백엔드가 같은 표기를 쓴다 (헬퍼 업로드 로그·버그 리포트용).
+/// 예: `superlight-daemon 0.1.0 (8700a11f2, built 2026-09-06T05:00:00Z, wire 13)`
+pub fn version_line(bin: &str) -> String {
+    format!("{bin} {VERSION} ({COMMIT}, built {BUILT_AT}, wire {WIRE_VERSION})")
+}
 
 /// 0700 전용 디렉터리를 만들어 그 안에 소켓을 둔다.
 #[cfg(unix)]

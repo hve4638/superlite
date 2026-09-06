@@ -1,3 +1,9 @@
 [workspace]
 members = ["backend/common", "backend/daemon", "backend/relay", "app"]
 resolver = "2"
+
+# 릴리스 버전의 단일 출처 — crate 4개가 version.workspace 로 상속하고, tauri.conf.json 은
+# version 을 비워 앱 crate 의 값을 따른다. 올릴 때는 이 한 줄만 고친다 (태그 절차는 ws
+# docs/HANDOFF.backend.md "릴리스 버전·태그").
+[workspace.package]
+version = "0.1.0"
