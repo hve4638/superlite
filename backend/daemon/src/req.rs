@@ -223,6 +223,14 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
             };
             let path = file_path(root, req_path(p)?)?;
             let _g = FS_LOCK.lock().await;
+            // append(와이어 v14) — 청크 업로드의 후속 조각. 첫 조각은 append 없이 써 파일을
+            // 새로 만들고(truncate), 이후 조각은 etag 검사 없이 끝에 덧붙인다
+            if p["append"].as_bool() == Some(true) {
+                use std::io::Write as _;
+                let mut f = std::fs::OpenOptions::new().append(true).create(true).open(&path).map_err(err)?;
+                f.write_all(&bytes).map_err(err)?;
+                return Ok(json!({"etag": file_etag(&std::fs::metadata(&path).map_err(err)?)}));
+            }
             // 낙관적 충돌 검사 (VS Code FILE_MODIFIED_SINCE 상당). etag 없으면 무조건 쓴다
             // (덮어쓰기·신규 파일). 파일이 사라진 경우는 쓰기로 진행 — 저장이 파일을 되살린다.
             if let Some(expected) = p["etag"].as_str() {

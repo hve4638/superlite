@@ -142,8 +142,10 @@ export interface ThinBackend {
    * etag 를 주면 낙관적 충돌 검사 — 불일치(+내용 상이) 시 쓰지 않고 conflict. 생략 시 무조건 쓴다.
    * encoding: 'base64' 면 content 를 이진으로 디코드해 쓴다 (클립보드 이미지 저장 등) —
    * JSON 텍스트 와이어의 이진 통로. 생략 시 UTF-8 텍스트 그대로.
+   * append (와이어 v14): true 면 etag 검사 없이 기존 파일 끝에 덧붙인다 — 청크 업로드의 후속
+   * 조각 (첫 조각은 append 없이 써 파일을 새로 만든다).
    */
-  writeFile(path: string, content: string, etag?: string, encoding?: 'base64'): Promise<WriteResult>;
+  writeFile(path: string, content: string, etag?: string, encoding?: 'base64', append?: boolean): Promise<WriteResult>;
   /** 빈 파일 배타적 생성 — 중간 디렉토리 자동 생성, 이미 존재하면 reject (기존 내용 보호) */
   createFile(path: string): Promise<void>;
   /** 디렉토리 배타적 생성 — 중간 디렉토리 자동, 이미 존재하면 reject (undo 의 "내가 만든 것" 전제 보호) */

@@ -10,6 +10,9 @@ role: 파일 조작(생성·이름변경·삭제) + 파일 한정 undo 스택. �
 // 삭제 undo 의 내용 캡처 상한(5MB) — 초과·바이너리는 캡처 없이 삭제만
 val UNDO_CAPTURE_MAX
 
+export fn blobToBase64(blob) -> Text {
+  role: Blob → base64 (data URL 페이로드) — writeFile base64 와이어용. 클립보드 이미지 저장과 업로드 조각(transfer)이 공유
+}
 export fn createFileops(backend, editorsM, filesM, scmM) {
   role: 세션별 파일 조작 모듈 생성 — 리프레시·탭 정리가 같은 세션의 인스턴스로 간다
 }

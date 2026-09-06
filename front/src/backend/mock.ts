@@ -204,8 +204,8 @@ export class MockBackend implements ThinBackend {
 
   // ponytail: mock 엔 외부 쓰기 주체가 없어 충돌이 생길 수 없다 — 검사 생략, etag 만 굴린다.
   // encoding(base64)도 무시하고 그대로 저장 — mock 파일 맵은 문자열뿐이고 읽는 쪽도 에디터뿐이다
-  writeFile(path: string, content: string): Promise<WriteResult> {
-    FILES[path] = content;
+  writeFile(path: string, content: string, _etag?: string, _encoding?: 'base64', append?: boolean): Promise<WriteResult> {
+    FILES[path] = append ? (FILES[path] ?? '') + content : content;
     const v = (ETAGS.get(path) ?? 0) + 1;
     ETAGS.set(path, v);
     return delay({ etag: String(v) });

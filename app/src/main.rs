@@ -450,6 +450,49 @@ async fn open_folder(app: tauri::AppHandle, window: tauri::WebviewWindow, replac
     Ok(())
 }
 
+/// 탐색기 다운로드(ticket explorer-download)의 로컬 저장 위치 dialog — kind=file 은 저장 파일
+/// dialog(기본 파일명 name), directory 는 폴더 선택 후 그 안의 name 하위 폴더 (VS Code 원격
+/// 탐색기 Download 와 같은 배치). 취소면 None. 전송 자체는 front 가 와이어로 읽어 local_write 로
+/// 조각마다 넘긴다 — native 는 원격을 모른다
+#[tauri::command]
+async fn pick_save_target(kind: String, name: String) -> Option<String> {
+    let path = if kind == "directory" {
+        rfd::AsyncFileDialog::new().pick_folder().await?.path().join(&name)
+    } else {
+        rfd::AsyncFileDialog::new().set_file_name(&name).save_file().await?.path().to_path_buf()
+    };
+    Some(path.to_string_lossy().into_owned())
+}
+
+/// 다운로드 조각 쓰기 — base64 data 를 path 에 쓴다 (append 면 끝에 덧붙임, 아니면 새로).
+/// 부모 디렉터리는 만들어 준다. 임의 로컬 경로를 받는 근거는 open_folder_path 와 같다 —
+/// webview 는 이미 /ws 로 셸을 가지므로 권한 확대가 아니다. async — 메인 스레드에서 MB 단위
+/// 쓰기를 하지 않는다
+#[tauri::command]
+async fn local_write(path: String, data: String, append: bool) -> Result<(), String> {
+    use base64::Engine as _;
+    use std::io::Write as _;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(&data).map_err(|e| e.to_string())?;
+    let p = std::path::Path::new(&path);
+    if let Some(parent) = p.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .append(append)
+        .truncate(!append)
+        .open(p)
+        .map_err(|e| e.to_string())?;
+    f.write_all(&bytes).map_err(|e| e.to_string())
+}
+
+/// 다운로드 폴더 생성 (빈 폴더도 트리에 남긴다) — create_dir_all
+#[tauri::command]
+fn local_mkdir(path: String) -> Result<(), String> {
+    std::fs::create_dir_all(&path).map_err(|e| e.to_string())
+}
+
 /// front 폴더 퀵인풋(Ctrl+O)이 확정한 절대 경로로 이 창에 새 세션 탭 추가. 경로 지목 통로
 /// 개방의 근거는 ws docs/decision/web-folder-open.md 개정 — webview 는 이미 /ws 로 셸을
 /// 가지므로 권한 확대가 아니고, 검증·세션 등록은 여전히 여기(native)가 소유한다.
@@ -1013,7 +1056,10 @@ fn main() {
             list_recents,
             forget_recent,
             forget_bundle,
-            open_bundle
+            open_bundle,
+            pick_save_target,
+            local_write,
+            local_mkdir
         ])
         // 창 닫힘(X·close_if_empty) = 그 창의 세션만 정리 (다른 창은 영향 없음). 포커스 추적은 두 번째 실행의 대상 창
         .on_window_event(|window, event| match event {

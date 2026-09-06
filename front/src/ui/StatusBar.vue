@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { activeTab, base64Bytes, editors, indentOf, languageLabel, toggleViewerAutoReload, viewerAutoReload } from '../model/editors';
 import { activeRepo } from '../model/scm';
+import { transfer } from '../model/transfer';
 import { connection, stageLabel, failureLabel } from '../model/watch';
 
 // diff 탭도 path 를 가지므로 kind 무관하게 파일 정보를 표시한다 (VS Code 동일)
@@ -45,6 +46,13 @@ const remoteLabel = computed(() => {
   return 'Reconnecting…';
 });
 
+/** 전송 진행 라벨 — "Downloading x 42%" (총량을 아직 모르면 퍼센트 없이) */
+const transferLabel = computed(() => {
+  const t = transfer.active;
+  if (!t) return '';
+  return t.total > 0 ? `${t.label} ${Math.floor((t.done / t.total) * 100)}%` : t.label;
+});
+
 /** 파일 크기 표기 — VS Code 상태바와 같은 단위 자동 선택 */
 function fmtSize(bytes: number): string {
   if (bytes < 1024) return `${bytes}B`;
@@ -68,6 +76,11 @@ function fmtSize(bytes: number): string {
         <span v-else class="codicon codicon-remote" />
         <!-- 영구 실패(원격 ssh)는 재연결하지 않는다 — Reconnecting 대신 실패 단계 표시 -->
         <span v-if="!connection.ok || connection.stage !== null">{{ remoteLabel }}</span>
+      </div>
+      <!-- 원격 파일 전송(다운로드·업로드) 진행 — 한 번에 하나 (ticket explorer-download) -->
+      <div v-if="transfer.active" class="statusbar-item" :title="transferLabel">
+        <span class="codicon codicon-loading codicon-modifier-spin" />
+        <span>{{ transferLabel }}</span>
       </div>
       <div v-if="branchLabel" class="statusbar-item" :title="`${repo!.branch} (Git)`">
         <span class="codicon codicon-source-control" />

@@ -4,7 +4,8 @@ import { collapseAll, files, parentOf, refreshTree, revealPath, visibleNodes, to
 import { activeTab, editors, openFile } from '../../model/editors';
 import { createDir, createFile, deleteEntry, renameEntry, saveClipboardImage, undoFileOp } from '../../model/fileops';
 import { decorationFor } from '../../model/scm';
-import { activeSessionEmpty } from '../../model/sessions';
+import { activeSessionEmpty, remoteHost, sessionRoot, sessions } from '../../model/sessions';
+import { downloadEntry, uploadDropped, type DroppedEntry } from '../../model/transfer';
 import { connection } from '../../model/watch';
 import { workbench, openContextMenu, openQuickInput, type ContextMenuItem } from '../../model/workbench';
 import { endEditorDrag, startFileDrag } from '../editor/tabDnd';
@@ -146,6 +147,9 @@ function onConfirmDelete(): void {
   if (node) void deleteEntry(node.path, node.kind); // 실패는 model 이 notify 한다
 }
 
+/** 원격(ssh) 세션인가 — Download 메뉴·드롭 업로드는 원격에서만 (VS Code 원격 탐색기와 동일) */
+const isRemote = computed(() => remoteHost(sessionRoot(sessions.activeId) ?? '') !== null);
+
 function menuFor(node: TreeNode): ContextMenuItem[] {
   return [
     { label: 'New File...', run: () => void startCreate('createFile', node) },
@@ -154,6 +158,9 @@ function menuFor(node: TreeNode): ContextMenuItem[] {
     { label: 'Cut', keybinding: 'Ctrl+X', enabled: false },
     { label: 'Copy', keybinding: 'Ctrl+C', enabled: false },
     { label: 'Copy Path', keybinding: 'Shift+Alt+C', run: () => void navigator.clipboard.writeText(node.path) },
+    ...(isRemote.value
+      ? [{ separator: true }, { label: 'Download...', run: () => void downloadEntry(node.path, node.kind) }]
+      : []),
     { separator: true },
     { label: 'Rename...', keybinding: 'F2', run: () => startRename(node) },
     { label: 'Delete', keybinding: 'Delete', run: () => (confirming.value = node) },
@@ -199,6 +206,46 @@ function onRowContextMenu(node: TreeNode, e: MouseEvent): void {
 
 function onTreeContextMenu(e: MouseEvent): void {
   openContextMenu(e.clientX, e.clientY, BACKGROUND_MENU);
+}
+
+// ---- OS 드롭 업로드 (원격 세션의 트리 = data-upload-zone, osdrop 의 "열기" 처리가 비켜 준다).
+// 대상 폴더: 폴더 행은 그 폴더, 파일 행은 그 부모, 행 밖은 루트. VS Code 처럼 대상 폴더 행을 강조
+/** 드래그 중 대상 폴더 ('' = 루트, null = 드래그 아님) */
+const dropDir = ref<string | null>(null);
+/** 덮어쓰기 확인 — 같은 이름의 최상위 항목이 이미 있을 때 (resolve 로 답한다) */
+const replaceAsk = ref<{ names: string[]; resolve: (ok: boolean) => void } | null>(null);
+
+const dirOf = (node: TreeNode): string => (node.kind === 'directory' ? node.path : parentOf(node.path));
+
+function onDragOver(e: DragEvent, dir: string): void {
+  if (!isRemote.value || !e.dataTransfer?.types.includes('Files')) return;
+  e.preventDefault();
+  e.stopPropagation();
+  e.dataTransfer.dropEffect = 'copy';
+  dropDir.value = dir;
+}
+
+function onTreeDragLeave(e: DragEvent): void {
+  // 자식 사이 이동에도 dragleave 가 온다 — 트리 밖으로 나갈 때만 강조를 지운다
+  if (!treeEl.value?.contains(e.relatedTarget as Node | null)) dropDir.value = null;
+}
+
+function onDrop(e: DragEvent, dir: string): void {
+  if (!isRemote.value || !e.dataTransfer?.types.includes('Files')) return;
+  e.preventDefault();
+  e.stopPropagation();
+  dropDir.value = null;
+  // WHY: 항목 접근은 드롭 이벤트 안에서만 유효하다 — 동기로 뽑아 넘긴다 (entry 가 없으면 File 로)
+  const entries = [...e.dataTransfer.items]
+    .filter((it) => it.kind === 'file')
+    .map((it) => it.webkitGetAsEntry() ?? it.getAsFile())
+    .filter((en): en is DroppedEntry => en !== null);
+  void uploadDropped(dir, entries, (names) => new Promise((resolve) => (replaceAsk.value = { names, resolve })));
+}
+
+function answerReplace(ok: boolean): void {
+  replaceAsk.value?.resolve(ok);
+  replaceAsk.value = null;
 }
 
 /** 트리 포커스 한정 키 — F2/Delete/Ctrl+Z. 에디터의 같은 키와 충돌하지 않는다 */
@@ -346,9 +393,14 @@ function decoColor(node: TreeNode): string | undefined {
       <div
         ref="treeEl"
         class="tree"
+        :class="{ 'drop-root': dropDir === '' }"
+        :data-upload-zone="isRemote ? '' : undefined"
         tabindex="0"
         @keydown="onTreeKeydown"
         @scroll.passive="onTreeScroll"
+        @dragover="onDragOver($event, '')"
+        @dragleave="onTreeDragLeave"
+        @drop="onDrop($event, '')"
         @click="outsideRows($event) && (files.selectedPath = null)"
         @contextmenu="outsideRows($event) && (($event.preventDefault(), onTreeContextMenu($event)))"
       >
@@ -381,11 +433,16 @@ function decoColor(node: TreeNode): string | undefined {
           <div
             v-else-if="row.node"
             class="row"
-            :class="{ selected: files.selectedPath === row.node.path }"
+            :class="{
+              selected: files.selectedPath === row.node.path,
+              'drop-target': row.node.kind === 'directory' && dropDir === row.node.path,
+            }"
             :style="{ paddingLeft: `${row.node.depth * 8}px` }"
             :draggable="row.node.kind === 'file'"
             @dragstart="onRowDragStart($event, row.node)"
             @dragend="endEditorDrag()"
+            @dragover="onDragOver($event, dirOf(row.node))"
+            @drop="onDrop($event, dirOf(row.node))"
             @click="onRowClick(row.node)"
             @dblclick="onRowDblClick(row.node)"
             @contextmenu.prevent="onRowContextMenu(row.node, $event)"
@@ -444,6 +501,14 @@ function decoColor(node: TreeNode): string | undefined {
       confirm-label="Delete"
       @confirm="onConfirmDelete"
       @cancel="confirming = null"
+    />
+    <ConfirmDialog
+      v-if="replaceAsk"
+      :message="`${replaceAsk.names.length === 1 ? `'${replaceAsk.names[0]}' already exists` : `${replaceAsk.names.length} items already exist`} in the destination. Do you want to replace?`"
+      detail="Files with the same names will be overwritten. Other files in existing folders are kept."
+      confirm-label="Replace"
+      @confirm="answerReplace(true)"
+      @cancel="answerReplace(false)"
     />
   </div>
 </template>
@@ -591,6 +656,14 @@ function decoColor(node: TreeNode): string | undefined {
 }
 .row.selected {
   background: var(--vscode-list-inactiveSelectionBackground);
+}
+/* OS 드롭 업로드 대상 강조 — 폴더 행은 배경, 루트(행 밖·루트 파일 위)는 트리 테두리 (VS Code 동일 감각) */
+.row.drop-target {
+  background: var(--vscode-list-dropBackground);
+}
+.tree.drop-root {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
 }
 /* 인라인 입력 행 — 에러 박스가 다음 행 위로 떠야 하므로 overflow 를 만들지 않는다 */
 .row.editing {

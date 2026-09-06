@@ -1,7 +1,7 @@
 role: 앱 기동 — 127.0.0.1:0 bind 로 포트 충돌 원천 차단, 기동마다 새 랜덤 토큰(외부 브라우저의 /ws 접근 차단), 별도 스레드 tokio 런타임에서 relay serve(세션 레지스트리 모드), initialization_script 로 __SUPERLITE_WS__·__SUPERLITE_SESSIONS__(그 창의 부팅 세션 목록)·__SUPERLITE_OPEN_ROOT__(빈 세션 Open Folder 시작 경로)·__SUPERLITE_WINDOW__(창 label) 주입. 세션 레지스트리(session id → Option root, 순서 = 탭 순서)는 여기(native)가 소유한다 — decision/workspace-session-tabs.md. root 가 None 인 엔트리는 루트 없는 빈 세션(시작 페이지 탭, ticket app-empty-session) — 백엔드 연결 없이 front 에만 그려지고, 폴더를 열면 그 자리가 워크스페이스 세션으로 교체된다. 창은 여럿일 수 있다 (2026-09-03 개정, ticket app-tab-detach-window — VS Code 창을 여러 개 띄우듯 탭을 창 밖으로 끌어 새 창): 프로세스는 하나, 창마다 웹뷰 페이지가 별도라 front 상태·WS 연결은 창 단위 독립. native 는 세션마다 소속 창 label 을 함께 들고(windows 맵, relay 는 sessions Vec 만 본다) list_sessions·sessions-changed 를 창 단위로 보낸다 — 어느 탭이 활성인지는 여전히 모른다. 창은 각각 독립된 하나: 세션 0 개가 된 창은 닫히고(close_if_empty — 2026-09-05 개정, ticket convenience-features. 종전엔 빈 세션으로 남겼다), 창 닫힘(X·close_if_empty)은 그 창의 세션만 정리한다(drop_window). 마지막 창이 닫히면 앱 종료 (Tauri 기본) — 묶음 이력은 레지스트리 변경마다 저장돼 종료 훅이 없다. 탭 이동의 front 상태는 JSON 핸드오프 — 출처 창이 만들고 native 는 내용을 모른 채 전달만 한다 (큐 handoffs + take_handoff — 세션 탭은 대상 창이 살아 있어도 큐; 에디터·터미널 탭만 살아 있는 창엔 forward 의 tabs-handoff 로 직결). single-instance — 프로세스는 1개, 두 번째 실행은 argv·cwd 를 첫 프로세스에 넘기고 종료한다. 시작은 항상 빈 세션이다 — 마지막 워크스페이스 자동 복원은 하지 않는다 (2026-09-02 사용자 결정 — app-restore-last-workspace 원복). 명시 argv 로 준 폴더만 연다. 대신 state.json(app_data_dir, version 2 — decision/state-persistence.md, ticket start-page-recents)에 최근 연 폴더 MRU(recents)와 세션 묶음(한 창에 함께 열려 있던 root 집합, bundles) 이력을 native 가 소유·갱신하고, 시작 페이지가 list_recents 로 보여 사용자가 명시적으로 다시 연다(open_folder_path·open_bundle)
 
 fn main() {
-  role: listener bind·토큰 생성 → 세션 레지스트리 생성 → relay 스레드 기동 → single-instance 플러그인 등록(두 번째 실행 수신 → open_second_instance) → 커맨드 등록(open_folder·open_folder_path·open_empty_session·list_sessions·close_session·move_session·detach_session·move_session_to_window·detach_tabs·forward·take_handoff·list_windows·list_recents·forget_recent·forget_bundle·open_bundle) → 창 이벤트(Destroyed → drop_window, Focused → focused 갱신) → setup 에서 초기 세션 등록(명시 argv 폴더 하나, 없으면 루트 없는 빈 세션 — 소속 main) 후 첫 창("main") 생성(build_window) — 주입 목록이 완전하도록 등록이 창 생성보다 앞선다
+  role: listener bind·토큰 생성 → 세션 레지스트리 생성 → relay 스레드 기동 → single-instance 플러그인 등록(두 번째 실행 수신 → open_second_instance) → 커맨드 등록(open_folder·open_folder_path·open_empty_session·list_sessions·close_session·move_session·detach_session·move_session_to_window·detach_tabs·forward·take_handoff·list_windows·list_recents·forget_recent·forget_bundle·open_bundle·pick_save_target·local_write·local_mkdir) → 창 이벤트(Destroyed → drop_window, Focused → focused 갱신) → setup 에서 초기 세션 등록(명시 argv 폴더 하나, 없으면 루트 없는 빈 세션 — 소속 main) 후 첫 창("main") 생성(build_window) — 주입 목록이 완전하도록 등록이 창 생성보다 앞선다
 }
 fn build_window() {
   role: 창 생성 — 첫 창과 분리로 생기는 창이 같은 빌더(장식 없음·drag-drop 핸들러 해제·배경색·주입 스크립트)를 쓴다. 주입 목록은 그 창 소속 세션만 — 호출 전에 소속 배정이 끝나 있어야 한다. pos 는 드롭 지점 논리 좌표. Windows 는 OS 드롭 수신(attach_os_drop)을 창마다 건다. 창을 만드는 커맨드(detach_session·detach_tabs)는 반드시 async fn — 동기 커맨드는 메인 스레드에서 돌아 Windows 에서 build() 가 이벤트 루프를 기다리며 교착한다 (실측: 새 창 미로드 + 출처 창 IPC 정지)
@@ -77,6 +77,15 @@ fn record_bundles() {
 }
 fn recent_entry() {
   role: 시작 페이지용 사영 — root 문자열 + missing(로컬 경로가 지금 디렉토리가 아님. ssh:// 는 검사 안 함). 표시 이름은 front 가 root 로 만든다
+}
+fn pick_save_target() {
+  role: Tauri command — 탐색기 다운로드(ticket explorer-download)의 로컬 저장 위치 dialog(rfd). kind=file 은 저장 파일 dialog(기본 파일명 name), directory 는 폴더 선택 후 그 안의 name 하위 폴더 (VS Code 원격 탐색기 Download 와 같은 배치). 취소면 None. 전송 자체는 front 가 와이어로 읽어 local_write 로 조각마다 넘긴다 — native 는 원격을 모른다
+}
+fn local_write() {
+  role: Tauri command — 다운로드 조각 쓰기: base64 data 를 path 에 (append 면 끝에 덧붙임, 아니면 새로), 부모 디렉터리 자동 생성. 임의 로컬 경로를 받는 근거는 open_folder_path 와 같다 (webview 는 이미 /ws 로 셸을 가진다). async — MB 단위 쓰기를 메인 스레드에서 하지 않는다
+}
+fn local_mkdir() {
+  role: Tauri command — 다운로드 폴더 생성(create_dir_all) — 빈 폴더도 트리에 남긴다
 }
 fn list_recents() {
   role: Tauri command — recents(MRU)·bundles(이력) 사영. 시작 페이지가 표시될 때와 세션 목록이 바뀔 때 부른다 (소실 여부는 그때 검사)

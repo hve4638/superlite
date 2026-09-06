@@ -1,0 +1,5 @@
+role: 저장 전용(무압축) zip 작성기 — 웹 모드 폴더 다운로드용 (transfer). 원격에서 이미 받은 바이트라 압축 이득이 없고 의존성 없이 짧게 끝나 라이브러리를 들이지 않았다. ponytail: zip64 없음(항목·전체 4GB, 65535 항목 초과는 에러), 파일 시각은 작성 시각 하나. leaf
+
+export class ZipWriter {
+  role: begin(name, dir?) → append(bytes)* → end() 순으로 항목을 쌓고 finish() 가 중앙 디렉터리·EOCD 를 붙여 Blob 재료(Uint8Array[])를 돌려준다. 로컬 헤더의 crc·크기는 end 에서 채운다 (조각을 받으며 crc32 누적) — 데이터 디스크립터 없이 표준 배치
+}

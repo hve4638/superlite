@@ -25,8 +25,8 @@ function timestampName(): string {
 /** MIME 서브타입 → 확장자. 클립보드 이미지는 사실상 항상 image/png 다 — jpeg 만 관례로 축약 */
 const extOf = (mime: string): string => mime.replace(/^image\//, '').replace('jpeg', 'jpg');
 
-/** Blob → base64 (data URL 의 페이로드 부분) — writeFile 의 base64 와이어용 */
-function blobToBase64(blob: Blob): Promise<string> {
+/** Blob → base64 (data URL 의 페이로드 부분) — writeFile 의 base64 와이어용 (업로드 청크도 같은 통로) */
+export function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
     r.onload = () => resolve((r.result as string).slice((r.result as string).indexOf(',') + 1));

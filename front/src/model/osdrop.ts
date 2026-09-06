@@ -6,11 +6,18 @@ import { workbench } from './workbench';
  * File 객체를 chrome.webview 로 native 에 넘기고(경로는 native 만 읽는다), 폴더는 native 가
  * 세션을 전환하며, 파일은 native 가 돌려준 절대 경로를 여기서 루트 상대화해 연다.
  * 브라우저 모드에서는 chrome.webview 가 없어 무동작이다.
+ * 탐색기 업로드 존([data-upload-zone] — 원격 세션의 트리, ticket explorer-download) 위의 드롭은
+ * 건드리지 않는다 — 그 드롭은 "열기" 가 아니라 원격으로 업로드이고, 탐색기가 DOM 에서 직접 처리한다.
  */
 
 interface WebView2Channel {
   postMessageWithAdditionalObjects?: (message: unknown, objects: unknown[]) => void;
   addEventListener: (type: 'message', cb: (e: { data: unknown }) => void) => void;
+}
+
+/** 드롭 대상이 탐색기 업로드 존 안인가 — 그 드롭은 탐색기 몫이라 여기서 손대지 않는다 */
+function inUploadZone(e: DragEvent): boolean {
+  return (e.target as Element | null)?.closest?.('[data-upload-zone]') != null;
 }
 
 export function initOsDrop(): void {
@@ -24,7 +31,7 @@ export function initOsDrop(): void {
     window.addEventListener(
       type,
       (e) => {
-        if (!e.dataTransfer?.types.includes('Files')) return;
+        if (!e.dataTransfer?.types.includes('Files') || inUploadZone(e)) return;
         e.preventDefault();
         e.stopPropagation();
         e.dataTransfer.dropEffect = 'copy';
@@ -35,7 +42,7 @@ export function initOsDrop(): void {
   window.addEventListener(
     'drop',
     (e) => {
-      if (!e.dataTransfer?.types.includes('Files')) return;
+      if (!e.dataTransfer?.types.includes('Files') || inUploadZone(e)) return;
       e.preventDefault();
       e.stopPropagation();
       // WHY: File 객체만 넘긴다 — FileSystemHandle 은 WebView2 가 컬렉션에 null 로 넣어

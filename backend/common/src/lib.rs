@@ -48,7 +48,10 @@ pub fn socket_path() -> PathBuf {
 /// 13: gitRepos(저장소 자동 탐색) + readDir 디렉토리 항목 repo 표식 + git* 전부 repo 파라미터
 ///    (루트 상대 디렉토리, 생략은 루트). 하위 폴더·중첩 저장소를 SCM 이 저장소별로 다룬다.
 ///    구버전 데몬은 gitRepos 를 모르는 메서드로 에러 응답해 SCM 뷰가 비어 보인다.
-pub const WIRE_VERSION: u32 = 13;
+/// 14: writeFile 에 append(base64 청크 업로드의 후속 조각 — etag 검사 없이 끝에 덧붙인다).
+///    탐색기 업로드(ticket explorer-download)가 큰 파일을 4MB 조각으로 나른다. 구버전 데몬은
+///    append 를 무시하고 매 조각으로 파일을 덮어써 마지막 조각만 남는다.
+pub const WIRE_VERSION: u32 = 14;
 
 /// 릴리스 버전 — 루트 Cargo.toml `[workspace.package] version` 하나에서 온다 (crate 4개가 상속).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
