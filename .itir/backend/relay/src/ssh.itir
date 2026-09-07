@@ -10,19 +10,19 @@ class HostEntry {
   role: 원격 탐색기 한 항목 (프론트 응답) — name·favorite·pinned·drift·missing(config 에 없고 고정도 안 된 즐겨찾기)
 }
 class Panes {
-  role: FAVORITE·ALL pane 접힘 상태 — 전역 지속 (새 창에도 반영)
+  role: FAVORITE·ALL pane 접힘 상태 — 전역 지속 (새 창에도 반영). 초기값은 load_state 가 한 번 정한다 (즐겨찾기가 없으면 favorite 닫힘·all 열림), 그 뒤는 저장값 그대로 (2026-09-07 개정)
 }
 class HostList {
-  role: 원격 탐색기 전체 응답 — favorites(즐겨찾기 순)·all(config 순, 즐겨찾기 표시)·panes·recent(host → 최근 폴더)
+  role: 원격 탐색기 전체 응답 — favorites(즐겨찾기 순)·all(config 순, 즐겨찾기 표시)·panes·collapsed(최근 폴더를 접어 둔 host — 기본 펼침)·recent(host → 최근 폴더)
 }
 fn host_list() -> list {
-  role: 원격 탐색기 목록 — favorites 는 즐겨찾기 순서(고정 항목은 config 에서 사라져도 남고 drift = 저장본≠현재 블록·ack 한 상태 제외, 고정 안 한 항목은 missing), all 은 config 전체. 즐겨찾기가 비면 panes 를 저장값과 무관하게 favorite 닫힘·all 열림으로 (사용자 결정)
+  role: 원격 탐색기 목록 — favorites 는 즐겨찾기 순서(고정 항목은 config 에서 사라져도 남고 drift = 저장본≠현재 블록·ack 한 상태 제외, 고정 안 한 항목은 missing), all 은 config 전체. panes·collapsed 는 저장값 그대로
 }
 fn update_state(op, query) -> list {
-  role: superlite 자체 상태 파일(설정 디렉터리의 superlite/remote.json) 변경 — fav·unfav(고정도 버림)·pin(즐겨찾기에서만, 현재 블록 스냅샷)·unpin·ack(현재 config 상태를 인정해 경고만 끔)·refresh(저장본을 현재 블록으로 교체)·forget(최근 폴더 한 줄 제거)·pane(접힘 상태). 구 형식(pinned 목록)은 읽을 때 즐겨찾기로 이전. ~/.ssh/config 는 건드리지 않는다
+  role: superlite 자체 상태 파일(설정 디렉터리의 superlite/remote.json) 변경 — fav·unfav(고정도 버림)·pin(즐겨찾기에서만, 현재 블록 스냅샷)·unpin·ack(현재 config 상태를 인정해 경고만 끔)·refresh(저장본을 현재 블록으로 교체)·forget(최근 폴더 한 줄 제거)·pane(접힘 상태)·expand(호스트 행의 최근 폴더 펼침 — 0 이면 collapsed 에 기록). 구 형식(pinned 목록)은 읽을 때 즐겨찾기로 이전, panes 가 없는 파일은 그때 초기값을 한 번 정한다. ~/.ssh/config 는 건드리지 않는다
 }
 fn record_recent(host, path) {
-  role: 최근 폴더 기록 — relay 가 원격 폴더 세션 attach 성공 시 데몬이 돌려준 정규화 경로로 부른다. 최신순·중복 제거·10개 상한 (VS Code Remote Explorer 의 호스트 하위 최근 폴더)
+  role: 최근 폴더 기록 — relay 가 원격 폴더 세션 attach 성공 시 데몬이 돌려준 정규화 경로로 부른다. 최신순·중복 제거·128개 상한(사실상 무제한 — 2026-09-07) (VS Code Remote Explorer 의 호스트 하위 최근 폴더)
 }
 fn ssh_cmd(host, opts) {
   role: 공통 ssh 골격 — BatchMode(프롬프트 대신 실패) + unix 는 ControlMaster/ControlPersist 연결 공유 (수명 자체 구현 대신 OpenSSH 위임 — decision/process-topology.md 개정. 마스터 소켓은 데몬 IPC 와 같은 0700 디렉터리). Windows OpenSSH 는 ControlMaster 미지원이라 뺀다 — 접속마다 인증할 뿐 동작 동일. Windows 는 CREATE_NO_WINDOW 로 spawn — GUI 앱이 콘솔 자식을 띄울 때 생기는 빈 콘솔 창 깜빡임 방지. 고정된 즐겨찾기는 저장본 옵션을 -o 로 재투입 — 명령줄이 config 보다 우선하므로 config 변경·삭제와 무관하게 고정 시점 설정으로 접속

@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref, watch } from 'vue';
+import { onMounted, ref, watch } from 'vue';
 import {
-  remote, refreshHosts, connectHost, openRecent, setHostState, setPaneOpen, type RemoteHost,
+  remote, refreshHosts, connectHost, openRecent, setHostState, setHostExpanded, setPaneOpen, type RemoteHost,
 } from '../../model/remote';
 import { openContextMenu, type ContextMenuItem } from '../../model/workbench';
 import { sessions } from '../../model/sessions';
@@ -28,19 +28,24 @@ function resizeAll(dy: number) {
   allHeight.value = Math.max(ALL_MIN, allStart - dy);
 }
 
-// 펼친 호스트(최근 폴더 표시) — pane 별로 따로 (같은 host 가 두 pane 에 있을 수 있다)
-const expanded = reactive(new Set<string>());
-function expKey(pane: Pane, h: RemoteHost): string {
-  return `${pane}:${h.name}`;
-}
+// 펼친 호스트(최근 폴더 표시) — 호스트별 지속 (remote.collapsed, 기본 펼침). 같은 host 가 두 pane 에
+// 있으면 함께 움직인다
 function recentOf(h: RemoteHost): string[] {
   return remote.recent[h.name] ?? [];
 }
+function isExpanded(h: RemoteHost): boolean {
+  return !remote.collapsed.includes(h.name);
+}
 function toggleHost(pane: Pane, h: RemoteHost): void {
+  selected.value = `${pane}:${h.name}`;
   if (recentOf(h).length === 0) return;
-  const k = expKey(pane, h);
-  if (expanded.has(k)) expanded.delete(k);
-  else expanded.add(k);
+  setHostExpanded(h.name, !isExpanded(h));
+}
+
+// 선택된 행 (호스트 또는 최근 폴더) — 클릭은 선택만, 접속은 hover 액션으로 (VS Code Remote Explorer)
+const selected = ref<string | null>(null);
+function recentKey(pane: Pane, h: RemoteHost, p: string): string {
+  return `${pane}:${h.name}:${p}`;
 }
 
 function menuFor(pane: Pane, h: RemoteHost): ContextMenuItem[] {
@@ -131,14 +136,14 @@ function basename(path: string): string {
         <template v-for="h in pane === 'favorite' ? remote.favorites : remote.all" :key="h.name">
           <div
             class="row"
-            :class="{ drift: h.drift || h.missing }"
+            :class="{ drift: h.drift || h.missing, selected: selected === `${pane}:${h.name}` }"
             :title="rowTitle(h)"
             @click="toggleHost(pane, h)"
             @contextmenu="onRowContextMenu($event, pane, h)"
           >
             <span
               class="twistie codicon"
-              :class="recentOf(h).length ? (expanded.has(expKey(pane, h)) ? 'codicon-chevron-down' : 'codicon-chevron-right') : ''"
+              :class="recentOf(h).length ? (isExpanded(h) ? 'codicon-chevron-down' : 'codicon-chevron-right') : ''"
             />
             <span class="codicon type-icon" :class="iconOf(pane, h)" />
             <span class="row-name">{{ h.name }}</span>
@@ -156,20 +161,27 @@ function basename(path: string): string {
               />
             </div>
           </div>
-          <!-- 최근 연 폴더 (VS Code Remote Explorer 의 호스트 하위 항목) — 클릭 = 현재 탭에서 그 폴더로 -->
-          <template v-if="expanded.has(expKey(pane, h))">
+          <!-- 최근 연 폴더 (VS Code Remote Explorer 의 호스트 하위 항목) — 클릭은 선택, 접속은 호스트 행과
+               같은 hover 액션 (→ 현재 탭 대체 / 새 탭) -->
+          <template v-if="isExpanded(h)">
             <div
               v-for="p in recentOf(h)"
               :key="p"
               class="row recent"
+              :class="{ selected: selected === recentKey(pane, h, p) }"
               :title="p"
-              @click.stop="openRecent(h.name, p, 'replace')"
+              @click.stop="selected = recentKey(pane, h, p)"
               @contextmenu="onRecentContextMenu($event, h, p)"
             >
               <span class="codicon type-icon codicon-folder" />
               <span class="row-name">{{ basename(p) }}</span>
               <span class="row-desc">{{ p }}</span>
               <div class="row-actions">
+                <span
+                  class="action codicon codicon-arrow-right"
+                  title="Open in Current Tab"
+                  @click.stop="openRecent(h.name, p, 'replace')"
+                />
                 <span
                   class="action codicon codicon-empty-window"
                   title="Open in New Tab"
@@ -208,6 +220,9 @@ function basename(path: string): string {
 .row:hover {
   background: var(--vscode-list-hoverBackground);
 }
+.row.selected {
+  background: var(--vscode-list-inactiveSelectionBackground);
+}
 /* drift·missing: 고정 저장본이 현재 config 와 다름 / config 에 없음 */
 .row.drift .row-name {
   font-style: italic;
@@ -229,11 +244,17 @@ function basename(path: string): string {
   margin-right: 6px;
   color: var(--vscode-icon-foreground);
 }
+/* 이름이 우선, 경로 설명이 먼저 줄어든다 (flex-shrink 가중치) — 좁은 사이드바에서 폴더 이름이
+   잘리던 것을 완화 (remote-explorer-polish 4) */
 .row-name {
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .row-desc {
+  flex: 0 1000 auto;
+  min-width: 0;
   margin-left: 6px;
   font-size: 0.9em;
   color: var(--vscode-descriptionForeground);

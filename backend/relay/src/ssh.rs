@@ -82,13 +82,17 @@ pub fn config_blocks() -> Vec<(String, Vec<String>)> {
 // ---------------------------------------------------------------- 즐겨찾기·고정·최근 상태
 
 /// superlite 가 별도로 관리하는 원격 탐색기 상태 (백엔드 머신의 설정 파일) — 즐겨찾기(선택적
-/// 고정 스냅샷)·pane 접힘·호스트별 최근 폴더. ~/.ssh/config 는 건드리지 않는다.
+/// 고정 스냅샷)·pane 접힘·호스트 행 접힘·호스트별 최근 폴더. ~/.ssh/config 는 건드리지 않는다.
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 struct RemoteState {
     #[serde(default)]
     favorites: Vec<Favorite>,
+    /// None = 아직 정한 적 없음 (첫 실행·구 파일) — load_state 가 한 번 정한다
     #[serde(default)]
-    panes: Panes,
+    panes: Option<Panes>,
+    /// 최근 폴더 목록을 접어 둔 host (기본은 펼침) — 호스트별 지속 (remote-explorer-polish)
+    #[serde(default)]
+    collapsed: Vec<String>,
     /// host → 최근 연 폴더 (최신순, RECENT_MAX)
     #[serde(default)]
     recent: std::collections::BTreeMap<String, Vec<String>>,
@@ -109,8 +113,8 @@ struct Favorite {
     ack: Option<String>,
 }
 
-/// pane 접힘 상태 — 전역 (새 창에도 반영). 즐겨찾기가 비면 무시된다 (host_list 참조)
-#[derive(serde::Serialize, serde::Deserialize)]
+/// pane 접힘 상태 — 전역 (새 창에도 반영)
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Panes {
     pub favorite: bool,
     pub all: bool,
@@ -122,7 +126,8 @@ impl Default for Panes {
     }
 }
 
-const RECENT_MAX: usize = 10;
+/// 사실상 한도 없음 (2026-09-07 사용자 결정 — 10 은 밀려남이 눈에 띄었다)
+const RECENT_MAX: usize = 128;
 
 /// 원격 탐색기 한 항목 — 프론트 응답 형태
 #[derive(serde::Serialize)]
@@ -137,12 +142,13 @@ pub struct HostEntry {
 }
 
 /// 원격 탐색기 전체 응답 — FAVORITE pane(즐겨찾기 순), ALL pane(config 순, 즐겨찾기 표시),
-/// pane 접힘, 호스트별 최근 폴더
+/// pane 접힘, 접어 둔 host, 호스트별 최근 폴더
 #[derive(serde::Serialize)]
 pub struct HostList {
     pub favorites: Vec<HostEntry>,
     pub all: Vec<HostEntry>,
     pub panes: Panes,
+    pub collapsed: Vec<String>,
     pub recent: std::collections::BTreeMap<String, Vec<String>>,
 }
 
@@ -167,6 +173,12 @@ fn load_state() -> RemoteState {
             st.favorites.push(p);
         }
     }
+    // pane 초기값은 딱 한 번 — 즐겨찾기가 없으면 FAVORITE 닫힘·ALL 열림, 있으면 둘 다 열림. 그 뒤는
+    // 사용자가 접고 펼친 대로만 (2026-09-07 개정: 종전의 "즐겨찾기가 비면 항상 강제" 는 헤더 클릭이
+    // 되돌아가고 즐겨찾기 추가 순간 상태가 뒤바뀌는 버그였다). 다음 save 에 굳는다
+    if st.panes.is_none() {
+        st.panes = Some(if st.favorites.is_empty() { Panes { favorite: false, all: true } } else { Panes::default() });
+    }
     st
 }
 
@@ -188,7 +200,7 @@ fn block_key(block: Option<&[String]>) -> String {
 
 /// 원격 탐색기 목록. favorites 는 즐겨찾기 순서(고정 항목은 config 에서 사라져도 남고 저장본으로
 /// 접속, 고정 안 한 항목은 missing 표시), all 은 config 순서 전체(즐겨찾기 여부 표시).
-/// panes 는 즐겨찾기가 비면 저장값과 무관하게 favorite 닫힘·all 열림.
+/// panes·collapsed 는 저장값 그대로 (초기값은 load_state 가 한 번 정한다).
 pub fn host_list() -> HostList {
     let st = load_state();
     let blocks = config_blocks();
@@ -221,14 +233,15 @@ pub fn host_list() -> HostList {
             missing: false,
         })
         .collect();
-    let panes = if favorites.is_empty() { Panes { favorite: false, all: true } } else { st.panes };
-    HostList { favorites, all, panes, recent: st.recent }
+    let panes = st.panes.unwrap_or_default();
+    HostList { favorites, all, panes, collapsed: st.collapsed, recent: st.recent }
 }
 
-/// 상태 변경 한 번 — op: fav·unfav·pin·unpin·ack·refresh·forget·pane. 성공 시 갱신된 목록.
+/// 상태 변경 한 번 — op: fav·unfav·pin·unpin·ack·refresh·forget·pane·expand. 성공 시 갱신된 목록.
 /// pin 은 즐겨찾기에서만(사용자 결정) config 블록을 스냅샷, unfav 는 고정도 함께 버린다.
 /// ack = 현재 config 상태를 인정(경고만 끈다), refresh = 저장본을 현재 config 로 교체.
-/// forget 은 최근 폴더 한 줄 제거(q.path), pane 은 접힘 상태(q.host = favorite|all, q.open = 0|1).
+/// forget 은 최근 폴더 한 줄 제거(q.path), pane 은 접힘 상태(q.host = favorite|all, q.open = 0|1),
+/// expand 는 호스트 행의 최근 폴더 펼침(q.open = 0|1 — 0 이면 collapsed 에 기록).
 pub fn update_state(op: &str, q: &std::collections::HashMap<String, String>) -> Result<HostList, String> {
     let host = q.get("host").map(String::as_str).unwrap_or("");
     if host.is_empty() || !host_ok(host) {
@@ -282,10 +295,18 @@ pub fn update_state(op: &str, q: &std::collections::HashMap<String, String>) -> 
         }
         "pane" => {
             let open = q.get("open").map(String::as_str) == Some("1");
+            let panes = st.panes.get_or_insert_with(Panes::default);
             match host {
-                "favorite" => st.panes.favorite = open,
-                "all" => st.panes.all = open,
+                "favorite" => panes.favorite = open,
+                "all" => panes.all = open,
                 _ => return Err("알 수 없는 pane".into()),
+            }
+        }
+        "expand" => {
+            let open = q.get("open").map(String::as_str) == Some("1");
+            st.collapsed.retain(|h| h != host);
+            if !open {
+                st.collapsed.push(host.to_string());
             }
         }
         _ => return Err("알 수 없는 op".into()),

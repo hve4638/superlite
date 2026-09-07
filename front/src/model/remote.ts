@@ -12,9 +12,10 @@ import type { OpenMode } from './sessions';
  * missing (이탤릭, 접속 불가).
  * ALL: ~/.ssh/config 전체 (config 순), 즐겨찾기인 항목은 별 아이콘.
  * 최근 폴더: 호스트 행을 펼치면 그 호스트에서 연 폴더가 나온다 (VS Code Remote Explorer 의
- * 호스트 하위 폴더) — 클릭이 곧 그 폴더로 접속. relay 가 attach 성공 시 기록한다.
- * pane 접힘 상태는 전역 지속 (백엔드 파일) — 즐겨찾기가 비면 저장값과 무관하게 FAVORITE 닫힘·
- * ALL 열림으로 온다.
+ * 호스트 하위 폴더) — 행 클릭은 선택, hover 의 →/새 탭이 접속 (호스트 행과 동일). relay 가
+ * attach 성공 시 기록한다. 호스트 행의 펼침은 호스트별 지속 (collapsed — 기본 펼침).
+ * pane 접힘 상태는 전역 지속 (백엔드 파일) — 초기값만 백엔드가 한 번 정한다 (즐겨찾기가 없으면
+ * FAVORITE 닫힘·ALL 열림), 그 뒤는 사용자가 접고 펼친 대로.
  * 상태는 백엔드 파일이 단일 출처 — 변경 응답이 곧 갱신된 목록이라 재조회하지 않는다.
  */
 
@@ -32,16 +33,19 @@ export interface HostList {
   favorites: RemoteHost[];
   all: RemoteHost[];
   panes: { favorite: boolean; all: boolean };
+  /** 최근 폴더 목록을 접어 둔 host — 없으면 펼침 */
+  collapsed: string[];
   /** host → 최근 연 폴더 (원격 절대 경로, 최신순) */
   recent: Record<string, string[]>;
 }
 
-export type RemoteOp = 'fav' | 'unfav' | 'pin' | 'unpin' | 'ack' | 'refresh' | 'forget' | 'pane';
+export type RemoteOp = 'fav' | 'unfav' | 'pin' | 'unpin' | 'ack' | 'refresh' | 'forget' | 'pane' | 'expand';
 
 export const remote = reactive({
   favorites: [] as RemoteHost[],
   all: [] as RemoteHost[],
   panes: { favorite: true, all: true },
+  collapsed: [] as string[],
   recent: {} as Record<string, string[]>,
   loaded: false,
   error: null as string | null,
@@ -51,6 +55,7 @@ function apply(list: HostList): void {
   remote.favorites = list.favorites;
   remote.all = list.all;
   remote.panes = list.panes;
+  remote.collapsed = list.collapsed;
   remote.recent = list.recent;
   remote.error = null;
 }
@@ -77,7 +82,7 @@ export async function refreshHosts(): Promise<void> {
 }
 
 /** 상태 변경 — 백엔드가 돌려준 목록으로 갈아끼운다. host 자리는 pane 이면 pane 이름,
- *  extra 는 forget 의 path / pane 의 open. 실패는 목록 위 오류 줄에 (다음 성공 응답이 지운다) */
+ *  extra 는 forget 의 path / pane·expand 의 open. 실패는 목록 위 오류 줄에 (다음 성공 응답이 지운다) */
 export async function setHostState(
   op: RemoteOp,
   host: string,
@@ -100,6 +105,12 @@ export function setPaneOpen(pane: 'favorite' | 'all', open: boolean): void {
   void setHostState('pane', pane, { open: open ? '1' : '0' });
 }
 
+/** 호스트 행의 최근 폴더 펼침 토글 — 로컬 즉시 반영 + 호스트별 지속 (같은 host 는 두 pane 이 공유) */
+export function setHostExpanded(host: string, open: boolean): void {
+  remote.collapsed = open ? remote.collapsed.filter((h) => h !== host) : [...remote.collapsed, host];
+  void setHostState('expand', host, { open: open ? '1' : '0' });
+}
+
 /** 호스트에 접속 — 경로 없는 `ssh://host` 로 원격 빈 세션(시작 페이지)을 연다. 폴더는 그
  *  세션의 '폴더 열기'가 원격을 탐색해 고른다 (VS Code "Connect to Host" 와 동일).
  *  mode 'replace'=현재 탭 대체(→, "현재 창에 연결") / 'new'=항상 새 탭(새 창 아이콘 — 활성
@@ -108,7 +119,7 @@ export function connectHost(host: string, mode: OpenMode): void {
   openFolder(`ssh://${host}`, { mode });
 }
 
-/** 최근 폴더로 바로 접속 — path 는 원격 절대 경로 */
+/** 최근 폴더로 접속 — path 는 원격 절대 경로. mode 규칙은 connectHost 와 동일 */
 export function openRecent(host: string, path: string, mode: OpenMode): void {
   openFolder(`ssh://${host}${path}`, { mode });
 }
