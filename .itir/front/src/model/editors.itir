@@ -138,6 +138,15 @@ export val editorView
 export fn toggleWordWrap() {
   role: 자동 줄바꿈 토글 — 전 에디터 공통 뷰 상태(editorView.wordWrap), 세션 안에서만 (VS Code Alt+Z 동일, 영속화 없음). MonacoHost 가 지켜보다 updateOptions
 }
+export val EDITOR_ZOOM_MIN
+export val EDITOR_ZOOM_MAX
+export val EDITOR_ZOOM_STEP
+export fn setEditorZoom(percent) {
+  role: 편집기 전용 줌(editorView.zoom, 퍼센트) — 웹뷰 줌(Ctrl+=, 앱 전체)과 별개로 Monaco 글꼴 크기만 바꾼다 (사이드바·탭·터미널은 그대로). 50~200 을 10 단위로 스냅·클램프. 세션 무관 전역이라 localStorage 에 기억하고, 다른 창의 변경은 storage 이벤트로 따라온다 (앱 다중 창 = 같은 origin). MonacoHost 가 지켜보다 fontSize 를 updateOptions (ticket convenience-features, 2026-09-07)
+}
+export fn stepEditorZoom(dir) {
+  role: 한 단계(EDITOR_ZOOM_STEP) 확대·축소 — 팔레트 'View: Editor Font Zoom In/Out' 용
+}
 export val previewReloadTick
 export fn reloadPreview(path) {
   role: 프리뷰 수동 갱신 신호 — path 별 tick 증가. 자동 갱신 off 인 프리뷰의 유일한 갱신 통로 (HtmlPreview 가 iframe 을 다시 만든다)

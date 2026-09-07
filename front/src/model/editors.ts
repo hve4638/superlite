@@ -167,11 +167,38 @@ export function toggleViewerAutoReload(kind: keyof typeof viewerAutoReload): voi
   localStorage.setItem(AUTO_RELOAD_KEY, JSON.stringify(viewerAutoReload));
 }
 
-/** 자동 줄바꿈 — 전 에디터 공통 뷰 상태 (VS Code Alt+Z 와 같이 세션 안에서만, 영속화 없음) */
-export const editorView = reactive({ wordWrap: false });
+/** 자동 줄바꿈 — 전 에디터 공통 뷰 상태 (VS Code Alt+Z 와 같이 세션 안에서만, 영속화 없음).
+ *  zoom 은 편집기 전용 줌(퍼센트) — 웹뷰 줌(Ctrl+=, 앱 전체)과 별개로 Monaco 글꼴 크기만 바꾼다.
+ *  세션 무관 전역이라 localStorage 에 기억한다 (viewerAutoReload 와 같은 방식) */
+export const editorView = reactive({ wordWrap: false, zoom: loadEditorZoom() });
 export function toggleWordWrap(): void {
   editorView.wordWrap = !editorView.wordWrap;
 }
+
+export const EDITOR_ZOOM_MIN = 50;
+export const EDITOR_ZOOM_MAX = 200;
+export const EDITOR_ZOOM_STEP = 10;
+const EDITOR_ZOOM_KEY = 'superlite.editorZoom';
+function clampZoom(percent: number): number {
+  const snapped = Math.round(percent / EDITOR_ZOOM_STEP) * EDITOR_ZOOM_STEP;
+  return Math.min(EDITOR_ZOOM_MAX, Math.max(EDITOR_ZOOM_MIN, snapped));
+}
+function loadEditorZoom(): number {
+  const n = Number(localStorage.getItem(EDITOR_ZOOM_KEY));
+  return Number.isFinite(n) && n > 0 ? clampZoom(n) : 100;
+}
+/** 편집기 줌 설정 — 10 단위 스냅·50~200 클램프 후 저장. MonacoHost 가 지켜보다 fontSize 갱신 */
+export function setEditorZoom(percent: number): void {
+  editorView.zoom = clampZoom(percent);
+  localStorage.setItem(EDITOR_ZOOM_KEY, String(editorView.zoom));
+}
+export function stepEditorZoom(dir: 1 | -1): void {
+  setEditorZoom(editorView.zoom + dir * EDITOR_ZOOM_STEP);
+}
+// 다른 창(앱 다중 창 = 같은 origin)이 바꾼 값을 따라온다 — 자기 창의 setItem 은 이 이벤트가 오지 않는다
+window.addEventListener('storage', (e) => {
+  if (e.key === EDITOR_ZOOM_KEY) editorView.zoom = loadEditorZoom();
+});
 
 /** 프리뷰 수동 갱신 신호 — path 별 tick. 자동 갱신 off 인 프리뷰가 이걸 보고 iframe 을 다시 만든다 */
 export const previewReloadTick = reactive(new Map<string, number>());

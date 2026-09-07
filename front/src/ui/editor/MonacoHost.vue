@@ -5,6 +5,7 @@ import { editorView, editors, indentOf } from '../../model/editors';
 import { scm } from '../../model/scm';
 import { openQuickInput } from '../../model/workbench';
 import { EDITOR_OPTIONS, modelFor, monaco, originalModelFor } from './monaco';
+import { EDITOR_FONT_SIZE } from '../../theme/fonts';
 
 const props = defineProps<{ group: EditorGroup }>();
 
@@ -18,9 +19,14 @@ const mode = computed(() => (active.value?.kind === 'diff' && !active.value.dele
 let codeEditor: monaco.editor.IStandaloneCodeEditor | null = null;
 let diffEditor: monaco.editor.IStandaloneDiffEditor | null = null;
 
-const wrapOpt = () => ({ wordWrap: editorView.wordWrap ? 'on' : 'off' } as const);
-// 자동 줄바꿈 토글(Alt+Z)을 이 그룹의 편집기 둘에 반영 — 생성 시점 값은 각 ensure 가 넣는다
-watch(() => editorView.wordWrap, () => {
+// 전 에디터 공통 뷰 옵션 — 자동 줄바꿈(Alt+Z)과 편집기 줌(상태바 배율 — 기본 14px 에 퍼센트 적용,
+// lineHeight 는 미지정이라 monaco 가 글꼴에 맞춰 다시 계산한다)
+const wrapOpt = () => ({
+  wordWrap: editorView.wordWrap ? 'on' : 'off',
+  fontSize: Math.round((EDITOR_FONT_SIZE * editorView.zoom) / 100),
+} as const);
+// 변경을 이 그룹의 편집기 둘에 반영 — 생성 시점 값은 각 ensure 가 넣는다
+watch(() => [editorView.wordWrap, editorView.zoom], () => {
   codeEditor?.updateOptions(wrapOpt());
   diffEditor?.updateOptions(wrapOpt());
 });

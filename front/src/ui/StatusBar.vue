@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { activeTab, base64Bytes, editors, indentOf, languageLabel, toggleViewerAutoReload, viewerAutoReload } from '../model/editors';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { EDITOR_ZOOM_MAX, EDITOR_ZOOM_MIN, EDITOR_ZOOM_STEP, activeTab, base64Bytes, editorView, editors, indentOf, languageLabel, setEditorZoom, toggleViewerAutoReload, viewerAutoReload } from '../model/editors';
 import { activeRepo } from '../model/scm';
 import { transfer } from '../model/transfer';
 import { connection, stageLabel, failureLabel } from '../model/watch';
@@ -45,6 +45,35 @@ const remoteLabel = computed(() => {
   if (connection.error !== null) return failureLabel(connection.failedStage);
   return 'Reconnecting…';
 });
+
+// 편집기 줌 팝오버 — 배율 항목 클릭으로 열고, 바깥 클릭·Escape 로 닫는다. 슬라이더는 10% 단위(step).
+// WHY: 상태바가 overflow hidden 이라 항목 안의 absolute 는 위로 잘린다 — fixed 로 띄우고 항목의
+//      오른쪽 끝에 맞춘다 (열 때 한 번 계산; 상태바는 창 맨 아래 고정이라 bottom 은 상수)
+const zoomOpen = ref(false);
+const zoomItem = ref<HTMLElement | null>(null);
+const zoomRight = ref(0);
+function toggleZoom(): void {
+  if (!zoomOpen.value && zoomItem.value) {
+    zoomRight.value = Math.round(window.innerWidth - zoomItem.value.getBoundingClientRect().right);
+  }
+  zoomOpen.value = !zoomOpen.value;
+}
+function onZoomOutside(e: MouseEvent): void {
+  if (!zoomItem.value?.contains(e.target as Node)) zoomOpen.value = false;
+}
+function onZoomKey(e: KeyboardEvent): void {
+  if (e.key === 'Escape') zoomOpen.value = false;
+}
+watch(zoomOpen, (open) => {
+  if (open) {
+    window.addEventListener('mousedown', onZoomOutside, true);
+    window.addEventListener('keydown', onZoomKey, true);
+  } else {
+    window.removeEventListener('mousedown', onZoomOutside, true);
+    window.removeEventListener('keydown', onZoomKey, true);
+  }
+});
+onBeforeUnmount(() => (zoomOpen.value = false));
 
 /** 전송 진행 라벨 — "Downloading x 42%" (총량을 아직 모르면 퍼센트 없이) */
 const transferLabel = computed(() => {
@@ -128,6 +157,22 @@ function fmtSize(bytes: number): string {
         <div class="statusbar-item"><span>UTF-8</span></div>
         <div class="statusbar-item"><span>LF</span></div>
         <div class="statusbar-item"><span>{{ languageLabel(fileTab.path) }}</span></div>
+        <!-- 편집기 줌 — 웹뷰 줌(Ctrl+=)과 별개로 편집기 글꼴만. 팝오버는 항목 위로 열린다 -->
+        <div ref="zoomItem" class="statusbar-item zoom" :class="{ open: zoomOpen }" title="Editor Zoom" @click="toggleZoom">
+          <span>{{ editorView.zoom }}%</span>
+          <!-- 슬라이더 하나뿐 — 값은 상태바 항목이 보여준다. 채워진 구간은 트랙 그라디언트로 (ends 는 0~100% 비율) -->
+          <div v-if="zoomOpen" class="zoom-popover" :style="{ right: `${zoomRight}px` }" @click.stop>
+            <input
+              type="range"
+              :min="EDITOR_ZOOM_MIN"
+              :max="EDITOR_ZOOM_MAX"
+              :step="EDITOR_ZOOM_STEP"
+              :value="editorView.zoom"
+              :style="{ '--fill': `${((editorView.zoom - EDITOR_ZOOM_MIN) / (EDITOR_ZOOM_MAX - EDITOR_ZOOM_MIN)) * 100}%` }"
+              @input="setEditorZoom(Number(($event.target as HTMLInputElement).value))"
+            />
+          </div>
+        </div>
       </template>
       <div class="statusbar-item" title="No Notifications">
         <span class="codicon codicon-bell" />
@@ -178,6 +223,52 @@ function fmtSize(bytes: number): string {
 .statusbar-item.connecting {
   background: var(--vscode-statusBarItem-remoteBackground, #16825d);
   color: var(--vscode-statusBarItem-remoteForeground, #ffffff);
+}
+.statusbar-item.zoom.open {
+  background: var(--vscode-statusBarItem-hoverBackground);
+}
+.zoom-popover {
+  position: fixed;
+  bottom: 26px;
+  width: 180px;
+  padding: 10px 12px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  background: var(--vscode-editorWidget-background, #252526);
+  border: 1px solid var(--vscode-editorWidget-border, #454545);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.36);
+  cursor: default;
+  z-index: 100;
+}
+/* VS Code 톤의 슬라이더 — 얇은 트랙, 채워진 구간은 focusBorder 파랑, 작은 둥근 손잡이 */
+.zoom-popover input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 12px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  --track: var(--vscode-scrollbarSlider-background, rgba(121, 121, 121, 0.4));
+  --accent: var(--vscode-focusBorder, #0078d4);
+}
+.zoom-popover input[type='range']::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 2px;
+  background: linear-gradient(to right, var(--accent) var(--fill), var(--track) var(--fill));
+}
+.zoom-popover input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 11px;
+  height: 11px;
+  margin-top: -4px;
+  border-radius: 50%;
+  border: none;
+  background: var(--accent);
+}
+.zoom-popover input[type='range']:focus {
+  outline: none;
 }
 .statusbar-item.offline {
   background: var(--vscode-statusBarItem-offlineBackground, #6c1717);

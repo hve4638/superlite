@@ -24,7 +24,8 @@
 //! (2026-09-02 사용자 결정, ticket app-empty-session). 명시 argv 로 준 폴더만 연다.
 //! 대신 state.json(app_data_dir, version 2 — decision/state-persistence.md)에 최근 연 폴더
 //! MRU 와 세션 묶음(한 창에 함께 열려 있던 root 집합) 이력을 남기고, 시작 페이지가 그 목록을
-//! 보여 사용자가 명시적으로 다시 연다 (ticket start-page-recents).
+//! 보여 사용자가 명시적으로 다시 연다 (ticket start-page-recents). 같은 파일에 앱 전체 줌
+//! 레벨(zoom)도 둔다 — 배율은 창별이 아니라 VS Code window.zoomLevel 처럼 앱 공통 (set_zoom).
 //!
 //! 실행: superlite [워크스페이스루트]  (인자 없으면 빈 세션으로 시작)
 
@@ -70,9 +71,14 @@ const RECENTS_MAX: usize = 10;
 /// 세션 묶음 이력 상한 (시작 페이지 오른쪽 컬럼)
 const BUNDLES_MAX: usize = 5;
 
+/// 줌 레벨 상한 — 배율 1.2^8 ≈ 4.3 / 1.2^-8 ≈ 0.23 (VS Code 는 무제한이지만 실수로 끝까지 가면 되돌리기 어렵다)
+const ZOOM_MAX: i32 = 8;
+
 /// 디스크에 남기는 상태 — 스키마·규칙은 docs/decision/state-persistence.md (version 2).
 /// recents 는 개별 root 의 MRU(앞이 최신), bundles 는 한 창에 함께 열려 있던 root 집합의
-/// 이력(앞이 최신, 원소 순서 = 탭 순서). 빈 세션(root 없음·경로 없는 ssh://host)은 둘 다 제외
+/// 이력(앞이 최신, 원소 순서 = 탭 순서). 빈 세션(root 없음·경로 없는 ssh://host)은 둘 다 제외.
+/// zoom 은 앱 전체 웹뷰 줌 레벨(0 = 100%, 배율 1.2^zoom) — 필드 추가는 version 을 올리지 않는다
+/// (없으면 0, reader 는 모르는 필드를 무시)
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 struct Persisted {
     version: u32,
@@ -80,6 +86,23 @@ struct Persisted {
     recents: Vec<PathBuf>,
     #[serde(default)]
     bundles: Vec<Vec<PathBuf>>,
+    #[serde(default)]
+    zoom: i32,
+}
+
+/// 줌 레벨 전이 — in +1, out -1, reset 0, 그 외 무변경. ±ZOOM_MAX 로 클램프
+fn step_zoom(level: i32, action: &str) -> i32 {
+    match action {
+        "in" => (level + 1).min(ZOOM_MAX),
+        "out" => (level - 1).max(-ZOOM_MAX),
+        "reset" => 0,
+        _ => level,
+    }
+}
+
+/// 레벨 → 배율. VS Code window.zoomLevel 과 같은 밑(1.2)
+fn zoom_factor(level: i32) -> f64 {
+    1.2f64.powi(level)
 }
 
 /// 시작 페이지용 사영 — missing 은 로컬 경로가 지금 디렉토리가 아니다(삭제·이동·드라이브
@@ -371,9 +394,36 @@ fn build_window(
         b = b.position(x, y);
     }
     let window = b.build()?;
+    // 앱 전체 공통 배율 — 새 창도 저장된 레벨로 뜬다 (0 이면 기본 배율이라 호출 불요)
+    let zoom = state.persisted.lock().unwrap().zoom;
+    if zoom != 0 {
+        if let Err(e) = window.set_zoom(zoom_factor(zoom)) {
+            eprintln!("superlite: 줌 적용 실패 ({label}): {e}");
+        }
+    }
     #[cfg(windows)]
     attach_os_drop(app, &window);
     Ok(window)
+}
+
+/// 웹뷰 줌 — action 은 "in"·"out"·"reset". 배율은 창별이 아니라 앱 전체 공통(VS Code
+/// window.zoomLevel)이라 레벨은 native 가 소유하고 모든 창에 적용·state.json 에 저장한다.
+/// front 의 'View: Zoom In/Out/Reset Zoom'(Ctrl+Shift+= / Ctrl+Shift+- / Ctrl+Shift+0 — Shift 없는 키는 편집기 글꼴 줌)이 부른다 — 웹은 브라우저
+/// 줌이 있어 등록하지 않는다 (ticket convenience-features)
+#[tauri::command]
+fn set_zoom(app: tauri::AppHandle, state: tauri::State<AppState>, action: String) {
+    let level = {
+        let mut p = state.persisted.lock().unwrap();
+        p.zoom = step_zoom(p.zoom, &action);
+        save_state(state.state_file.as_deref(), &p);
+        p.zoom
+    };
+    let factor = zoom_factor(level);
+    for (label, w) in app.webview_windows() {
+        if let Err(e) = w.set_zoom(factor) {
+            eprintln!("superlite: 줌 적용 실패 ({label}): {e}");
+        }
+    }
 }
 
 /// 빈 세션 root 판정 — None(로컬 시작 페이지) 또는 경로 없는 원격 `ssh://host`(원격 시작
@@ -1057,6 +1107,7 @@ fn main() {
             forget_recent,
             forget_bundle,
             open_bundle,
+            set_zoom,
             pick_save_target,
             local_write,
             local_mkdir
@@ -1206,14 +1257,30 @@ mod tests {
     #[test]
     fn state_roundtrip_and_version_gate() {
         let path = std::env::temp_dir().join(format!("superlite-test-{}.json", rand_hex()));
-        let p = Persisted { version: 2, recents: paths(&["/a"]), bundles: vec![paths(&["/a", "/b"])] };
+        let p = Persisted { version: 2, recents: paths(&["/a"]), bundles: vec![paths(&["/a", "/b"])], zoom: 2 };
         save_state(Some(&path), &p);
         let back = load_state(Some(&path));
         assert_eq!(back.recents, p.recents);
         assert_eq!(back.bundles, p.bundles);
+        assert_eq!(back.zoom, 2);
+        // zoom 필드가 없는 기존 version 2 파일은 0 (필드 추가가 version 을 올리지 않는다)
+        std::fs::write(&path, r#"{"version":2,"recents":["/a"],"bundles":[]}"#).unwrap();
+        assert_eq!(load_state(Some(&path)).zoom, 0);
         std::fs::write(&path, r#"{"version":1,"workspaces":[{"root":"/a"}]}"#).unwrap();
         assert!(load_state(Some(&path)).recents.is_empty());
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn zoom_steps_and_clamps() {
+        assert_eq!(step_zoom(0, "in"), 1);
+        assert_eq!(step_zoom(0, "out"), -1);
+        assert_eq!(step_zoom(5, "reset"), 0);
+        assert_eq!(step_zoom(ZOOM_MAX, "in"), ZOOM_MAX);
+        assert_eq!(step_zoom(-ZOOM_MAX, "out"), -ZOOM_MAX);
+        assert_eq!(step_zoom(3, "bogus"), 3);
+        assert_eq!(zoom_factor(0), 1.0);
+        assert!((zoom_factor(1) - 1.2).abs() < 1e-9);
     }
 
     /// 창 안 순서 이동은 다른 창 엔트리의 자리를 건드리지 않는다 — 전체 목록 [a(main) x(w1)

@@ -1,10 +1,10 @@
 import { openQuickInput, showViewlet, toggleSideBar, togglePanel, workbench } from './workbench';
 import { openFolderDialog } from './host';
-import { closeTab, editors, reopenClosedEditor, saveActive, splitActiveEditor, activeGroup, activeTab, openHex, toggleHtmlPreview, isHtml, toggleWordWrap } from './editors';
+import { closeTab, editors, reopenClosedEditor, saveActive, splitActiveEditor, activeGroup, activeTab, openHex, toggleHtmlPreview, isHtml, toggleWordWrap, stepEditorZoom, setEditorZoom } from './editors';
 import { createTerminal } from './terminal';
 import { refreshScm } from './scm';
 import { activeSessionEmpty, cycleSession, sessionsEnabled } from './sessions';
-import { inApp } from './window';
+import { inApp, zoomWindow } from './window';
 import { showAbout } from './version';
 
 export interface Command {
@@ -27,7 +27,7 @@ function register(cmd: Command, ...chords: string[]): void {
 
 // WHY: e.key 는 Shift 적용 후 문자를 준다 — Ctrl+Shift+` 가 'ctrl+shift+~' 가 되어
 //      등록 chord 와 어긋난다. 구두점 키는 물리 키(e.code)로 정규화한다.
-const CODE_KEYS: Record<string, string> = { Backquote: '`', Backslash: '\\' };
+const CODE_KEYS: Record<string, string> = { Backquote: '`', Backslash: '\\', Equal: '=', Minus: '-', Digit0: '0' };
 
 function chordOf(e: KeyboardEvent): string {
   const parts: string[] = [];
@@ -233,6 +233,52 @@ export function setupCommands(): void {
       if (t && (t.kind === 'preview' || isHtml(t.path))) toggleHtmlPreview(activeGroup().id, t.id);
     },
   }, 'ctrl+shift+v');
+
+  // 키 배정(사용자 확정, VS Code 기본과 다름): 편집기 글꼴 줌이 1차 기능이라 Ctrl+= / Ctrl+- / Ctrl+0,
+  // UI 포함 전역(웹뷰) 줌은 Shift 를 얹어 Ctrl+Shift+= / Ctrl+Shift+- / Ctrl+Shift+0. 숫자패드 +/- 도 같은 규칙.
+  // 전역 줌은 앱 전용 — 웹은 같은 키가 브라우저 줌이라 등록하지 않는다. 배율은 앱 전체 공통이고
+  // native 가 레벨을 소유·저장한다 (app/src/main set_zoom)
+  if (inApp) {
+    register({
+      id: 'workbench.action.zoomIn',
+      title: 'View: Zoom In',
+      keybinding: 'Ctrl+Shift+=',
+      run: () => zoomWindow('in'),
+    }, 'ctrl+shift+=', 'ctrl+shift++');
+    register({
+      id: 'workbench.action.zoomOut',
+      title: 'View: Zoom Out',
+      keybinding: 'Ctrl+Shift+-',
+      run: () => zoomWindow('out'),
+    }, 'ctrl+shift+-');
+    register({
+      id: 'workbench.action.zoomReset',
+      title: 'View: Reset Zoom',
+      keybinding: 'Ctrl+Shift+0',
+      run: () => zoomWindow('reset'),
+    }, 'ctrl+shift+0');
+  }
+
+  // 편집기 전용 줌 — 상태바 배율 항목과 같은 값. 모든 환경 (웹에서는 브라우저 줌 키를 가로챈다 — Ctrl+휠·
+  // Ctrl+Shift+= 는 브라우저에 남는다)
+  register({
+    id: 'editor.action.fontZoomIn',
+    title: 'View: Editor Font Zoom In',
+    keybinding: 'Ctrl+=',
+    run: () => stepEditorZoom(1),
+  }, 'ctrl+=', 'ctrl++');
+  register({
+    id: 'editor.action.fontZoomOut',
+    title: 'View: Editor Font Zoom Out',
+    keybinding: 'Ctrl+-',
+    run: () => stepEditorZoom(-1),
+  }, 'ctrl+-');
+  register({
+    id: 'editor.action.fontZoomReset',
+    title: 'View: Editor Font Zoom Reset',
+    keybinding: 'Ctrl+0',
+    run: () => setEditorZoom(100),
+  }, 'ctrl+0');
 
   register({
     id: 'workbench.action.showAboutDialog',
