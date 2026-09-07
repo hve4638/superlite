@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import type { EditorGroup, Tab } from '../../model/editors';
-import { closeTab, editors, isHtml, moveTabToGroup, openFile, openFolderTab, pinTab, reloadPreview, toggleHtmlPreview, setActiveTab } from '../../model/editors';
+import { closeEmptyGroup, closeTab, editors, isHtml, moveTabToGroup, openFile, openFolderTab, pinTab, reloadPreview, toggleGroupLock, toggleHtmlPreview, setActiveTab } from '../../model/editors';
 import { createTerminal, requestKillTerminal, terminals } from '../../model/terminal';
 import { notify } from '../../model/notifications';
 import { DND_EDITOR, detachEditorTab, multiWindow, requestTabsMove, sessionRoot, sessions } from '../../model/sessions';
@@ -238,7 +238,21 @@ function onForeignDrop(e: DragEvent) {
           <span class="codicon codicon-code" />
         </span>
       </template>
-      <!-- 새 터미널·폴더 탭 버튼은 타이틀바 오른쪽 (전역 동작 — 탭이 없는 그룹에서도 보여야 한다). 분할은 Ctrl+\ -->
+      <!-- 그룹 잠금 (editor-group-empty-lock): 잠기면 채워진 자물쇠가 항상, 아니면 hover 시에만 열린 자물쇠. 빈 그룹은 잠글 수 없다 -->
+      <span
+        v-if="group.tabs.length"
+        class="group-action lock"
+        :class="{ locked: group.locked }"
+        :title="group.locked ? 'Unlock Group' : 'Lock Group (keeps layout when a neighbor empties)'"
+        @click="toggleGroupLock(group.id)"
+      >
+        <span class="codicon" :class="group.locked ? 'codicon-lock' : 'codicon-unlock'" />
+      </span>
+      <!-- 빈 그룹 닫기 — 잠금과 무관한 직접 닫기. 하나뿐인 그룹은 닫을 수 없다 -->
+      <span v-if="!group.tabs.length && editors.groups.length > 1" class="group-action" title="Close Group" @click="closeEmptyGroup(group.id)">
+        <span class="codicon codicon-close" />
+      </span>
+      <!-- 새 터미널·폴더 탭 버튼은 타이틀바 오른쪽 (전역 동작 — 탭이 없는 그룹에서도 보여야 한다). 분할은 팔레트 View: Split Editor -->
     </div>
   </div>
 </template>
@@ -407,5 +421,12 @@ function onForeignDrop(e: DragEvent) {
 }
 .group-action:hover {
   background: var(--vscode-toolbar-hoverBackground);
+}
+/* 잠금 아이콘: 안 잠긴 그룹은 탭바 hover 중에만 보인다 */
+.lock:not(.locked) {
+  visibility: hidden;
+}
+.tabbar:hover .lock {
+  visibility: visible;
 }
 </style>

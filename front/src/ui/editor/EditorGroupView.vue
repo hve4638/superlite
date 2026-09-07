@@ -113,8 +113,9 @@ const SHORTCUTS = [
 
 <template>
   <div class="editor-group" @mousedown="focusGroup">
+    <!-- 빈 그룹도 탭바를 그린다 — 자물쇠·닫기 × 자리 (editor-group-empty-lock) -->
+    <TabBar :group="group" />
     <template v-if="group.tabs.length">
-      <TabBar :group="group" />
       <div v-if="crumbs.length" class="breadcrumbs">
         <template v-for="(seg, i) in crumbs" :key="i">
           <span v-if="i > 0" class="codicon codicon-chevron-right sep" />

@@ -118,6 +118,11 @@ export interface EditorGroup {
   id: number;
   tabs: Tab[];
   activeTabId: string | null;
+  /** 그룹 잠금 — 다른 그룹이 마지막 탭을 잃어도 자동으로 접히지 않게 배치를 지킨다 (삭제로 인한
+   *  자동 병합 방지만 — 사용자가 직접 닫거나 드래그로 재배치하는 것은 막지 않는다). 잠긴 그룹
+   *  자신이 비면 종전대로 접히고 잠금도 사라진다 — 잠금은 탭이 있는 그룹에만 존재한다.
+   *  스냅샷(창 이동·워크스페이스 복원)에 그대로 실린다 */
+  locked?: boolean;
 }
 
 /** 화면 배치 트리 — 리프는 그룹 id, 분기는 행(row: 좌우)/열(column: 상하) 컨테이너.
@@ -776,8 +781,8 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     const group: EditorGroup = { id: nextGroupId++, tabs: [], activeTabId: null };
     editors.groups.splice(editors.groups.indexOf(ref) + 1, 0, group);
     insertIntoLayout(refGroupId, group.id, side);
-    // 읽기 실패 시 빈 그룹 잔재를 남기지 않는다
-    if (!(await openFile(path, { groupId: group.id }))) collapseIfEmpty(group.id);
+    // 읽기 실패 시 빈 그룹 잔재를 남기지 않는다 (잠금과 무관 — 사용자가 만든 빈 그룹이 아니다)
+    if (!(await openFile(path, { groupId: group.id }))) removeGroup(group);
   }
 
   /** 그룹에서 탭을 떼어낸다 — 활성 탭이었으면 이웃(같은 인덱스, 없으면 왼쪽)으로 활성 이동 */
@@ -795,9 +800,19 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
   }
 
   // WHY: VS Code 는 마지막 탭이 빠진 분할 그룹을 자동으로 접는다. 그룹이 하나뿐이면 빈 상태로 남긴다.
+  //      다른 그룹이 잠겨 있으면 접지 않는다 — 잠금은 "삭제로 인한 자동 병합 방지" 다 (editor-group-empty-lock)
   function collapseIfEmpty(groupId: number): void {
     const group = editors.groups.find((g) => g.id === groupId);
-    if (!group || group.tabs.length !== 0 || editors.groups.length <= 1) return;
+    if (!group || group.tabs.length !== 0) return;
+    // 잠금은 탭이 있는 동안만 — 탭을 다 닫으면 접히든 남든 잠금은 사라진다 (사용자 결정 2026-09-08)
+    delete group.locked;
+    if (editors.groups.length <= 1) return;
+    if (editors.groups.some((g) => g !== group && g.locked)) return;
+    removeGroup(group);
+  }
+
+  /** 빈 그룹을 배치에서 걷어낸다 — 잠금과 무관 (collapseIfEmpty 의 몸체, 사용자의 직접 닫기도 여기로) */
+  function removeGroup(group: EditorGroup): void {
     const gIdx = editors.groups.indexOf(group);
     editors.groups.splice(gIdx, 1);
     removeFromLayout(group.id);
@@ -805,6 +820,21 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     if (editors.activeGroupId === group.id) {
       editors.activeGroupId = editors.groups[Math.max(0, gIdx - 1)].id;
     }
+  }
+
+  /** 빈 그룹 직접 닫기 (빈 탭바의 ×) — 잠금과 무관하게 걷어낸다. 탭이 있거나 하나뿐인 그룹은 no-op */
+  function closeEmptyGroup(groupId: number): void {
+    const group = editors.groups.find((g) => g.id === groupId);
+    if (!group || group.tabs.length !== 0 || editors.groups.length <= 1) return;
+    removeGroup(group);
+  }
+
+  /** 그룹 잠금 토글 (탭바 자물쇠·팔레트) — 빈 그룹은 잠글 수 없다 (잠금은 탭이 있는 동안만) */
+  function toggleGroupLock(groupId: number): void {
+    const group = editors.groups.find((g) => g.id === groupId);
+    if (!group || group.tabs.length === 0) return;
+    if (group.locked) delete group.locked;
+    else group.locked = true;
   }
 
   /** force: 확인 대화상자를 거치지 않는 닫기 — confirm 처리부·삭제(closePathTabs)가 쓴다 */
@@ -901,12 +931,12 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     collapseIfEmpty(fromGroupId);
   }
 
-  /** 탭 드래그 드롭 — refGroupId 의 상하좌우(side) 새 그룹으로 분리 */
+  /** 탭 드래그 드롭 — refGroupId 의 상하좌우(side) 새 그룹으로 분리. 단일 탭 그룹의 자기 분리는
+   *  [ (빈) | A ] — 원 그룹을 빈 채 남긴다 (빈 그룹을 만들려는 의도, editor-group-empty-lock) */
   function moveTabSplit(fromGroupId: number, tabId: string, refGroupId: number, side: SplitSide): void {
     const ref = editors.groups.find((g) => g.id === refGroupId);
     if (!ref) return;
-    // 단일 탭 그룹의 자기 분리는 결과가 제자리 — no-op
-    if (fromGroupId === refGroupId && ref.tabs.length === 1) return;
+    const selfSplit = fromGroupId === refGroupId && ref.tabs.length === 1;
     const tab = takeTab(fromGroupId, tabId);
     if (!tab) return;
     tab.preview = false;
@@ -915,19 +945,14 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     insertIntoLayout(refGroupId, group.id, side);
     editors.activeGroupId = group.id;
     editors.pendingFocus = true;
-    collapseIfEmpty(fromGroupId);
+    if (!selfSplit) collapseIfEmpty(fromGroupId);
   }
 
-  /** 활성 탭을 오른쪽 새 그룹으로 분할 (Ctrl+\). diff 탭이면 대상 파일을 연다. */
-  async function splitActiveEditor(): Promise<void> {
-    const tab = activeTab();
-    if (!tab || tab.kind === 'terminal') return;
-    const ref = activeGroup();
-    const group: EditorGroup = { id: nextGroupId++, tabs: [], activeTabId: null };
-    editors.groups.splice(editors.groups.indexOf(ref) + 1, 0, group);
-    insertIntoLayout(ref.id, group.id, 'right');
-    if (tab.kind === 'folder') openFolderTab(tab.path, { groupId: group.id });
-    else await openFile(tab.path, { groupId: group.id });
+  /** 활성 그룹 오른쪽에 빈 그룹을 만들고 포커스 (팔레트 View: Split Editor). 탭 복제가 아니다 —
+   *  빈 그룹은 드롭·탐색기 열기의 대상이 된다 (editor-group-empty-lock, 2026-09-08) */
+  function splitGroup(): void {
+    const id = addGroupBeside(activeGroup().id, 'right');
+    if (id !== null) editors.activeGroupId = id;
   }
 
   function updateContent(path: string, content: string): void {
@@ -1179,9 +1204,13 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
   /** 스냅샷을 이 세션에 덮어쓴다 — 새 창의 빈 세션에 쓰는 것이 전제 (기존 탭은 버린다).
    *  monaco 모델은 doc 스냅샷에서 다시 만들어진다 (세션 전환과 같은 경로) */
   function restore(s: EditorsSnapshot): void {
-    // 터미널 탭은 걷어낸다 — 인스턴스 id 가 창마다 달라 adoptTerminals 가 새 탭으로 다시 연다
+    // 터미널 탭은 걷어낸다 — 인스턴스 id 가 창마다 달라 adoptTerminals 가 새 탭으로 다시 연다.
+    // 그 때문에 비게 된 그룹만 접는다 — 원래 빈 그룹(사용자가 만든 것)은 배치의 일부라 남긴다
+    const emptied: number[] = [];
     for (const g of s.groups) {
+      const n = g.tabs.length;
       g.tabs = g.tabs.filter((t) => t.kind !== 'terminal');
+      if (n > 0 && g.tabs.length === 0) emptied.push(g.id);
       if (g.activeTabId !== null && !g.tabs.some((t) => t.id === g.activeTabId)) g.activeTabId = g.tabs[0]?.id ?? null;
     }
     editors.groups = s.groups;
@@ -1191,7 +1220,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     editors.docs = new Map(s.docs);
     editors.orphaned.clear();
     editors.pendingFocus = true;
-    for (const g of [...editors.groups]) collapseIfEmpty(g.id);
+    for (const id of emptied) collapseIfEmpty(id);
   }
 
   /** 탭 하나를 다른 창으로 보내기 위해 뗀다 — 닫기 확인·최근 닫은 탭 이력을 거치지 않는다
@@ -1252,7 +1281,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     openFolderTab, openFolderTabSplit, navigateFolderTab, addGroupBeside, setFolderStyle, setFolderSort,
     openFileSplit, closeTab, confirmCloseSave, confirmCloseDiscard, confirmCloseCancel,
     reopenClosedEditor, moveTabToGroup, moveTabSplit,
-    splitActiveEditor, updateContent, setOrphaned, remapPaths, closePathTabs,
+    splitGroup, closeEmptyGroup, toggleGroupLock, updateContent, setOrphaned, remapPaths, closePathTabs,
     reloadDocFromDisk, hasDirtyDocs, saveActive, overwriteConflict, revertConflict, indentOf,
     snapshot, restore, takeTabForHandoff, acceptTab,
     openTerminalTab, closeTerminalTabs, setTerminalCloser, renameTerminalTab, focusTerminalTab,
@@ -1338,7 +1367,9 @@ export const moveTabToGroup = (fromGroupId: number, tabId: string, toGroupId: nu
   ctx().editors.moveTabToGroup(fromGroupId, tabId, toGroupId, index);
 export const moveTabSplit = (fromGroupId: number, tabId: string, refGroupId: number, side: SplitSide): void =>
   ctx().editors.moveTabSplit(fromGroupId, tabId, refGroupId, side);
-export const splitActiveEditor = (): Promise<void> => ctx().editors.splitActiveEditor();
+export const splitGroup = (): void => ctx().editors.splitGroup();
+export const closeEmptyGroup = (groupId: number): void => ctx().editors.closeEmptyGroup(groupId);
+export const toggleGroupLock = (groupId: number): void => ctx().editors.toggleGroupLock(groupId);
 export const updateContent = (path: string, content: string): void =>
   ctx().editors.updateContent(path, content);
 export const setOrphaned = (path: string, on: boolean): void => ctx().editors.setOrphaned(path, on);

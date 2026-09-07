@@ -1,6 +1,6 @@
 import { openQuickInput, showViewlet, toggleSideBar } from './workbench';
 import { openFolderDialog } from './host';
-import { closeTab, editors, reopenClosedEditor, saveActive, splitActiveEditor, activeGroup, activeTab, openHex, toggleHtmlPreview, isHtml, toggleWordWrap, stepEditorZoom, setEditorZoom } from './editors';
+import { closeTab, editors, reopenClosedEditor, saveActive, splitGroup, toggleGroupLock, activeGroup, activeTab, openHex, toggleHtmlPreview, isHtml, toggleWordWrap, stepEditorZoom, setEditorZoom } from './editors';
 import { createTerminal } from './terminal';
 import { refreshScm } from './scm';
 import { activeSessionEmpty, cycleSession, sessionsEnabled } from './sessions';
@@ -134,12 +134,18 @@ export function setupCommands(): void {
     run: () => void saveActive().then(refreshScm),
   }, 'ctrl+s');
 
+  // 빈 그룹 생성 — 탭 복제가 아니다. Ctrl+\ 키바인딩은 사용자 결정으로 없앴다 (editor-group-empty-lock, 2026-09-08)
   register({
     id: 'workbench.action.splitEditor',
     title: 'View: Split Editor',
-    keybinding: 'Ctrl+\\',
-    run: () => void splitActiveEditor(),
-  }, 'ctrl+\\');
+    run: () => splitGroup(),
+  });
+
+  register({
+    id: 'workbench.action.toggleEditorGroupLock',
+    title: 'View: Toggle Editor Group Lock',
+    run: () => toggleGroupLock(activeGroup().id),
+  });
 
   // WHY: 브라우저 탭에서는 Ctrl+W 를 페이지가 가로챌 수 없다 (VS Code web 도 동일한 제약).
   //      palette 라벨은 VS Code 와 맞추고, 실 사용은 탭의 × 버튼이 담당한다.

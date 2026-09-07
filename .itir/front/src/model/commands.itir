@@ -1,6 +1,6 @@
 import { openQuickInput, showViewlet, toggleSideBar } from './workbench'
 import { openFolderDialog } from './host'
-import { closeTab, editors, saveActive, splitActiveEditor, activeGroup, activeTab, openHex, toggleHtmlPreview, isHtml, toggleWordWrap, stepEditorZoom, setEditorZoom } from './editors'
+import { closeTab, editors, saveActive, splitGroup, toggleGroupLock, activeGroup, activeTab, openHex, toggleHtmlPreview, isHtml, toggleWordWrap, stepEditorZoom, setEditorZoom } from './editors'
 import { createTerminal } from './terminal'
 import { refreshScm } from './scm'
 import { activeSessionEmpty, cycleSession, sessionsEnabled } from './sessions'
