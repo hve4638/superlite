@@ -9,6 +9,8 @@ import { backendApiUrl } from './host';
 
 export interface VersionInfo {
   version: string;
+  /** 릴리스 채널 — 빈 문자열이 stable (release-channel) */
+  channel: string;
   commit: string;
   builtAt: string;
   wire: number;
@@ -40,10 +42,10 @@ export function loadVersion(): Promise<void> {
   return fetched;
 }
 
-/** 시작 페이지 하단 한 줄 — "0.1.0 (8700a11)" */
+/** 시작 페이지 하단 한 줄 — "0.1.0 (8700a11)", dev 채널은 "0.1.0 dev (8700a11)" */
 export function shortVersion(): string | null {
   const v = version.info;
-  return v ? `${v.version} (${v.commit})` : null;
+  return v ? `${v.version}${v.channel ? ` ${v.channel}` : ''} (${v.commit})` : null;
 }
 
 /** About 본문 — 다이얼로그 표시와 클립보드 복사가 같은 텍스트를 쓴다 */
@@ -52,6 +54,7 @@ export function aboutText(): string {
   if (!v) return version.error ? `Build info unavailable: ${version.error}` : 'Build info unavailable (no backend)';
   return [
     `Version: ${v.version}`,
+    `Channel: ${v.channel || 'stable'}`,
     `Commit: ${v.commit}`,
     `Built: ${v.builtAt}`,
     `Wire: ${v.wire}`,

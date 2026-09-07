@@ -314,7 +314,8 @@ async fn clean_handler(
     })
 }
 
-/// GET /version — 이 백엔드 빌드의 버전·커밋·빌드 시각·WIRE_VERSION·로컬 데몬 경로 (JSON).
+/// GET /version — 이 백엔드 빌드의 버전·채널(빈 문자열 = stable)·커밋·빌드 시각·WIRE_VERSION·
+/// 로컬 데몬 경로 (JSON).
 /// 프론트의 About·시작 페이지가 쓴다. 데몬 와이어(/ws) 밖 relay 자체 응답이라 WIRE_VERSION 은
 /// 불변이고, 웹·앱이 같은 경로를 탄다 (ticket release-versioning). 데몬 경로는 배치 규칙
 /// (daemon_bin_for)의 결과 — 부재면 그 오류 문자열을 그대로 보인다
@@ -330,6 +331,7 @@ async fn version_handler(
     cors(
         Json(json!({
             "version": superlite_common::VERSION,
+            "channel": superlite_common::CHANNEL,
             "commit": superlite_common::COMMIT,
             "builtAt": superlite_common::BUILT_AT,
             "wire": superlite_common::WIRE_VERSION,

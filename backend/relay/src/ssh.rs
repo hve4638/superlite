@@ -159,7 +159,8 @@ fn state_path() -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| home_dir().map(|h| h.join(".config")));
-    Some(base?.join("superlite").join("remote.json"))
+    // 채널별 분리 (release-channel 결정) — dev 는 superlite-dev/remote.json
+    Some(base?.join(superlite_common::SLUG).join("remote.json"))
 }
 
 fn load_state() -> RemoteState {
@@ -479,7 +480,7 @@ pub async fn ensure_remote_bin(
     let bin = remote_daemon_bin(info)?;
     let data = std::fs::read(&bin)
         .map_err(|e| format!("데몬 바이너리 읽기 실패 {}: {e}", bin.display()))?;
-    let dir = format!("$HOME/.cache/superlite/bin/{:016x}", fnv64(&data));
+    let dir = format!("$HOME/.cache/{}/bin/{:016x}", superlite_common::SLUG, fnv64(&data));
     let target = format!("{dir}/superlite-daemon");
     stage(tx, "helper", None);
     // 존재 검사와 업로드를 나눈다 — 한 번에 하면 이미 있을 때도 stdin 으로 바이너리를 다

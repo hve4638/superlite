@@ -1,4 +1,4 @@
-role: Tauri 데스크톱 껍데기 — front dist 를 자산으로 번들하고, relay serve 를 loopback 임의 포트 + 세션 토큰으로 in-process 기동, WS endpoint 를 webview 에 주입. 와이어 계약·daemon 분리 수명은 그대로 (Tauri IPC 전환은 비목표)
+role: Tauri 데스크톱 껍데기 — front dist 를 자산으로 번들하고, relay serve 를 loopback 임의 포트 + 세션 토큰으로 in-process 기동, WS endpoint 를 webview 에 주입. 와이어 계약·daemon 분리 수명은 그대로 (Tauri IPC 전환은 비목표). 릴리스 채널(release-channel): tauri.<channel>.conf.json overlay(productName·identifier·mainBinaryName)가 설치 폴더·제거 키·바로가기·state.json 위치·single-instance 뮤텍스·설치 시 실행 중 검사·창 제목을 채널별로 가른다 — build.sh --channel 이 common 의 SUPERLITE_CHANNEL 과 함께 준다
 
 import { serve } from '../../backend/relay/src'
 import { plain } from '../../backend/common/src'

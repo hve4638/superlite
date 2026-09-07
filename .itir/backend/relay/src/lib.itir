@@ -28,7 +28,7 @@ fn clean_handler() {
   role: POST /daemon/clean?host= — 문제 데몬 정리 (superlite-daemon --clean). host 없으면 clean_local, 있으면 ssh::clean_remote. 프론트가 '데몬 기동 실패' 뒤 사용자 승인을 받은 경우에만 부른다 — 자동 호출 없음 (사용자 결정 2026-09-04). 응답 본문은 --clean 의 stdout, 실패는 502 + 사유. 인증은 authed, CORS 는 /ssh/* 와 같다
 }
 fn version_handler() {
-  role: GET /version — 이 빌드의 version·commit·builtAt·wire(WIRE_VERSION)·daemonBin(로컬 데몬 배치 경로, 부재면 오류 문자열) JSON. 프론트 About·시작 페이지가 쓴다. 데몬 와이어 밖 relay 자체 응답이라 WIRE_VERSION 불변, 웹·앱 동일 경로 (release-versioning). 인증·CORS 는 /ssh/* 와 같다
+  role: GET /version — 이 빌드의 version·channel(빈 문자열 = stable)·commit·builtAt·wire(WIRE_VERSION)·daemonBin(로컬 데몬 배치 경로, 부재면 오류 문자열) JSON. 프론트 About·시작 페이지가 쓴다. 데몬 와이어 밖 relay 자체 응답이라 WIRE_VERSION 불변, 웹·앱 동일 경로 (release-versioning). 인증·CORS 는 /ssh/* 와 같다
 }
 fn clean_local() -> report {
   role: 로컬 데몬 바이너리(daemon_bin_path)를 --clean 으로 실행해 stdout 반환

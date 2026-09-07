@@ -59,11 +59,21 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const COMMIT: &str = env!("SUPERLITE_COMMIT");
 /// 빌드 시각 (UTC ISO-8601) — build.rs 가 굽는다
 pub const BUILT_AT: &str = env!("SUPERLITE_BUILT_AT");
+/// 릴리스 채널 — build.rs 가 `SUPERLITE_CHANNEL` 로 굽는다. 빈 문자열이 stable. dev·stable
+/// 설치본이 한 PC 에 공존하도록 이름이 고정된 자원을 채널별로 가르는 근거 (ticket
+/// release-channel). 앱 쪽 이름(설치 폴더·identifier·exe)은 app/tauri.<channel>.conf.json 이 같은
+/// 채널로 가른다 — build.sh --channel 이 둘을 함께 준다
+pub const CHANNEL: &str = env!("SUPERLITE_CHANNEL");
+/// 이름이 고정된 자원의 이름 줄기 — stable `superlite`, 그 외 `superlite-<channel>`. IPC 폴더·
+/// 파이프·캐시·설정 폴더(relay remote.json)·원격 헬퍼 폴더가 전부 이걸 쓴다
+pub const SLUG: &str = env!("SUPERLITE_SLUG");
 
 /// `--version` 한 줄 — 데몬·백엔드가 같은 표기를 쓴다 (헬퍼 업로드 로그·버그 리포트용).
-/// 예: `superlite-daemon 0.1.0 (8700a11f2, built 2026-09-06T05:00:00Z, wire 13)`
+/// 예: `superlite-daemon 0.1.0 (8700a11f2, built 2026-09-06T05:00:00Z, wire 13)`,
+/// dev 채널은 `superlite-daemon 0.1.0 dev (…)`
 pub fn version_line(bin: &str) -> String {
-    format!("{bin} {VERSION} ({COMMIT}, built {BUILT_AT}, wire {WIRE_VERSION})")
+    let ch = if CHANNEL.is_empty() { String::new() } else { format!(" {CHANNEL}") };
+    format!("{bin} {VERSION}{ch} ({COMMIT}, built {BUILT_AT}, wire {WIRE_VERSION})")
 }
 
 /// 0700 전용 디렉터리를 만들어 그 안에 소켓을 둔다.
@@ -74,7 +84,7 @@ fn ipc_path() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|_| std::env::temp_dir());
     let user = std::env::var("USER").unwrap_or_else(|_| "default".into());
-    let dir = base.join(format!("superlite-{user}"));
+    let dir = base.join(format!("{SLUG}-{user}"));
     let mut b = std::fs::DirBuilder::new();
     b.mode(0o700);
     let _ = b.create(&dir); // 이미 있으면 무시 — 아래 권한 검사가 방어한다
@@ -93,7 +103,7 @@ fn ipc_path() -> PathBuf {
 #[cfg(windows)]
 fn ipc_path() -> PathBuf {
     let user = std::env::var("USERNAME").unwrap_or_else(|_| "default".into());
-    PathBuf::from(format!(r"\\.\pipe\superlite-{user}-{WIRE_VERSION}"))
+    PathBuf::from(format!(r"\\.\pipe\{SLUG}-{user}-{WIRE_VERSION}"))
 }
 
 /// 데몬 단독 보장용 락 파일 경로 — IPC 주소에서 파생해 SUPERLITE_SOCK 우회가 락에도
@@ -116,14 +126,14 @@ pub fn open_lock_file(path: &Path) -> std::io::Result<std::fs::File> {
     std::fs::OpenOptions::new().write(true).create(true).truncate(false).open(path)
 }
 
-/// 이 머신의 superlite 캐시 디렉터리 `$HOME/.cache/superlite` — 헬퍼 배치(bin/)와
-/// 데몬 로그가 산다. 원격 셸이 해석하는 같은 경로 문자열은 relay ssh.rs 가 따로 든다
+/// 이 머신의 superlite 캐시 디렉터리 `$HOME/.cache/<SLUG>` (stable 은 superlite) — 헬퍼
+/// 배치(bin/)와 데몬 로그가 산다. 원격 셸이 해석하는 같은 경로 문자열은 relay ssh.rs 가 따로 든다
 pub fn cache_dir() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
-    Some(PathBuf::from(home).join(".cache").join("superlite"))
+    Some(PathBuf::from(home).join(".cache").join(SLUG))
 }
 
-/// 데몬 로그 파일 `$HOME/.cache/superlite/daemon.log` (append) — 데몬을 띄우는 쪽(relay
+/// 데몬 로그 파일 `$HOME/.cache/<SLUG>/daemon.log` (append) — 데몬을 띄우는 쪽(relay
 /// spawn_daemon, 원격 헬퍼 spawn_self_daemon)이 stderr 로 물린다. 실패면 None (호출측이 null 로)
 pub fn daemon_log_file() -> Option<std::fs::File> {
     let dir = cache_dir()?;

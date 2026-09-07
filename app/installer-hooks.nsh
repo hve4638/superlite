@@ -16,8 +16,11 @@
 ;    아래에 나온다 (클래식 메뉴 — 새 메뉴 등록은 패키징·서명이 필요해 범위 밖).
 
 !define SL_DAEMON "$INSTDIR\daemon\windows-x86_64.exe"
-!define SL_MENU "Software\Classes\Directory\shell\Superlite"
-!define SL_MENU_BG "Software\Classes\Directory\Background\shell\Superlite"
+; 키·문구·exe 는 PRODUCTNAME·MAINBINARYNAME — 채널 overlay(tauri.dev.conf.json)로 "Superlite-Dev"·
+; superlite-dev.exe 가 되면 dev·stable 메뉴가 나란히 선다 (ticket release-channel)
+!define SL_MENU "Software\Classes\Directory\shell\${PRODUCTNAME}"
+!define SL_MENU_BG "Software\Classes\Directory\Background\shell\${PRODUCTNAME}"
+!define SL_EXE "$INSTDIR\${MAINBINARYNAME}.exe"
 
 !macro NSIS_HOOK_PREINSTALL
   ; 템플릿의 "앱 실행 중 → 종료할까요?" 확인은 이 훅 *뒤*에 온다. 거기서 취소하면 Abort 로
@@ -33,12 +36,12 @@
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
-  WriteRegStr HKCU "${SL_MENU}" "" "Superlite로 열기"
-  WriteRegStr HKCU "${SL_MENU}" "Icon" "$\"$INSTDIR\superlite.exe$\""
-  WriteRegStr HKCU "${SL_MENU}\command" "" "$\"$INSTDIR\superlite.exe$\" $\"%V$\""
-  WriteRegStr HKCU "${SL_MENU_BG}" "" "Superlite로 열기"
-  WriteRegStr HKCU "${SL_MENU_BG}" "Icon" "$\"$INSTDIR\superlite.exe$\""
-  WriteRegStr HKCU "${SL_MENU_BG}\command" "" "$\"$INSTDIR\superlite.exe$\" $\"%V$\""
+  WriteRegStr HKCU "${SL_MENU}" "" "${PRODUCTNAME}로 열기"
+  WriteRegStr HKCU "${SL_MENU}" "Icon" "$\"${SL_EXE}$\""
+  WriteRegStr HKCU "${SL_MENU}\command" "" "$\"${SL_EXE}$\" $\"%V$\""
+  WriteRegStr HKCU "${SL_MENU_BG}" "" "${PRODUCTNAME}로 열기"
+  WriteRegStr HKCU "${SL_MENU_BG}" "Icon" "$\"${SL_EXE}$\""
+  WriteRegStr HKCU "${SL_MENU_BG}\command" "" "$\"${SL_EXE}$\" $\"%V$\""
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL

@@ -374,7 +374,8 @@ fn build_window(
     //      흰 플래시는 창 배경색 + index.html 인라인 배경으로 막는다.
     let boot = serde_json::to_string(&infos_for(state, label)).expect("세션 목록 직렬화는 실패할 수 없다");
     let mut b = tauri::WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::App("index.html".into()))
-        .title("Superlite")
+        // 창 제목은 productName — 채널 overlay(tauri.dev.conf.json)가 "Superlite-Dev" 로 가른다
+        .title(app.package_info().name.clone())
         .inner_size(1200.0, 800.0)
         // OS 창 헤더 없음 — 창 제어(닫기·최소화·최대화·드래그)는 front TitleBar 가 가진다
         .decorations(false)

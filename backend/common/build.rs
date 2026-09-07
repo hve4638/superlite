@@ -36,6 +36,12 @@ fn main() {
         }
     }
     println!("cargo:rustc-env=SUPERLITE_COMMIT={commit}");
+    // 릴리스 채널 — build.sh --channel 이 준다. 미지정 = stable = 접미 없음 (release-channel)
+    println!("cargo:rerun-if-env-changed=SUPERLITE_CHANNEL");
+    let channel = std::env::var("SUPERLITE_CHANNEL").unwrap_or_default();
+    println!("cargo:rustc-env=SUPERLITE_CHANNEL={channel}");
+    let slug = if channel.is_empty() { "superlite".into() } else { format!("superlite-{channel}") };
+    println!("cargo:rustc-env=SUPERLITE_SLUG={slug}");
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
