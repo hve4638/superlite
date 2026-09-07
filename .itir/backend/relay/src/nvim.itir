@@ -1,0 +1,17 @@
+import { cache_dir } from '../../common/src'
+
+role: /nvim — 임베드 Neovim 중계 (ticket editor-vim-mode). 편집기 vim 모드의 실체는 진짜 Neovim: 고정 버전(NVIM_VERSION) nvim 을 `--embed --headless --clean -n` 으로 relay 옆(사용자 PC)에서 띄우고 stdin/stdout(msgpack-RPC) 을 WebSocket 바이너리 프레임으로 그대로 잇는다. relay 는 RPC 를 해석하지 않는다 — /ws 가 데몬 와이어를 불투명하게 중계하는 자세와 같고, 데몬 와이어 밖이라 WIRE_VERSION 불변. 해석·버퍼 동기화는 프론트(model/nvim.ts·ui/editor/vim.ts). nvim 이 원격 호스트가 아니라 여기서 도는 이유: normal 모드 키 하나가 RPC 왕복 하나라 ssh 너머에 두면 지연이 곧 타이핑 지연이고, 편집 버퍼는 Monaco 모델의 복제본이라 파일 위치와 무관하다. 사용자 설정·플러그인은 읽지 않는다(--clean: headless 임베드에서 TUI 전제 플러그인은 창을 만들거나 디스크를 직접 쓴다), PATH 의 nvim 도 보지 않는다
+
+export val NVIM_VERSION
+fn nvim_bin() -> path? {
+  role: nvim 실행 파일 위치 규칙(데몬 daemon_bin_for 와 같은 자세): 1. SUPERLITE_NVIM_BIN(개발·check 우회) 2. 실행 파일 옆 nvim/<os>-<arch>/bin/nvim[.exe] — 앱 설치본 동봉(build.sh 가 릴리스 zip 을 sha256 검증 후 target/nvim/windows-x86_64 에 풀어 tauri 리소스로) 3. $HOME/.cache/<SLUG>/nvim/<버전>/bin/nvim — 웹 모드(relay bin)가 내려받는 자리
+}
+fn ensure_nvim() -> path {
+  role: 없으면 linux x86_64 에 한해 캐시 폴더에 내려받는다 — curl(고정 URL) → sha256sum 대조 → tar --strip-components=1, 임시 폴더에서 완성 후 rename. 다운로드는 tokio Mutex 로 직렬화(창 둘이 동시에 켜도 한 번). 그 밖의 OS 는 동봉본이 없으면 사유와 함께 실패
+}
+fn nvim_handler() {
+  role: GET /nvim (WebSocket) — 인증은 /ws 와 같다(authed). 연결마다 nvim 프로세스 하나(프론트는 창마다 하나만 연다). 확보·실행 실패는 close 4503 + 사유(close_with) — 프론트는 vim 모드를 끈 상태로 돌아가며 알림
+}
+fn pipe(ws) {
+  role: nvim → 프론트는 stdout 을 읽히는 대로 Binary 프레임(메시지 경계는 프론트 디코더가 스트림으로 찾는다), 프론트 → nvim 은 Binary 를 stdin 으로. 방향별 태스크, 한쪽이 끝나면 반대쪽 abort 후 child kill(kill_on_drop). Windows 는 CREATE_NO_WINDOW. stderr 는 relay 것을 상속
+}

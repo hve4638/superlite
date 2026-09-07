@@ -1,0 +1,35 @@
+import { notify } from './notifications'
+import { activeGroup, activeTab, closeTab, saveActive } from './editors'
+import { refreshScm } from './scm'
+
+role: 임베드 Neovim 클라이언트 — 편집기 vim 모드의 실체 (ticket editor-vim-mode). relay 의 /nvim WebSocket(고정 버전 nvim --embed --headless --clean 의 stdio 를 바이트 그대로 잇는다) 위에서 msgpack-RPC(@msgpack/msgpack — 요청·응답·알림·nvim 발 요청, 프레임이 메시지 중간에서 끊겨도 스트림 디코드) 를 말하고, UI 를 붙여(nvim_ui_attach, ext_cmdline·ext_messages) 모드·명령줄·메시지·showcmd 를 반응형 vimMode 로 든다. 버퍼 ↔ Monaco 동기화와 편집기 키 전달은 ui/editor/vim.ts 몫 — 이 모듈은 편집기를 모른다. 페이지(창)당 nvim 프로세스 하나. 켜기는 사용자 설정(localStorage superlite.vimMode, 기본 꺼짐) — 켜면 status starting→ready, 실패(close 4503 바이너리 없음·프로세스 종료)는 알림을 띄우고 설정을 끈 상태로 되돌린다. 초기화 Lua(INIT_LUA)는 옵션·클립보드 provider('+' '*' → 프론트 navigator.clipboard, rpcrequest sl_clip_get / rpcnotify sl_clip_set)·ZZ/ZQ 알림(sl_ex)·헬퍼(sl_open: acwrite 버퍼 + 초기 로드는 undolevels 로 undo 밖, sl_set_lines: undojoin 으로 insert 한 번 = undo 한 단위, sl_focus: 버퍼가 바뀔 때만 커서 전달, sl_select: Monaco 선택 → visual, sl_state: mode·커서·visual 시작 조회)
+
+export val vimMode
+export type CmdlineState
+export fn vimModeLabel(mode) -> label {
+  role: mode() 문자열 → NORMAL/INSERT/VISUAL/V-LINE/V-BLOCK/REPLACE/COMMAND/O-PENDING
+}
+export fn configureNvim(url?) {
+  role: 조립 지점(host.ts)이 /nvim 주소를 준다 — /ws 와 같은 오리진·토큰 (앱은 주입 endpoint 의 /ws 를 /nvim 으로). null 이면 이 환경(mock)엔 vim 모드가 없다. 설정이 켜져 있으면 바로 접속
+}
+export fn vimAvailable() -> bool
+export fn nvim() -> client? {
+  role: 현재 클라이언트 — ready 일 때만
+}
+export fn toggleVimMode()
+export fn setVimMode(on)
+export fn toNvimKey(e) -> key? {
+  role: DOM 키 → nvim 표기(<Esc>·<C-x>·<S-Up>·문자, '<' 는 <lt>, Ctrl+Shift+z 는 <C-Z> — e.key 가 소문자로 와도 Shift 를 대문자로). 순수 modifier·IME 조합 중(Process)·미확정 키는 null. 편집기 keydown 과 상태바 명령줄 입력창이 공유
+}
+export fn inputText(text) {
+  role: 조합 완료 텍스트(IME)·붙여넣기 → nvim_input
+}
+export fn runEx(cmd) {
+  role: :w :q :wq :x (+!) 류를 우리 저장(saveActive→refreshScm)·탭 닫기(closeTab, ! 는 force) 경로로 — nvim 은 acwrite 버퍼라 디스크를 안 쓰고, :q 는 마지막 창이라 nvim 자체가 끝나므로 nvim 에 넘기지 않는다
+}
+export fn cmdlineKey(e) -> handled {
+  role: 명령줄이 열린 동안의 키 — 가로채는 Enter 는 nvim 에 <Esc> 를 보내 명령줄을 닫고 runEx, 나머지는 nvim_input
+}
+export class NvimClient {
+  role: WebSocket + msgpack-RPC. request/notify/input, onNotification(nvim_buf_lines_event·rpcnotify), onRequest(rpcrequest 응답), onRedraw(flush 등 — 모드·명령줄·메시지는 이미 vimMode 에 반영된 뒤). redraw 의 msg_show return_prompt(히트-엔터)는 화면이 없으니 <CR> 로 바로 넘긴다. Buffer/Window/Tabpage ext 0/1/2 는 숫자로. init: nvim_get_api_info(채널) → INIT_LUA → nvim_ui_attach
+}

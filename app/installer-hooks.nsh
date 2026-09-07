@@ -50,5 +50,7 @@
   ; 템플릿은 자기가 설치한 파일만 지운다 — 비켜 둔 데몬과 빈 폴더는 여기서
   Delete "${SL_DAEMON}.old-*"
   RMDir "$INSTDIR\daemon"
+  ; 동봉 nvim(편집기 vim 모드) — 파일은 템플릿이 지우고, 남는 빈 폴더 트리만
+  RMDir /r "$INSTDIR\nvim"
   RMDir "$INSTDIR"
 !macroend

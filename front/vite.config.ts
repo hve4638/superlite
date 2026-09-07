@@ -26,6 +26,11 @@ export default defineConfig({
         target: `http://${process.env.SUPERLITE_HTTP ?? '127.0.0.1:8795'}`,
         ws: true,
       },
+      // 임베드 nvim (편집기 vim 모드) — relay 자체 엔드포인트, 같은 백엔드
+      '/nvim': {
+        target: `http://${process.env.SUPERLITE_HTTP ?? '127.0.0.1:8795'}`,
+        ws: true,
+      },
     },
   },
 });

@@ -6,6 +6,7 @@ import { scm } from '../../model/scm';
 import { openQuickInput } from '../../model/workbench';
 import { EDITOR_OPTIONS, modelFor, monaco, originalModelFor } from './monaco';
 import { EDITOR_FONT_SIZE } from '../../theme/fonts';
+import { bindVim } from './vim';
 
 const props = defineProps<{ group: EditorGroup }>();
 
@@ -18,6 +19,8 @@ const mode = computed(() => (active.value?.kind === 'diff' && !active.value.dele
 
 let codeEditor: monaco.editor.IStandaloneCodeEditor | null = null;
 let diffEditor: monaco.editor.IStandaloneDiffEditor | null = null;
+// vim 모드(ticket editor-vim-mode) — 코드 편집기만, diff 는 대상 밖. 해제는 언마운트에서
+let unbindVim: (() => void) | null = null;
 
 // 전 에디터 공통 뷰 옵션 — 자동 줄바꿈(Alt+Z)과 편집기 줌(상태바 배율 — 기본 14px 에 퍼센트 적용,
 // lineHeight 는 미지정이라 monaco 가 글꼴에 맞춰 다시 계산한다)
@@ -41,6 +44,7 @@ function ensureCodeEditor(): monaco.editor.IStandaloneCodeEditor {
     });
     // WHY: monaco 는 F1 을 자체 커맨드 팔레트에 바인딩한다 — 워크벤치 팔레트로 대체
     codeEditor.addCommand(monaco.KeyCode.F1, () => openQuickInput('commands'));
+    unbindVim = bindVim(() => codeEditor);
   }
   return codeEditor;
 }
@@ -162,6 +166,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   // WHY: 모델은 모듈 캐시(다른 그룹과 공유)라 남기고, 에디터 인스턴스만 정리한다
+  unbindVim?.();
   codeEditor?.dispose();
   diffEditor?.dispose();
 });

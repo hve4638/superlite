@@ -29,6 +29,9 @@ type DaemonStream = tokio::net::UnixStream;
 #[cfg(windows)]
 type DaemonStream = tokio::net::windows::named_pipe::NamedPipeClient;
 
+// 임베드 Neovim 중계 (/nvim) — 데몬 와이어 밖 relay 자체 자원 (ticket editor-vim-mode)
+mod nvim;
+
 /// 접속 대상 — 세션 root 문자열이 `ssh://` 스킴이면 원격이다. 레지스트리·지속 저장은
 /// PathBuf 를 불투명하게 나르고, 해석은 접속 직전 이 한 곳에서만 한다.
 enum Target {
@@ -84,13 +87,15 @@ pub async fn serve(listener: TcpListener, roots: SessionRoots, token: Option<Str
     // 상주 제어 연결 — 데몬 기동 보장 + 백엔드 생존 신호. 이게 있는 한 데몬은 안 죽는다.
     tokio::spawn(control_loop());
 
-    let mut app = Router::new()
+    let app = Router::new()
         .route("/ws", get(ws_handler))
         .route("/ssh/hosts", get(hosts_handler))
         .route("/ssh/state", axum::routing::post(state_handler))
         .route("/daemon/clean", axum::routing::post(clean_handler))
         .route("/tmux-conf", get(tmux_conf_get).put(tmux_conf_put))
         .route("/version", get(version_handler));
+    // /nvim 은 독립 줄로 — 위 라우터 체인을 고치는 다른 브랜치와의 병합 충돌을 피한다
+    let mut app = app.route("/nvim", get(nvim::nvim_handler));
     if let Some(dist) = &dist {
         app = app.fallback_service(ServeDir::new(dist));
     }

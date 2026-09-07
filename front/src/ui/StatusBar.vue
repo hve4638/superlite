@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { EDITOR_ZOOM_MAX, EDITOR_ZOOM_MIN, EDITOR_ZOOM_STEP, activeTab, base64Bytes, editorView, editors, indentOf, languageLabel, setEditorZoom, toggleViewerAutoReload, viewerAutoReload } from '../model/editors';
 import { activeRepo } from '../model/scm';
 import { transfer } from '../model/transfer';
 import { connection, stageLabel, failureLabel } from '../model/watch';
+import { cmdlineKey, inputText, toggleVimMode, vimMode, vimModeLabel } from '../model/nvim';
 import { setTerminalZoom, terminalView } from '../model/terminal';
 
 // diff 탭도 path 를 가지므로 kind 무관하게 파일 정보를 표시한다 (VS Code 동일)
@@ -76,6 +77,29 @@ watch(zoomOpen, (open) => {
 });
 onBeforeUnmount(() => (zoomOpen.value = false));
 
+// vim 명령줄(: / ?) 이 열리면 상태바의 보이지 않는 입력창으로 포커스를 옮긴다 — normal 모드의
+// 편집기는 readOnly 라 IME 조합이 시작되지 않아 한글 검색을 칠 수 없다. 이 입력창은 IME 대상일
+// 뿐 값은 쓰지 않는다: 일반 키는 keydown 에서 nvim 으로, 조합 텍스트는 compositionend 에서
+const vimInput = ref<HTMLInputElement | null>(null);
+watch(() => vimMode.cmdline !== null, (open) => {
+  if (open) void nextTick(() => vimInput.value?.focus());
+});
+function onVimInputKey(e: KeyboardEvent): void {
+  if (e.isComposing) return;
+  if (cmdlineKey(e)) e.preventDefault();
+}
+function onVimCompose(e: CompositionEvent): void {
+  if (e.data) inputText(e.data);
+  (e.target as HTMLInputElement).value = '';
+}
+// 조합 없이 들어온 텍스트(붙여넣기·insertText) — 조합 중(isComposing)은 compositionend 가 보낸다
+function onVimInput(e: Event): void {
+  const el = e.target as HTMLInputElement;
+  if ((e as InputEvent).isComposing || !el.value) return;
+  inputText(el.value);
+  el.value = '';
+}
+
 /** 전송 진행 라벨 — "Downloading x 42%" (총량을 아직 모르면 퍼센트 없이) */
 const transferLabel = computed(() => {
   const t = transfer.active;
@@ -115,6 +139,18 @@ function fmtSize(bytes: number): string {
       <div v-if="branchLabel" class="statusbar-item" :title="`${repo!.branch} (Git)`">
         <span class="codicon codicon-source-control" />
         <span>{{ branchLabel }}</span>
+      </div>
+      <!-- vim 모드(임베드 nvim, ticket editor-vim-mode) — 켜져 있을 때만. 모드 + 명령줄(: / ?) + 입력 중 키 + 메시지.
+           클릭 = 끄기 (켜기는 팔레트 'View: Toggle Vim Mode'). starting 은 접속·초기화 중 -->
+      <div v-if="vimMode.enabled" class="statusbar-item vim" title="Vim mode — click to turn off" @click="toggleVimMode">
+        <span v-if="vimMode.status !== 'ready'" class="codicon codicon-loading codicon-modifier-spin" />
+        <span v-else-if="vimMode.cmdline" class="vim-cmdline" @click.stop>
+          {{ vimMode.cmdline.prompt }}{{ vimMode.cmdline.firstc }}{{ vimMode.cmdline.content }}
+          <input ref="vimInput" class="vim-cmdline-input" @keydown="onVimInputKey" @compositionend="onVimCompose" @input="onVimInput" @click.stop />
+        </span>
+        <span v-else>-- {{ vimModeLabel(vimMode.mode) }} --</span>
+        <span v-if="vimMode.showcmd" class="vim-showcmd">{{ vimMode.showcmd }}</span>
+        <span v-if="vimMode.message && !vimMode.cmdline" class="vim-message">{{ vimMode.message }}</span>
       </div>
       <div class="statusbar-item" title="No Problems">
         <span class="codicon codicon-error" />
@@ -285,6 +321,29 @@ function fmtSize(bytes: number): string {
 }
 .zoom-popover input[type='range']:focus {
   outline: none;
+}
+.statusbar-item.vim {
+  gap: 8px;
+}
+.statusbar-item.vim .vim-cmdline {
+  font-family: var(--vscode-editor-font-family, monospace);
+}
+.statusbar-item.vim .vim-cmdline-input {
+  width: 1px;
+  border: none;
+  outline: none;
+  padding: 0;
+  background: transparent;
+  color: transparent;
+  caret-color: transparent;
+}
+.statusbar-item.vim .vim-showcmd {
+  opacity: 0.7;
+}
+.statusbar-item.vim .vim-message {
+  max-width: 40vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .statusbar-item.offline {
   background: var(--vscode-statusBarItem-offlineBackground, #6c1717);

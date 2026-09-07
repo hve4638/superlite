@@ -6,6 +6,7 @@ import { refreshScm } from './scm';
 import { activeSessionEmpty, cycleSession, sessionsEnabled } from './sessions';
 import { inApp, zoomWindow } from './window';
 import { showAbout } from './version';
+import { toggleVimMode, vimAvailable } from './nvim';
 
 export interface Command {
   id: string;
@@ -287,6 +288,15 @@ export function setupCommands(): void {
     keybinding: 'Ctrl+0',
     run: () => setEditorZoom(100),
   }, 'ctrl+0');
+
+  // 편집기 vim 모드 (임베드 nvim) — 상태바 항목 클릭과 같은 토글. mock 은 relay 가 없어 미등록
+  if (vimAvailable()) {
+    register({
+      id: 'vim.toggle',
+      title: 'View: Toggle Vim Mode',
+      run: toggleVimMode,
+    });
+  }
 
   register({
     id: 'workbench.action.showAboutDialog',

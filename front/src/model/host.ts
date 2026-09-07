@@ -5,6 +5,7 @@ import type { ThinBackend } from '../backend/types';
 import { ctx, viewOf } from './ctx';
 import { daemonClean } from './daemon';
 import { errText, notify } from './notifications';
+import { configureNvim } from './nvim';
 import type { SessionCtx } from './session';
 import { tauri } from './tauri';
 import {
@@ -64,17 +65,21 @@ if (injected) {
   const appBackendOf = (t: { id: string; root: string | null }): ThinBackend =>
     t.root === null ? new EmptyBackend() : new WsBackend(injected, t.id);
   configureSessions({ kind: 'app', backendFor: appBackendOf, onRequest: handleRequest });
+  // 임베드 nvim (편집기 vim 모드) — relay 의 /nvim, /ws 와 같은 주소·토큰
+  configureNvim(injected.replace(/\/ws(\?|$)/, '/nvim$1'));
   // 부팅 세션들 — native 가 initialization_script 로 목록을 주입한다 (복원이면 여럿).
   // 마지막 탭이 활성이 된다
   for (const t of injectedSessions ?? []) bootSession(t, appBackendOf(t));
 } else if (webBackend) {
   configureSessions({ kind: 'web', backendFor: backendOf, onRequest: handleRequest });
+  configureNvim(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/nvim${tkn !== null ? `?tkn=${tkn}` : ''}`);
   const folder = params.get('folder') ?? '';
   const id = genSessionId();
   const name = folder.split('/').filter((s) => s !== '').pop() ?? '';
   bootSession({ id, name, root: folder }, new WsBackend(webWsUrl(folder), id));
 } else {
   configureSessions({ kind: 'mock', backendFor: () => new MockBackend() });
+  configureNvim(null); // mock 은 relay 가 없다 — vim 모드 없음
   bootSession({ id: 'mock', name: '', root: '' }, new MockBackend());
 }
 
