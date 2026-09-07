@@ -31,18 +31,32 @@ import {
 } from '../model/sessions';
 import { pointerOutside } from './dndUtil';
 
-// 같은 이름(루트 basename)의 세션이 여럿이면 부모 디렉토리 힌트로 구분한다 (에디터 탭과 같은 규칙)
-const descriptions = computed(() => {
+// 같은 이름(루트 basename)의 세션이 한 창에 여럿이면, rename 된 적 없는 탭들의 라벨을 전체 경로로
+// 바꿔 구분한다 (2026-09-07 사용자 결정). 세그먼트가 많으면 가운데를 줄인다 (/a/.../c/d). 중복이
+// 풀리면 basename 으로 돌아온다 — 라벨은 저장값이 아니라 계산값. rename 된 탭은 중복이어도 그대로
+const labels = computed(() => {
   const byName = new Map<string, SessionTab[]>();
-  for (const t of sessions.list) byName.set(t.name, [...(byName.get(t.name) ?? []), t]);
+  for (const t of sessions.list) byName.set(sessionLabel(t), [...(byName.get(sessionLabel(t)) ?? []), t]);
   const out = new Map<string, string>();
   for (const tabs of byName.values()) {
     if (tabs.length < 2) continue;
-    // 빈 세션(root null)은 경로 힌트가 없다 — 같은 라벨의 빈 탭 여럿은 구분 없이 수용
-    for (const t of tabs) if (t.root !== null) out.set(t.id, parentHint(t.root));
+    // 빈 세션(root null)은 경로가 없다 — 같은 라벨의 빈 탭 여럿은 구분 없이 수용
+    for (const t of tabs) if (t.root !== null && !t.renamed) out.set(t.id, withHost(abbrevRoot(t.root), t.root));
   }
   return out;
 });
+
+/** 전체 경로 라벨용 축약 — 세그먼트 4개 초과면 앞 1개·뒤 2개만 (/a/.../c/d). root 는 native 경로라
+ *  구분자가 OS 마다 다르고, 원격은 ssh://host 접두를 뗀 경로 */
+const ABBREV_MAX_SEGS = 4;
+function abbrevRoot(root: string): string {
+  const path = root.replace(/^ssh:\/\/[^/]+/, '');
+  const sep = path.includes('\\') ? '\\' : '/';
+  const segs = path.split(sep).filter((s) => s !== '');
+  const lead = path.startsWith(sep) ? sep : '';
+  if (segs.length <= ABBREV_MAX_SEGS) return lead + segs.join(sep);
+  return lead + [segs[0], '...', segs[segs.length - 2], segs[segs.length - 1]].join(sep);
+}
 
 /** 탭 라벨 — 이름은 워크스페이스 정보가 오면 채워진다: 그 전엔 빈 세션만 Welcome, 로드 중인
  *  세션은 공백. 원격 빈 세션(경로 없는 ssh://host)은 이름과 무관하게 "Welcome [host]" */
@@ -51,12 +65,6 @@ function sessionLabel(tab: SessionTab): string {
   return tab.name || (tab.root === null ? 'Welcome' : '…');
 }
 
-/** 루트의 부모 디렉토리명 — root 는 native 경로라 구분자가 OS 마다 다르다 */
-function parentHint(root: string): string {
-  const sep = root.includes('\\') ? '\\' : '/';
-  const segs = root.split(sep).filter((s) => s !== '');
-  return segs.length >= 2 ? segs[segs.length - 2] : sep;
-}
 
 /** 드롭다운의 'Open Folder...' — 경로 입력 퀵인풋 (앱·웹 공통. OS 다이얼로그는
  *  퀵인풋에서 Ctrl+O 한 번 더). + 자체는 빈 탭을 만든다 — 폴더 열기는 시작 페이지 또는 이 드롭다운에서 */
@@ -237,10 +245,7 @@ function commitRename(): void {
           <template v-else>
             <!-- 빈 세션(이름 없음)의 표시 라벨 — 시작 페이지 탭임을 나타낸다 -->
             <!-- 이름은 워크스페이스 정보가 오면 채워진다 — 그 전엔 빈 세션만 Welcome, 로드 중인 세션은 공백 -->
-            <span class="session-name">{{ sessionLabel(tab) }}</span>
-            <span v-if="descriptions.get(tab.id)" class="session-description">{{
-              descriptions.get(tab.id)
-            }}</span>
+            <span class="session-name">{{ labels.get(tab.id) ?? sessionLabel(tab) }}</span>
           </template>
           <!-- 로딩 스피너 — 초기 로드(ctx.init) 중, X 바로 왼쪽. 예비 파이프 접속은 상태바 단계가
                안 보이므로 로드 완료의 유일한 시각 신호다 -->
@@ -359,10 +364,6 @@ function commitRename(): void {
   background: var(--vscode-tab-activeBackground);
   color: var(--vscode-titleBar-activeForeground);
   box-shadow: inset 0 2px 0 var(--vscode-tab-activeBorderTop);
-}
-.session-description {
-  font-size: 10px;
-  opacity: 0.7;
 }
 /* 후행 셀렉터 — codicon.css 의 (0,2,0) 규칙이 display 를 덮는다 (창 제어 버튼과 같은 사유) */
 .session-tab .session-close {

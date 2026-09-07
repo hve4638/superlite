@@ -3,4 +3,4 @@ import { notifications, dismissNotification, pauseNotification, resumeNotificati
 import { fileIcon } from '../../theme/fileicons'
 import { version, aboutText, closeAbout } from '../../model/version'
 
-role: 재사용 위젯 — 파일 아이콘, 사시(분할 드래그), 저장 충돌 토스트, 알림 토스트, 인라인 이름 입력, 확인 다이얼로그, About 다이얼로그(Help: About — 본문은 model/version 의 aboutText 하나로 표시=복사, Copy 는 클립보드, OK·Enter·Escape·배경 클릭은 closeAbout, Workbench 가 version.aboutOpen 으로 띄운다)
+role: 재사용 위젯 — 파일 아이콘, 사시(분할 드래그), 진행선(ProgressBar — VS Code progressbar.css infinite 의 2px 막대, 부모(position: relative 본문)의 top -2px 에 절대 배치돼 제목 영역 아래 2px 에 겹친다. 표시·숨김은 부모 v-if), 저장 충돌 토스트, 알림 토스트, 인라인 이름 입력, 확인 다이얼로그, About 다이얼로그(Help: About — 본문은 model/version 의 aboutText 하나로 표시=복사, Copy 는 클립보드, OK·Enter·Escape·배경 클릭은 closeAbout, Workbench 가 version.aboutOpen 으로 띄운다)

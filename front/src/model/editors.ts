@@ -294,7 +294,32 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     /** 에디터 포커스 요청 — MonacoHost 가 소비. 트리 단일 클릭(preview)은 세우지 않아
      *  포커스가 트리에 남는다 (VS Code 동일 — Delete 가 파일 삭제로 이어져야 한다) */
     pendingFocus: false,
+    /** 로드가 800ms 를 넘긴 탭 id — 그룹 본문 상단에 진행선이 뜬다 (VS Code editorOperation 의
+     *  800ms 지연 progress). 파일 탭은 readFile, hex 탭은 stat·청크 읽기가 대상. 창 이동
+     *  스냅샷에는 싣지 않는다 (진행 중 요청은 창을 따라가지 않는다) */
+    slowTabs: new Set<string>(),
   });
+
+  /** 탭 id 별 진행 중 로드 수 — 마지막 로드가 끝나야 slowTabs 에서 내린다 (hex 청크는 겹친다) */
+  const loadCount = new Map<string, number>();
+
+  /** 탭의 로드를 지켜본다 — 800ms 를 넘기면 slowTabs 에 올리고, 끝나면(성공·실패 모두) 내린다 */
+  async function trackLoad<T>(tabId: string, p: Promise<T>): Promise<T> {
+    loadCount.set(tabId, (loadCount.get(tabId) ?? 0) + 1);
+    const timer = setTimeout(() => editors.slowTabs.add(tabId), 800);
+    try {
+      return await p;
+    } finally {
+      clearTimeout(timer);
+      const n = (loadCount.get(tabId) ?? 1) - 1;
+      if (n > 0) {
+        loadCount.set(tabId, n);
+      } else {
+        loadCount.delete(tabId);
+        editors.slowTabs.delete(tabId);
+      }
+    }
+  }
 
   // WHY: 터미널 탭 × 는 PTY 정리로 이어져야 하는데 editors 는 terminal 모듈을 모른다 —
   //      createTerminals 가 disposeTerminal 을 등록한다 (세션별 슬롯)
@@ -350,19 +375,14 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
   /**
    * 파일 열기. preview=true(트리 단일 클릭)면 기존 preview 탭을 교체하고,
    * preview=false(더블 클릭/명시적 오픈)면 고정 탭으로 연다.
+   * 탭은 읽기 전에 즉시 뜬다 — 문서가 없는 파일 탭은 UI 가 빈 본문(+800ms 뒤 진행선)으로
+   * 그리고, 읽기가 끝나면 docs 반응형이 편집기·뷰어를 채운다 (VS Code: 큰 파일도 탭이 먼저).
    */
-  /** @returns 열기 성공 여부 — 읽기 실패는 notify 후 false (호출측 후속 동작 가드용) */
+  /** @returns 열기 성공 여부 — 읽기 실패는 탭을 걷고 notify 후 false (호출측 후속 동작 가드용) */
   async function openFile(
     path: string,
     opts?: { preview?: boolean; groupId?: number; focus?: boolean },
   ): Promise<boolean> {
-    let doc: Doc;
-    try {
-      doc = await ensureDoc(path);
-    } catch (e) {
-      notify('error', `Unable to open '${baseName(path)}': ${errText(e)}`);
-      return false;
-    }
     const group = opts?.groupId !== undefined
       ? editors.groups.find((g) => g.id === opts.groupId) ?? activeGroup()
       : activeGroup();
@@ -376,11 +396,12 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
       return true;
     }
 
+    const doc = editors.docs.get(path);
     const tab: FileTab = {
       kind: 'file', id: path, path, name: baseName(path),
       // WHY: dirty 인 채 닫힌 문서를 다시 열 수 있다 — 버퍼가 살아 있으므로 doc 상태에서 파생해야
-      //      "clean 탭 아래 미저장 내용" 이 생기지 않는다.
-      dirty: doc.content !== doc.savedContent,
+      //      "clean 탭 아래 미저장 내용" 이 생기지 않는다. 아직 안 읽은 문서는 clean
+      dirty: doc !== undefined && doc.content !== doc.savedContent,
       preview: opts?.preview ?? false,
     };
     const previewIdx = group.tabs.findIndex((t) => t.preview);
@@ -392,6 +413,17 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     group.activeTabId = tab.id;
     editors.activeGroupId = group.id;
     if (opts?.focus !== false) editors.pendingFocus = true;
+
+    if (doc === undefined) {
+      try {
+        await trackLoad(tab.id, ensureDoc(path));
+      } catch (e) {
+        notify('error', `Unable to open '${baseName(path)}': ${errText(e)}`);
+        // 읽지 못한 탭은 걷는다 — 왕복 중 사용자가 이미 닫았으면 takeTab 이 null 로 비껴간다
+        if (takeTab(group.id, tab.id)) collapseIfEmpty(group.id);
+        return false;
+      }
+    }
     return true;
   }
 
@@ -443,7 +475,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
   async function ensureHex(path: string): Promise<void> {
     if (editors.hex.has(path)) return;
     try {
-      const { size } = await backend.stat(path);
+      const { size } = await trackLoad(tabIdOf('hex', path), backend.stat(path));
       if (!editors.hex.has(path)) editors.hex.set(path, { size, chunks: new Map() });
     } catch (e) {
       notify('error', `Unable to open '${baseName(path)}': ${errText(e)}`);
@@ -461,7 +493,10 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     if (!doc || doc.chunks.has(idx) || hexPending.has(key)) return;
     hexPending.add(key);
     try {
-      const r = await backend.readFile(path, { encoding: 'base64', offset: idx * HEX_CHUNK, maxBytes: HEX_CHUNK });
+      const r = await trackLoad(
+        tabIdOf('hex', path),
+        backend.readFile(path, { encoding: 'base64', offset: idx * HEX_CHUNK, maxBytes: HEX_CHUNK }),
+      );
       // 왕복 중 외부 변경으로 문서가 갈렸으면(비워졌으면) 옛 바이트를 넣지 않는다
       if (editors.hex.get(path) !== doc || r.unopenable !== undefined) return;
       doc.chunks.set(idx, Uint8Array.from(atob(r.content), (c) => c.charCodeAt(0)));
@@ -477,7 +512,8 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
   }
 
   /** HTML 프리뷰 탭 열기 — 활성 그룹에 (닫은 탭 복원·창 간 이동의 재개방 경로). 이미 어느 그룹에든
-   *  열려 있으면 그 탭을 활성화한다. 문서는 같은 path 의 doc 을 공유한다. 편집기에서의 전환은 toggleHtmlPreview */
+   *  열려 있으면 그 탭을 활성화한다. 문서는 같은 path 의 doc 을 공유한다. 편집기에서의 전환은 toggleHtmlPreview.
+   *  탭은 읽기 전에 뜬다 (openFile 과 같은 규칙 — 프리뷰는 문서가 올 때까지 빈 화면, 실패하면 탭을 걷는다) */
   async function openHtmlPreview(path: string): Promise<void> {
     const id = tabIdOf('preview', path);
     for (const g of editors.groups) {
@@ -487,15 +523,16 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
         return;
       }
     }
-    try {
-      await ensureDoc(path);
-    } catch (e) {
-      notify('error', `Unable to open '${baseName(path)}': ${errText(e)}`);
-      return;
-    }
     const group = activeGroup();
     group.tabs.push({ kind: 'preview', id, path, name: tabNameOf('preview', path), dirty: false, preview: false });
     group.activeTabId = id;
+    if (editors.docs.has(path)) return;
+    try {
+      await trackLoad(id, ensureDoc(path));
+    } catch (e) {
+      notify('error', `Unable to open '${baseName(path)}': ${errText(e)}`);
+      if (takeTab(group.id, id)) collapseIfEmpty(group.id);
+    }
   }
 
   /** HTML 편집기 ↔ 프리뷰 제자리 전환 (Ctrl+Shift+V) — 탭을 같은 자리에서 다른 종류로 바꾼다.

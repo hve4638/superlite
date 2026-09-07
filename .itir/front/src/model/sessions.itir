@@ -58,7 +58,7 @@ export fn browseBackend() -> ThinBackend? {
   role: 폴더 탐색(browseDir) 가능한 백엔드 — 활성 세션 우선, 활성이 빈 세션(무연결)이면 아무 연결 세션의 것으로 위임. browseDir 는 절대 경로 나열이라 세션 root 와 무관해 어느 연결이든 같은 결과다 (웹 = 서버 FS, 앱 = 데몬 FS). 전부 빈 세션이면 null — 퀵인풋 확정 검증이 불가하므로 호출측(Ctrl+O)이 OS 다이얼로그로 우회한다
 }
 export fn renameSession(id, name) {
-  role: 세션 탭 이름 변경 (탭 더블클릭 rename) — 표시 라벨은 front 소유라 로컬만 바꾼다 (앱 reconcile 은 로컬 이름 우선). 지속 안 됨 — 재실행 복원은 root basename (수용)
+  role: 세션 탭 이름 변경 (탭 더블클릭 rename) — 표시 라벨은 front 소유라 로컬만 바꾼다 (앱 reconcile 은 로컬 이름 우선) 하고 renamed 플래그를 세운다 (창 이동 핸드오프에 실림 — 이후 TitleBar 의 중복 구분 라벨이 이 탭을 건드리지 않는다). 지속 안 됨 — 재실행 복원은 root basename (수용)
 }
 export fn moveSession(id, to) {
   role: 세션 탭 순서 이동 (드래그) — to 는 표시 목록 기준 삽입 인덱스. 앱은 순서의 단일 출처인 native 레지스트리에 invoke(move_session) 로 위임하고 sessions-changed 반향을 reconcile 이 따라간다. 웹은 로컬 목록을 직접 재배열한다

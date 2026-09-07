@@ -37,7 +37,7 @@ import { tauri } from './tauri';
  *  새 창이 재-attach), tabs: 에디터·터미널 탭 일부 (같은 root 의 다른 세션으로 — 터미널은
  *  데몬 adoptTerminal, toSession 은 detach_tabs 때 native 가 채운다) */
 export type Handoff =
-  | { kind: 'session'; id: string; name: string; state: SessionSnapshot }
+  | { kind: 'session'; id: string; name: string; renamed?: boolean; state: SessionSnapshot }
   | {
       kind: 'tabs';
       fromSession: string;
@@ -58,7 +58,8 @@ export const DND_EDITOR = 'application/x-superlite-editor';
  *  from?: {group, member?}} — from 은 Pinned 안에서 옮길 때만 (recents.PinSource) */
 export const DND_ROOTS = 'application/x-superlite-roots';
 
-export type SessionTab = { id: string; name: string; root: string | null };
+/** renamed: 사용자가 라벨을 바꾼 적이 있다 — 그 뒤로는 중복 구분(TitleBar 의 전체 경로 라벨)이 건드리지 않는다 */
+export type SessionTab = { id: string; name: string; root: string | null; renamed?: boolean };
 
 
 /** 이 창에 보낸 이벤트만 듣는다.
@@ -161,7 +162,7 @@ function addLocal(tab: SessionTab, backend?: ThinBackend): SessionCtx {
     loading.delete(tab.id);
     const t = sessions.list.find((x) => x.id === tab.id);
     if (t && ctx.workbench.workbench.workspaceName && !isRemoteEmpty(t.root))
-      t.name = withHost(t.root ?? '', ctx.workbench.workbench.workspaceName);
+      t.name = withHost(ctx.workbench.workbench.workspaceName, t.root ?? '');
     if (t && !t.root && ctx.workbench.workbench.rootPath) t.root = ctx.workbench.workbench.rootPath;
   }, () => {
     // 초기 로드 실패(원격 ssh 접속 실패 등) — 사유는 connection.error 로 탐색기에 보인다
@@ -271,7 +272,10 @@ export function browseBackend(): ThinBackend | null {
 export function renameSession(id: string, name: string): void {
   const t = sessions.list.find((x) => x.id === id);
   const trimmed = name.trim();
-  if (t && trimmed) t.name = trimmed;
+  if (t && trimmed) {
+    t.name = trimmed;
+    t.renamed = true;
+  }
 }
 
 /** 세션 탭 순서 이동 (드래그) — to 는 표시 목록 기준 삽입 인덱스 (이동 중 탭 포함).
@@ -329,7 +333,7 @@ export function openWebFolder(root: string, mode?: OpenMode): void {
   const replaceId = mode === 'replace' || (mode === undefined && prevEmpty) ? prevId : null;
   const id = genSessionId();
   const base = root.split('/').filter((s) => s !== '').pop() ?? root;
-  addLocal({ id, name: withHost(root, base), root });
+  addLocal({ id, name: withHost(base, root), root });
   if (replaceId !== null) {
     const from = sessions.list.findIndex((t) => t.id === id);
     const [tab] = sessions.list.splice(from, 1);
@@ -382,7 +386,7 @@ function reconcile(list: SessionTab[]): void {
   // 순서는 native 가 단일 출처 — 이름은 로컬 갱신분(워크스페이스 정보)을 우선한다
   sessions.list = list.map((n) => {
     const prev = sessions.list.find((t) => t.id === n.id);
-    return { ...n, name: prev?.name ?? n.name };
+    return { ...n, name: prev?.name ?? n.name, renamed: prev?.renamed };
   });
   if (added && !consumeBackground(added)) activateSession(added);
 }
@@ -435,7 +439,7 @@ function sessionHandoff(id: string): Extract<Handoff, { kind: 'session' }> | nul
   const ctx = ctxs.get(id);
   const t = sessions.list.find((x) => x.id === id);
   if (!ctx || !t) return null;
-  return { kind: 'session', id, name: t.name, state: ctx.snapshot() };
+  return { kind: 'session', id, name: t.name, renamed: t.renamed, state: ctx.snapshot() };
 }
 
 /** 세션 탭을 창 밖에 놓음 → 그 화면 좌표에 새 창. 출처(이 창)는 sessions-changed 로 탭을 잃고
@@ -591,7 +595,10 @@ function applyHandoff(h: Handoff): void {
   if (h.kind === 'session') {
     ctx.restore(h.state);
     const t = sessions.list.find((x) => x.id === h.id);
-    if (t && h.name) t.name = h.name; // 사용자가 바꾼 라벨은 창을 옮겨도 유지
+    if (t && h.name) {
+      t.name = h.name; // 사용자가 바꾼 라벨은 창을 옮겨도 유지
+      t.renamed = h.renamed;
+    }
   } else {
     for (const e of h.editors) ctx.editors.acceptTab(e, h.toGroupId, h.toIndex);
     ctx.terminals.adoptTerminals(h.terminals, h.fromSession, { groupId: h.toGroupId, index: h.toIndex });

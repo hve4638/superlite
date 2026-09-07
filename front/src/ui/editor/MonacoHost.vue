@@ -85,6 +85,8 @@ async function sync() {
   if (tab.kind === 'hex' || tab.kind === 'preview' || tab.kind === 'terminal') return;
   const doc = editors.docs.get(tab.path);
   if (doc?.unopenable !== undefined || doc?.image !== undefined) return;
+  // 아직 안 읽힌 파일 탭 — 모델을 만들면 '' 로 굳는다. docs 워처가 도착 시 다시 sync 한다
+  if (tab.kind === 'file' && doc === undefined) return;
   if (tab.kind === 'diff' && tab.deleted) {
     const ed = ensureCodeEditor();
     const model = await originalModelFor(tab.path);
@@ -136,9 +138,13 @@ onMounted(() => {
   // HEAD 가 움직이면(앱 밖 커밋 포함) 열려 있는 diff 탭의 original 도 갈아끼운다 —
   // 탭 재활성화를 기다리지 않는다. 파일 탭이면 sync 는 모델 동일성 검사로 no-op
   watch(() => scm.head, () => void sync(), { flush: 'post' });
-  // 열린 채 외부 변경으로 열 수 있게 된 파일(이진→텍스트 등) — 탭 전환 없이 모델을 세워야 한다
+  // 열린 채 외부 변경으로 열 수 있게 된 파일(이진→텍스트 등) — 탭 전환 없이 모델을 세워야 한다.
+  // 문서 도착(탭이 읽기보다 먼저 뜬다)도 같은 경로 — 없음 → 있음 전이가 sync 를 부른다
   watch(
-    () => !!(active.value && editors.docs.get(active.value.path)?.unopenable),
+    () => {
+      const doc = active.value ? editors.docs.get(active.value.path) : undefined;
+      return doc === undefined ? null : !!doc.unopenable;
+    },
     () => void sync(),
     { flush: 'post' },
   );

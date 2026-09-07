@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { workbench } from '../model/workbench';
 import { runSearch, clearSearch, collapseAllResults } from '../model/search';
 import { refreshHosts } from '../model/remote';
+import { collapseAll, refreshTree } from '../model/files';
+import { activeSessionEmpty } from '../model/sessions';
 import ExplorerView from './views/ExplorerView.vue';
 import SearchView from './views/SearchView.vue';
 import ScmView from './views/ScmView.vue';
@@ -23,11 +25,26 @@ const view = computed(() => {
     default: return ExplorerView;
   }
 });
-const title = computed(() => TITLES[workbench.activeViewlet]);
+// 탐색기 제목은 워크스페이스명 — VS Code 의 단일 뷰 병합(merged-header) 제목과 같다. 폴더가 없을 때
+// (빈 세션·원격 접속 중이라 이름 미도착)는 VS Code 대로 "Explorer"
+const title = computed(() => {
+  if (workbench.activeViewlet === 'explorer' && !activeSessionEmpty() && workbench.workspaceName) {
+    return workbench.workspaceName;
+  }
+  return TITLES[workbench.activeViewlet];
+});
 
-// 뷰별 타이틀 액션
+/** 탐색기 뷰 인스턴스 — 새 파일·새 폴더의 인라인 입력은 뷰 안에 산다 (defineExpose) */
+const viewRef = ref<{ newFile: () => void; newFolder: () => void } | null>(null);
+
+// 뷰별 타이틀 액션 (탐색기는 폴더 pane 헤더의 액션이 제목으로 올라온 것 — 빈 세션엔 없음)
 const ACTIONS: Record<string, { icon: string; label: string; run: () => void }[]> = {
-  explorer: [],
+  explorer: [
+    { icon: 'codicon-new-file', label: 'New File...', run: () => viewRef.value?.newFile() },
+    { icon: 'codicon-new-folder', label: 'New Folder...', run: () => viewRef.value?.newFolder() },
+    { icon: 'codicon-refresh', label: 'Refresh Explorer', run: () => void refreshTree() },
+    { icon: 'codicon-collapse-all', label: 'Collapse Folders in Explorer', run: collapseAll },
+  ],
   search: [
     { icon: 'codicon-refresh', label: 'Refresh', run: () => void runSearch() },
     { icon: 'codicon-clear-all', label: 'Clear Search Results', run: clearSearch },
@@ -38,7 +55,10 @@ const ACTIONS: Record<string, { icon: string; label: string; run: () => void }[]
     { icon: 'codicon-refresh', label: 'Refresh', run: () => void refreshHosts() },
   ],
 };
-const actions = computed(() => ACTIONS[workbench.activeViewlet] ?? []);
+const actions = computed(() => {
+  if (workbench.activeViewlet === 'explorer' && activeSessionEmpty()) return [];
+  return ACTIONS[workbench.activeViewlet] ?? [];
+});
 </script>
 
 <template>
@@ -62,7 +82,7 @@ const actions = computed(() => ACTIONS[workbench.activeViewlet] ?? []);
       </div>
     </div>
     <div class="composite-content">
-      <component :is="view" />
+      <component :is="view" ref="viewRef" />
     </div>
   </div>
 </template>

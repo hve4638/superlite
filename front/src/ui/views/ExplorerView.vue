@@ -1,17 +1,18 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { collapseAll, files, parentOf, refreshTree, revealPath, visibleNodes, toggleDir, type TreeNode } from '../../model/files';
+import { files, parentOf, revealPath, visibleNodes, toggleDir, type TreeNode } from '../../model/files';
 import { activeTab, editors, openFile } from '../../model/editors';
 import { createDir, createFile, deleteEntry, renameEntry, saveClipboardImage, undoFileOp } from '../../model/fileops';
 import { decorationFor } from '../../model/scm';
 import { activeSessionEmpty, remoteHost, sessionRoot, sessions } from '../../model/sessions';
 import { downloadEntry, uploadDropped, type DroppedEntry } from '../../model/transfer';
 import { connection } from '../../model/watch';
-import { workbench, openContextMenu, openQuickInput, type ContextMenuItem } from '../../model/workbench';
+import { openContextMenu, openQuickInput, type ContextMenuItem } from '../../model/workbench';
 import { endEditorDrag, startFileDrag } from '../editor/tabDnd';
 import FileIcon from '../widgets/FileIcon.vue';
 import InlineNameInput from '../widgets/InlineNameInput.vue';
 import ConfirmDialog from '../widgets/ConfirmDialog.vue';
+import ProgressBar from '../widgets/ProgressBar.vue';
 
 type EditMode = 'createFile' | 'createDir' | 'rename';
 interface Editing {
@@ -361,6 +362,13 @@ function decoColor(node: TreeNode): string | undefined {
   const deco = decorationFor(node.path, node.kind === 'directory');
   return deco ? `var(${deco.color})` : undefined;
 }
+
+// 폴더 pane 헤더는 사이드바 제목에 병합됐다 (VS Code merged-header — 제목이 워크스페이스명) —
+// 새 파일·새 폴더는 인라인 입력 상태가 여기 살아 SideBar 의 제목 액션이 이 둘을 부른다
+defineExpose({
+  newFile: () => void startCreate('createFile', null),
+  newFolder: () => void startCreate('createDir', null),
+});
 </script>
 
 <template>
@@ -371,20 +379,8 @@ function decoColor(node: TreeNode): string | undefined {
       <button class="no-folder-open" @click="openDefault()">Open Folder</button>
     </div>
     <div v-else class="explorer-pane">
-      <div class="pane-header">
-        <span class="codicon codicon-chevron-down twisty" />
-        <span class="title">{{ workbench.workspaceName }}</span>
-        <div class="actions">
-          <span class="codicon codicon-new-file" title="New File..." @click="startCreate('createFile', null)" />
-          <span class="codicon codicon-new-folder" title="New Folder..." @click="startCreate('createDir', null)" />
-          <span class="codicon codicon-refresh" title="Refresh Explorer" @click="refreshTree()" />
-          <span class="codicon codicon-collapse-all" title="Collapse Folders in Explorer" @click="collapseAll()" />
-        </div>
-      </div>
-      <!-- 루트 첫 로드 중 — VS Code 뷰 헤더 아래의 무한 진행 막대 (monaco-progress-container) -->
-      <div v-if="files.loading && !connection.error" class="progress">
-        <div class="progress-bit" />
-      </div>
+      <!-- 루트 첫 로드 중 — 사이드바 제목 아래 2px 에 겹치는 무한 진행선 (VS Code 뷰 progress) -->
+      <ProgressBar v-if="files.loading && !connection.error" />
       <!-- 영구 접속 실패(원격 ssh) — 재연결하지 않으므로 사유를 보인다. 재접속은 탭을 다시 여는 것 -->
       <div v-if="connection.error" class="conn-error">
         <span class="codicon codicon-error" />
@@ -540,13 +536,14 @@ function decoColor(node: TreeNode): string | undefined {
   flex-direction: column;
 }
 .explorer-pane {
+  position: relative; /* 진행선 기준 */
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
 }
 
-/* ===== pane header (spec .pane-header: 22px, 11px/700, bg #181818) ===== */
+/* ===== pane header (Outline·Timeline 스텁 — spec .pane-header: 22px, 11px/700, bg #181818) ===== */
 .conn-error {
   display: flex;
   gap: 6px;
@@ -558,28 +555,6 @@ function decoColor(node: TreeNode): string | undefined {
 .conn-error .codicon {
   flex: none;
   font-size: 16px;
-}
-/* VS Code progressbar.css infinite — 2px 막대가 뷰 폭을 가로질러 반복 */
-.progress {
-  position: relative;
-  height: 2px;
-  flex-shrink: 0;
-  overflow: hidden;
-}
-.progress-bit {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 2%;
-  height: 2px;
-  background: var(--vscode-progressBar-background);
-  animation: progress-infinite 4s steps(100) infinite;
-  transform: translate3d(0, 0, 0);
-}
-@keyframes progress-infinite {
-  0% { transform: translateX(0) scaleX(1); }
-  50% { transform: translateX(2500%) scaleX(3); }
-  to { transform: translateX(4900%) scaleX(1); }
 }
 .pane-header {
   display: flex;
@@ -602,30 +577,11 @@ function decoColor(node: TreeNode): string | undefined {
   margin: 0 2px;
   flex-shrink: 0;
 }
-/* WHY: paneview.css — 펼쳐진 헤더의 chevron 은 1px 내려 그린다 */
-.pane-header:not(.collapsed) .twisty {
-  transform: translateY(1px);
-}
 .pane-header .title {
   text-transform: uppercase;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-/* 레퍼런스는 pane hover 시에만 노출하지만, 여기서는 항시 표시한다 (사용자 결정) */
-.pane-header .actions {
-  display: flex;
-  margin-left: auto;
-  margin-right: 8px;
-}
-.pane-header .actions .codicon {
-  font-size: 16px;
-  padding: 2px;
-  margin-right: 4px;
-  border-radius: 5px;
-}
-.pane-header .actions .codicon:hover {
-  background: var(--vscode-toolbar-hoverBackground);
 }
 
 /* ===== file tree ===== */

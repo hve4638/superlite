@@ -10,6 +10,7 @@ import HexView from './HexView.vue';
 import HtmlPreview from './HtmlPreview.vue';
 import TerminalView from './TerminalView.vue';
 import FileIcon from '../widgets/FileIcon.vue';
+import ProgressBar from '../widgets/ProgressBar.vue';
 
 const props = defineProps<{ group: EditorGroup }>();
 
@@ -68,13 +69,16 @@ type Overlay =
   | { kind: 'hex' | 'preview'; path: string }
   | { kind: 'terminal'; term: number }
   | { kind: 'image'; path: string; data: string }
-  | { kind: 'unopenable'; reason: NonNullable<Doc['unopenable']> };
+  | { kind: 'unopenable'; reason: NonNullable<Doc['unopenable']> }
+  | { kind: 'loading' };
 const overlay = computed<Overlay | null>(() => {
   const t = active.value;
   if (!t) return null;
   if (t.kind === 'hex' || t.kind === 'preview') return { kind: t.kind, path: t.path };
   if (t.kind === 'terminal') return { kind: 'terminal', term: t.term };
   const doc = editors.docs.get(t.path);
+  // 문서가 아직 안 읽힌 파일 탭(openFile 이 탭을 먼저 띄운다) — 빈 본문으로 이전 탭의 모델을 가린다
+  if (t.kind === 'file' && doc === undefined) return { kind: 'loading' };
   if (doc?.image !== undefined) return { kind: 'image', path: t.path, data: doc.image };
   if (doc?.unopenable) return { kind: 'unopenable', reason: doc.unopenable };
   return null;
@@ -111,11 +115,14 @@ const SHORTCUTS = [
       </div>
     </template>
     <div class="editor-body">
+      <!-- 활성 탭의 로드가 800ms 를 넘김 — 제목 영역(탭바·breadcrumbs) 아래 2px 진행선 (VS Code editor progress) -->
+      <ProgressBar v-if="active && editors.slowTabs.has(active.id)" />
       <!-- overlay 종류별 뷰 (hex·preview 는 path 키라 탭 전환 시 컴포넌트가 갈린다) -->
       <HexView v-if="overlay?.kind === 'hex'" :key="overlay.path" :path="overlay.path" />
       <HtmlPreview v-else-if="overlay?.kind === 'preview'" :key="overlay.path" :path="overlay.path" @focus="focusGroup" />
       <TerminalView v-else-if="overlay?.kind === 'terminal'" :key="overlay.term" :term="overlay.term" :group-id="group.id" />
       <ImageView v-else-if="overlay?.kind === 'image'" :path="overlay.path" :data="overlay.data" />
+      <div v-else-if="overlay?.kind === 'loading'" class="loading" />
       <!-- 열 수 없는 파일(크기 초과·이진) 안내 -->
       <div v-else-if="overlay?.kind === 'unopenable'" class="unopenable">
         <p v-if="overlay.reason.kind === 'large'">
@@ -232,6 +239,9 @@ const SHORTCUTS = [
 .drop-layer.down::before {
   display: block;
   top: 50%;
+}
+.loading {
+  flex: 1;
 }
 .watermark {
   flex: 1;
