@@ -13,6 +13,7 @@
     "windows": {
       "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
       "nsis": {
+        "installerIcon": "icons/icon.ico",
         "installMode": "currentUser",
         "installerHooks": "installer-hooks.nsh",
         "languages": ["Korean", "English"],

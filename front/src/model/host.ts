@@ -28,14 +28,14 @@ import {
 
 // WHY: 백엔드 구현체 선택이 일어나는 유일한 지점 (itir boundary assembly) — 세션 관리자에
 //      환경(kind·연결 생성기)을 주입하고 부팅 세션들을 등록한다.
-//      ?ws → 백엔드 /ws (같은 오리진 — 개발은 vite 프록시, 프론트는 데몬 주소를 모른다).
-//      기본은 mock — differential·기존 테스트 경로를 그대로 두기 위해.
+//      웹 기본은 백엔드 /ws (같은 오리진 — 개발은 vite 프록시, 프론트는 데몬 주소를 모른다).
+//      ?mock 일 때만 MockBackend — 예전 기본값(?ws 필수)은 differential 검사용이었는데
+//      그 검사가 사라져 2026-09-08 뒤집었다 (ticket web-default-real-backend).
 const params = new URLSearchParams(location.search);
 // 페이지 URL 의 ?tkn= 을 /ws 로 넘긴다 — 백엔드가 SUPERLITE_TOKEN 으로 떠 있으면 필수.
-// tkn 이 있다는 것 자체가 실 백엔드 의도다 — ?ws 를 빼먹었다고 조용히 mock 이 되지 않게
 const tkn = params.get('tkn');
-/** 웹 실백엔드 모드 — ?ws 또는 ?tkn 이 있으면 같은 오리진 /ws 에 붙는다 (없으면 mock) */
-const webBackend = params.has('ws') || tkn !== null;
+/** 웹 실백엔드 모드 — ?mock 이 없으면 같은 오리진 /ws 에 붙는다 (?ws 는 이제 무해한 잉여) */
+const webBackend = !params.has('mock');
 // Tauri 앱은 자산 로드라 location 이 relay 가 아니다 — 주입된 endpoint 가 최우선.
 // 세션 목록도 함께 주입된다 — native 레지스트리가 발급한 id 만 relay 가 허용한다
 const injected = (window as { __SUPERLITE_WS__?: string }).__SUPERLITE_WS__;

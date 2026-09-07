@@ -206,6 +206,19 @@ export function toggleViewerAutoReload(kind: keyof typeof viewerAutoReload): voi
   localStorage.setItem(AUTO_RELOAD_KEY, JSON.stringify(viewerAutoReload));
 }
 
+export const EDITOR_ZOOM_MIN = 50;
+export const EDITOR_ZOOM_MAX = 200;
+export const EDITOR_ZOOM_STEP = 10;
+// editorView 초기화가 loadEditorZoom 을 부르므로 이 셋은 그보다 위에 있어야 한다 (const TDZ — vite dev 는 모듈 순서 그대로라 부팅이 깨졌다)
+const EDITOR_ZOOM_KEY = 'superlite.editorZoom';
+function clampZoom(percent: number): number {
+  const snapped = Math.round(percent / EDITOR_ZOOM_STEP) * EDITOR_ZOOM_STEP;
+  return Math.min(EDITOR_ZOOM_MAX, Math.max(EDITOR_ZOOM_MIN, snapped));
+}
+function loadEditorZoom(): number {
+  const n = Number(localStorage.getItem(EDITOR_ZOOM_KEY));
+  return Number.isFinite(n) && n > 0 ? clampZoom(n) : 100;
+}
 /** 자동 줄바꿈 — 전 에디터 공통 뷰 상태 (VS Code Alt+Z 와 같이 세션 안에서만, 영속화 없음).
  *  zoom 은 편집기 전용 줌(퍼센트) — 웹뷰 줌(Ctrl+=, 앱 전체)과 별개로 Monaco 글꼴 크기만 바꾼다.
  *  세션 무관 전역이라 localStorage 에 기억한다 (viewerAutoReload 와 같은 방식) */
@@ -214,9 +227,6 @@ export function toggleWordWrap(): void {
   editorView.wordWrap = !editorView.wordWrap;
 }
 
-export const EDITOR_ZOOM_MIN = 50;
-export const EDITOR_ZOOM_MAX = 200;
-export const EDITOR_ZOOM_STEP = 10;
 /** 폴더 탭 기본값 — 마지막으로 고른 스타일이 새 탭의 기본, 미리보기 창(Windows 탐색기의 '미리보기 창')
  *  펼침은 전역. 세션 무관이라 localStorage (explorer-folder-tab) */
 const FOLDER_PREFS_KEY = 'superlite.folderPrefs';
@@ -238,15 +248,6 @@ export function toggleFolderPreviewPane(): void {
   saveFolderPrefs();
 }
 
-const EDITOR_ZOOM_KEY = 'superlite.editorZoom';
-function clampZoom(percent: number): number {
-  const snapped = Math.round(percent / EDITOR_ZOOM_STEP) * EDITOR_ZOOM_STEP;
-  return Math.min(EDITOR_ZOOM_MAX, Math.max(EDITOR_ZOOM_MIN, snapped));
-}
-function loadEditorZoom(): number {
-  const n = Number(localStorage.getItem(EDITOR_ZOOM_KEY));
-  return Number.isFinite(n) && n > 0 ? clampZoom(n) : 100;
-}
 /** 편집기 줌 설정 — 10 단위 스냅·50~200 클램프 후 저장. MonacoHost 가 지켜보다 fontSize 갱신 */
 export function setEditorZoom(percent: number): void {
   editorView.zoom = clampZoom(percent);

@@ -2,5 +2,9 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Superlite-Dev",
   "identifier": "dev.hve.superlite.dev",
-  "mainBinaryName": "superlite-dev"
+  "mainBinaryName": "superlite-dev",
+  "bundle": {
+    "icon": ["icons/icon-dev.ico"],
+    "windows": { "nsis": { "installerIcon": "icons/icon-dev.ico" } }
+  }
 }
