@@ -65,7 +65,9 @@ pub fn term_socket_path() -> PathBuf {
 /// 15: 터미널 계열(createTerminal·termWrite·termResize·termAck·disposeTerminal·adoptTerminal·
 ///    frontRequest·requestReply)이 파일 데몬 와이어에서 빠져 터미널 데몬(termd)으로 갔다
 ///    (ticket terminal-daemon-split). 파일 데몬은 이 메서드들을 unknown 으로 응답한다.
-pub const WIRE_VERSION: u32 = 15;
+/// 16: readDir 절대 경로(폴더 탭의 워크스페이스 밖 탐색 — 항목 path 절대, repo 표식 없음) + 항목
+///    mtime(ms)·size(파일만) (ticket explorer-folder-tab).
+pub const WIRE_VERSION: u32 = 16;
 
 /// 터미널 데몬 와이어 버전 — 파일 데몬과 분리해 **동결**한다. termd 는 앱 종료·빌드 교체 뒤에도
 /// 살아남는 안정 계층이라(ws decision/process-topology.md 2026-09-07 개정), 새 빌드의 백엔드가

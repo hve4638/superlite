@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue';
-import { workbench, toggleSideBar, openQuickInput, openContextMenu } from '../model/workbench';
+import { openQuickInput, openContextMenu } from '../model/workbench';
+import { openFolderTab } from '../model/editors';
+import { createTerminal } from '../model/terminal';
+import { endEditorDrag, startNewTabDrag } from './editor/tabDnd';
 import {
   inApp,
   appWindow,
@@ -12,6 +15,7 @@ import {
 import {
   sessions,
   sessionsEnabled,
+  activeSessionEmpty,
   activateSession,
   closeSession,
   addEmptySession,
@@ -197,6 +201,14 @@ function commitRename(): void {
   renameSession(renamingId.value, renameValue.value);
   renamingId.value = null;
 }
+
+/** 타이틀바 새 탭 아이콘 드래그 — setData 는 Firefox 의 드래그 시작 요건, 식별은 tabDnd 모듈 상태 */
+function onNewTabDragStart(e: DragEvent, kind: 'new-folder' | 'new-terminal'): void {
+  e.dataTransfer?.setData('text/plain', kind);
+  // 드롭 존이 dropEffect 를 move 로 세우므로 허용 효과도 move — 어긋나면 브라우저가 drop 을 내지 않는다
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+  startNewTabDrag(kind);
+}
 </script>
 
 <template>
@@ -270,11 +282,27 @@ function commitRename(): void {
       </div>
     </div>
     <div class="titlebar-right" data-tauri-drag-region>
-      <span
-        class="codicon codicon-layout-sidebar-left layout-icon"
-        :class="{ off: !workbench.sideBarVisible }"
-        @click="toggleSideBar()"
-      />
+      <!-- 활성 그룹에 새 폴더 탭(워크스페이스 루트)·새 터미널 — 전역 동작이라 탭바가 아니라 여기
+           (탭이 없는 그룹에서도 보인다). 빈 세션은 백엔드가 없어 숨긴다 -->
+      <template v-if="!activeSessionEmpty()">
+        <!-- 끌어서 놓는 자리(탭 사이·그룹·가장자리 분할)에 만들 수도 있다 — 드롭은 탭바·그룹 본문 드롭 존 -->
+        <span
+          class="codicon codicon-folder layout-icon"
+          title="Open Folder Tab"
+          draggable="true"
+          @click="openFolderTab('')"
+          @dragstart="onNewTabDragStart($event, 'new-folder')"
+          @dragend="endEditorDrag()"
+        />
+        <span
+          class="codicon codicon-terminal layout-icon"
+          title="New Terminal (Ctrl+`)"
+          draggable="true"
+          @click="createTerminal()"
+          @dragstart="onNewTabDragStart($event, 'new-terminal')"
+          @dragend="endEditorDrag()"
+        />
+      </template>
     </div>
     <div v-if="inApp" class="window-controls">
       <div
@@ -442,9 +470,6 @@ function commitRename(): void {
 }
 .layout-icon:hover {
   background: var(--vscode-toolbar-hoverBackground);
-}
-.layout-icon.off {
-  opacity: 0.6;
 }
 .window-controls {
   display: flex;

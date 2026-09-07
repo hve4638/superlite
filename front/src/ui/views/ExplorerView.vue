@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { files, parentOf, revealPath, visibleNodes, toggleDir, type TreeNode } from '../../model/files';
+import { files, parentOf, revealPath, toAbsPath, visibleNodes, toggleDir, type TreeNode } from '../../model/files';
 import { activeTab, editors, openFile } from '../../model/editors';
+import { openFolder } from '../../model/host';
 import { createDir, createFile, deleteEntry, renameEntry, saveClipboardImage, undoFileOp } from '../../model/fileops';
 import { decorationFor } from '../../model/scm';
 import { activeSessionEmpty, remoteHost, sessionRoot, sessions } from '../../model/sessions';
 import { downloadEntry, uploadDropped, type DroppedEntry } from '../../model/transfer';
 import { connection } from '../../model/watch';
-import { openContextMenu, openQuickInput, type ContextMenuItem } from '../../model/workbench';
+import { openContextMenu, openQuickInput, workbench, type ContextMenuItem } from '../../model/workbench';
 import { endEditorDrag, startFileDrag } from '../editor/tabDnd';
 import FileIcon from '../widgets/FileIcon.vue';
 import InlineNameInput from '../widgets/InlineNameInput.vue';
@@ -153,6 +154,10 @@ const isRemote = computed(() => remoteHost(sessionRoot(sessions.activeId) ?? '')
 
 function menuFor(node: TreeNode): ContextMenuItem[] {
   return [
+    // 폴더 행 — 그 폴더를 root 로 하는 새 세션 탭 (이미 열린 세션이면 포커스만, 원격이면 그 호스트의 경로)
+    ...(node.kind === 'directory'
+      ? [{ label: 'Open in New Session', run: () => openFolder(toAbsPath(node.path, workbench.rootPath)) }, { separator: true }]
+      : []),
     { label: 'New File...', run: () => void startCreate('createFile', node) },
     { label: 'New Folder...', run: () => void startCreate('createDir', node) },
     { separator: true },
@@ -193,11 +198,12 @@ function onRowDblClick(node: TreeNode): void {
   if (node.kind === 'file') void openFile(node.path);
 }
 
-// 파일 행을 에디터 영역으로 끌기 — 드롭 처리(이동/분할)는 에디터 쪽 드롭 존이 한다
+// 파일·폴더 행을 에디터 영역으로 끌기 — 드롭 처리(열기/분할)는 에디터 쪽 드롭 존이 한다.
+// 폴더는 폴더 탭(yazi 식 탐색 화면)으로 열린다 (explorer-folder-tab)
 function onRowDragStart(e: DragEvent, node: TreeNode): void {
   e.dataTransfer?.setData('text/plain', node.path);
   if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
-  startFileDrag(node.path);
+  startFileDrag(node.path, node.kind === 'directory' ? 'folder' : 'file');
 }
 
 function onRowContextMenu(node: TreeNode, e: MouseEvent): void {
@@ -434,7 +440,7 @@ defineExpose({
               'drop-target': row.node.kind === 'directory' && dropDir === row.node.path,
             }"
             :style="{ paddingLeft: `${row.node.depth * 8}px` }"
-            :draggable="row.node.kind === 'file'"
+            draggable="true"
             @dragstart="onRowDragStart($event, row.node)"
             @dragend="endEditorDrag()"
             @dragover="onDragOver($event, dirOf(row.node))"
@@ -594,6 +600,8 @@ defineExpose({
 }
 .tree-inner {
   position: relative;
+  /* 마지막 행 아래 여백 — 끝까지 스크롤해도 행이 바닥에 붙지 않게 (사용자 요청 2026-09-07) */
+  padding-bottom: 32px;
 }
 .tree-window {
   will-change: transform;

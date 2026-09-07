@@ -66,7 +66,30 @@ export interface TerminalTab {
   term: number;
 }
 
-export type Tab = FileTab | DiffTab | HexTab | PreviewTab | TerminalTab;
+/** 폴더 탭 — 탐색기 폴더를 메인 영역으로 끌어오면 yazi 식 3열(부모/현재/미리보기) 탐색 화면이
+ *  탭으로 열린다 (explorer-folder-tab). path 는 현재 폴더('' = 루트) — 탭 안 이동(navigateFolderTab)이
+ *  id·path·name 을 같이 바꾼다. 문서 없음, dirty·preview 없음. 커서는 path 키 folderView 맵 */
+export interface FolderTab {
+  kind: 'folder';
+  /** 'folder:'+path */
+  id: string;
+  path: string;
+  /** 폴더명 (루트는 '/') */
+  name: string;
+  dirty: boolean;
+  preview: boolean;
+  /** 보기 스타일 — columns(yazi 3열) / details(Windows 탐색기 자세히) / icons(큰 아이콘). 탭마다, 새 탭은 folderPrefs.style */
+  style: FolderStyle;
+  /** 뒤로/앞으로 이력 (탭 단위) — history[histIndex] 가 현재 path */
+  history: string[];
+  histIndex: number;
+  /** 정렬 (details·icons) — columns 는 항상 이름순 */
+  sort: { key: FolderSortKey; asc: boolean };
+}
+export type FolderStyle = 'columns' | 'details' | 'icons';
+export type FolderSortKey = 'name' | 'mtime' | 'type' | 'size';
+
+export type Tab = FileTab | DiffTab | HexTab | PreviewTab | TerminalTab | FolderTab;
 
 /** hex 뷰어 청크 크기 — 범위 읽기(readFile offset) 단위. 4KB 이상이라 항상 payload 프레임으로 온다 */
 export const HEX_CHUNK = 64 * 1024;
@@ -87,6 +110,7 @@ export function tabIdOf(kind: Tab['kind'], path: string): string {
 /** 탭 라벨 규칙 — diff 는 호출측이 상태 접미를 붙인다 */
 export function tabNameOf(kind: Tab['kind'], path: string): string {
   const base = baseName(path);
+  if (kind === 'folder') return base || '/';
   return kind === 'hex' ? `${base} (Hex)` : kind === 'preview' ? `Preview ${base}` : base;
 }
 
@@ -193,6 +217,27 @@ export function toggleWordWrap(): void {
 export const EDITOR_ZOOM_MIN = 50;
 export const EDITOR_ZOOM_MAX = 200;
 export const EDITOR_ZOOM_STEP = 10;
+/** 폴더 탭 기본값 — 마지막으로 고른 스타일이 새 탭의 기본, 미리보기 창(Windows 탐색기의 '미리보기 창')
+ *  펼침은 전역. 세션 무관이라 localStorage (explorer-folder-tab) */
+const FOLDER_PREFS_KEY = 'superlite.folderPrefs';
+export const folderPrefs = reactive(loadFolderPrefs());
+function loadFolderPrefs(): { style: FolderStyle; previewPane: boolean } {
+  const d = { style: 'columns' as FolderStyle, previewPane: false };
+  try {
+    const p = JSON.parse(localStorage.getItem(FOLDER_PREFS_KEY) ?? '') as Partial<typeof d>;
+    if (p.style === 'columns' || p.style === 'details' || p.style === 'icons') d.style = p.style;
+    if (typeof p.previewPane === 'boolean') d.previewPane = p.previewPane;
+  } catch { /* 없음·손상 — 기본값 */ }
+  return d;
+}
+function saveFolderPrefs(): void {
+  localStorage.setItem(FOLDER_PREFS_KEY, JSON.stringify(folderPrefs));
+}
+export function toggleFolderPreviewPane(): void {
+  folderPrefs.previewPane = !folderPrefs.previewPane;
+  saveFolderPrefs();
+}
+
 const EDITOR_ZOOM_KEY = 'superlite.editorZoom';
 function clampZoom(percent: number): number {
   const snapped = Math.round(percent / EDITOR_ZOOM_STEP) * EDITOR_ZOOM_STEP;
@@ -273,6 +318,10 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
      *  뷰 상태지만 문서(docs)처럼 경로 단위 공유 — 같은 이미지를 보는 그룹들이 함께
      *  움직인다. 해상도(w·h)는 이미지 로드 시점에 채워진다 */
     imageView: new Map<string, { w: number; h: number; zoom: 'fit' | number }>(),
+    /** 폴더 탭 뷰 상태 (현재 폴더 path 키) — 현재 열의 커서 항목 경로와 그 인덱스(항목이 사라지면
+     *  같은 자리로 물러난다). FolderView 가 세운다. 탭 전환·재열기에도 살아 있고, rename·삭제·창 이동
+     *  정리는 pathMaps 로 함께 (커서는 핸드오프에 실리지 않는다 — 받는 쪽은 첫 항목부터) */
+    folderView: new Map<string, { cursor: string; index: number }>(),
     /** hex 뷰어 문서 (path 키) — docs 와 분리: 텍스트 문서·이진 unopenable 과 무관하게 같은
      *  경로를 hex 로도 볼 수 있다. HexView 가 ensureHex(크기)·loadHexChunk(보이는 범위)로
      *  채우고, 외부 변경·rename·삭제 시 비우거나 이관한다 (비우면 다음 표시가 다시 읽는다).
@@ -469,6 +518,82 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
       group.tabs.push({ kind: 'hex', id, path, name: tabNameOf('hex', path), dirty: false, preview: false });
     }
     group.activeTabId = id;
+  }
+
+  /** 폴더 탭 열기 — 탐색기 폴더 드래그 드롭(중앙)·탭바 폴더 버튼(루트). 같은 폴더 탭이 그 그룹에
+   *  있으면 활성화만. 나열은 FolderView 가 files.acquireDir 로 한다 (창 이동·복원·재열기 수렴) */
+  function openFolderTab(path: string, opts: { groupId?: number; index?: number } = {}): void {
+    const id = tabIdOf('folder', path);
+    // 그룹 지정이 없으면(메뉴·타이틀바 클릭) 어느 그룹에든 이미 열린 같은 폴더 탭으로 포커스만 옮긴다
+    const existing = opts.groupId === undefined ? editors.groups.find((g) => g.tabs.some((t) => t.id === id)) : undefined;
+    const group = existing ?? (opts.groupId !== undefined ? editors.groups.find((g) => g.id === opts.groupId) : undefined) ?? activeGroup();
+    if (!group.tabs.some((t) => t.id === id)) {
+      const tab: FolderTab = {
+        kind: 'folder', id, path, name: tabNameOf('folder', path), dirty: false, preview: false,
+        style: folderPrefs.style, history: [path], histIndex: 0, sort: { key: 'name', asc: true },
+      };
+      group.tabs.splice(Math.min(opts.index ?? group.tabs.length, group.tabs.length), 0, tab);
+    }
+    group.activeTabId = id;
+    editors.activeGroupId = group.id;
+    editors.pendingFocus = true;
+  }
+
+  /** 빈 새 그룹을 refGroupId 상하좌우에 만든다 — 가장자리 드롭(폴더·새 터미널)의 공통 몸체.
+   *  호출측이 곧바로 탭을 넣는다 (넣지 못하면 빈 그룹이 남으므로 동기 열기 전용) */
+  function addGroupBeside(refGroupId: number, side: SplitSide): number | null {
+    const ref = editors.groups.find((g) => g.id === refGroupId);
+    if (!ref) return null;
+    const group: EditorGroup = { id: nextGroupId++, tabs: [], activeTabId: null };
+    editors.groups.splice(editors.groups.indexOf(ref) + 1, 0, group);
+    insertIntoLayout(refGroupId, group.id, side);
+    return group.id;
+  }
+
+  /** 탐색기 폴더 드래그 드롭(가장자리) — refGroupId 상하좌우의 새 그룹에 폴더 탭을 연다 */
+  function openFolderTabSplit(path: string, refGroupId: number, side: SplitSide): void {
+    const groupId = addGroupBeside(refGroupId, side);
+    if (groupId !== null) openFolderTab(path, { groupId });
+  }
+
+  /** 폴더 탭 안 이동 — 탭을 제자리에서 다른 폴더로 바꾼다 (id·path·name 동시 갱신, yazi 의 cd).
+   *  그 그룹에 목적지 폴더 탭이 이미 있으면 이 탭을 접고 그쪽을 활성화한다 (id 는 그룹 안에서 유일) */
+  function navigateFolderTab(groupId: number, tabId: string, path: string, opts: { via?: 'back' | 'forward' } = {}): void {
+    const group = editors.groups.find((g) => g.id === groupId);
+    const tab = group?.tabs.find((t) => t.id === tabId);
+    if (!group || !tab || tab.kind !== 'folder' || tab.path === path) return;
+    const id = tabIdOf('folder', path);
+    if (group.tabs.some((t) => t.id === id)) {
+      group.tabs.splice(group.tabs.indexOf(tab), 1);
+    } else {
+      tab.id = id;
+      tab.path = path;
+      tab.name = tabNameOf('folder', path);
+      // 이력 — 뒤로/앞으로는 자리만 옮기고, 새 이동은 앞쪽 이력을 버리고 쌓는다 (브라우저 동일)
+      if (opts.via === 'back') tab.histIndex = Math.max(0, tab.histIndex - 1);
+      else if (opts.via === 'forward') tab.histIndex = Math.min(tab.history.length - 1, tab.histIndex + 1);
+      else {
+        tab.history.splice(tab.histIndex + 1, Infinity, path);
+        tab.histIndex = tab.history.length - 1;
+      }
+    }
+    group.activeTabId = id;
+  }
+
+  /** 폴더 탭 보기 스타일 — 그 탭만 바꾸고, 새 탭의 기본값으로 기억한다 */
+  function setFolderStyle(groupId: number, tabId: string, style: FolderStyle): void {
+    const tab = editors.groups.find((g) => g.id === groupId)?.tabs.find((t) => t.id === tabId);
+    if (!tab || tab.kind !== 'folder') return;
+    tab.style = style;
+    folderPrefs.style = style;
+    saveFolderPrefs();
+  }
+
+  /** 폴더 탭 정렬 — 같은 열이면 방향 토글, 다른 열이면 오름차순으로 (Windows 탐색기 열 머리글 동일) */
+  function setFolderSort(groupId: number, tabId: string, key: FolderSortKey): void {
+    const tab = editors.groups.find((g) => g.id === groupId)?.tabs.find((t) => t.id === tabId);
+    if (!tab || tab.kind !== 'folder') return;
+    tab.sort = tab.sort.key === key ? { key, asc: !tab.sort.asc } : { key, asc: true };
   }
 
   /** hex 문서가 없으면 stat 으로 크기만 세운다 — 바이트는 loadHexChunk 가 보이는 범위만 읽는다 */
@@ -718,6 +843,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     if (entry.kind === 'diff') await openDiff(entry.path, { deleted: entry.deleted });
     else if (entry.kind === 'hex') openHex(entry.path);
     else if (entry.kind === 'preview') await openHtmlPreview(entry.path);
+    else if (entry.kind === 'folder') openFolderTab(entry.path);
     else await openFile(entry.path);
   }
 
@@ -777,7 +903,8 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     const group: EditorGroup = { id: nextGroupId++, tabs: [], activeTabId: null };
     editors.groups.splice(editors.groups.indexOf(ref) + 1, 0, group);
     insertIntoLayout(ref.id, group.id, 'right');
-    await openFile(tab.path, { groupId: group.id });
+    if (tab.kind === 'folder') openFolderTab(tab.path, { groupId: group.id });
+    else await openFile(tab.path, { groupId: group.id });
   }
 
   function updateContent(path: string, content: string): void {
@@ -810,7 +937,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
    *  창 이동 정리(takeTabForHandoff)가 같은 목록을 순회한다. 뷰 상태를 가진 뷰어가 늘면 여기에만
    *  추가한다. docs 는 restore 가 재할당하므로 매번 읽는다 */
   function pathMaps(): Map<string, unknown>[] {
-    return [editors.docs, editors.imageView, editors.hex];
+    return [editors.docs, editors.imageView, editors.hex, editors.folderView];
   }
 
   function remapPaths(from: string, to: string): void {
@@ -1076,8 +1203,8 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
       // 넘어온 쪽이 미저장인데 이쪽 버퍼를 지킨다 — 조용히 버리지 않고 알린다
       notify('warning', `Unsaved changes of '${baseName(h.tab.path)}' from the other window were discarded (already open here)`);
     }
-    // hex 탭은 문서가 필요 없다 — 바이트는 받는 쪽 HexView 가 다시 읽는다
-    if (!editors.docs.has(h.tab.path) && h.tab.kind !== 'hex') {
+    // hex·folder 탭은 문서가 필요 없다 — 바이트·나열은 받는 쪽 뷰가 다시 읽는다
+    if (!editors.docs.has(h.tab.path) && h.tab.kind !== 'hex' && h.tab.kind !== 'folder') {
       if (!h.doc) {
         void (h.tab.kind === 'diff' ? openDiff(h.tab.path, { deleted: h.tab.deleted })
           : h.tab.kind === 'preview' ? openHtmlPreview(h.tab.path)
@@ -1099,6 +1226,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
 
   return {
     editors, activeGroup, activeTab, openFile, openFileAt, openDiff, openHex, ensureHex, loadHexChunk, openHtmlPreview, toggleHtmlPreview, setActiveTab, pinTab,
+    openFolderTab, openFolderTabSplit, navigateFolderTab, addGroupBeside, setFolderStyle, setFolderSort,
     openFileSplit, closeTab, confirmCloseSave, confirmCloseDiscard, confirmCloseCancel,
     reopenClosedEditor, moveTabToGroup, moveTabSplit,
     splitActiveEditor, updateContent, setOrphaned, remapPaths, closePathTabs,
@@ -1158,6 +1286,16 @@ export const openFileAt = (path: string, line: number): Promise<void> =>
 export const openDiff = (path: string, opts?: { deleted?: boolean }): Promise<void> =>
   ctx().editors.openDiff(path, opts);
 export const openHex = (path: string): void => ctx().editors.openHex(path);
+export const openFolderTab = (path: string, opts: { groupId?: number; index?: number } = {}): void => ctx().editors.openFolderTab(path, opts);
+export const addGroupBeside = (refGroupId: number, side: SplitSide): number | null => ctx().editors.addGroupBeside(refGroupId, side);
+export const openFolderTabSplit = (path: string, refGroupId: number, side: SplitSide): void =>
+  ctx().editors.openFolderTabSplit(path, refGroupId, side);
+export const navigateFolderTab = (groupId: number, tabId: string, path: string, opts: { via?: 'back' | 'forward' } = {}): void =>
+  ctx().editors.navigateFolderTab(groupId, tabId, path, opts);
+export const setFolderStyle = (groupId: number, tabId: string, style: FolderStyle): void =>
+  ctx().editors.setFolderStyle(groupId, tabId, style);
+export const setFolderSort = (groupId: number, tabId: string, key: FolderSortKey): void =>
+  ctx().editors.setFolderSort(groupId, tabId, key);
 export const ensureHex = (path: string): Promise<void> => ctx().editors.ensureHex(path);
 export const loadHexChunk = (path: string, idx: number): Promise<void> => ctx().editors.loadHexChunk(path, idx);
 export const openHtmlPreview = (path: string): Promise<void> => ctx().editors.openHtmlPreview(path);

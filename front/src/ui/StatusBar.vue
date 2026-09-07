@@ -15,7 +15,7 @@ const branchLabel = computed(() => (repo.value ? (repo.value.dirty ? `${repo.val
 // (VS Code 이미지 프리뷰 동일 — 해상도는 로드 전이면 아직 없다)
 const image = computed(() => {
   const t = fileTab.value;
-  if (!t || t.kind === 'hex' || t.kind === 'preview' || t.kind === 'terminal') return null;
+  if (!t || t.kind === 'hex' || t.kind === 'preview' || t.kind === 'terminal' || t.kind === 'folder') return null;
   const data = editors.docs.get(t.path)?.image;
   if (data === undefined) return null;
   return { view: editors.imageView.get(t.path), size: base64Bytes(data) };
@@ -25,7 +25,7 @@ const hexSize = computed(() => {
   const t = fileTab.value;
   return t && t.kind === 'hex' ? editors.hex.get(t.path)?.size ?? null : null;
 });
-const viewerTab = computed(() => fileTab.value !== null && (fileTab.value.kind === 'hex' || fileTab.value.kind === 'preview' || fileTab.value.kind === 'terminal'));
+const viewerTab = computed(() => fileTab.value !== null && (fileTab.value.kind === 'hex' || fileTab.value.kind === 'preview' || fileTab.value.kind === 'terminal' || fileTab.value.kind === 'folder'));
 
 // 접속 진행 중 경과 시간 힌트 — 1초 틱 (헬퍼 업로드처럼 오래 걸리는 단계용)
 const now = ref(Date.now());

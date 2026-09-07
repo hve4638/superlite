@@ -15,6 +15,45 @@ export function parentOf(path: string): string {
   return slash === -1 ? '' : path.slice(0, slash);
 }
 
+/** 절대 경로인가 — unix '/' 또는 Windows 드라이브 접두. 폴더 탭이 워크스페이스 밖에 있을 때의 path 꼴 */
+export function isAbsPath(path: string): boolean {
+  return path.startsWith('/') || /^[a-zA-Z]:/.test(path);
+}
+
+/** 워크스페이스 root 의 절대 경로를 '/' 구분으로 — Windows rootPath 는 '\\' 로 온다 */
+function normRoot(rootPath: string): string {
+  return rootPath.replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
+/** 폴더 탭의 상위 폴더 — 루트('')의 위는 root 의 절대 부모, 절대 경로는 한 단계 위, 파일시스템 꼭대기
+ *  ('/'·'D:')는 null. 절대 경로가 다시 워크스페이스 안을 가리키면 루트 상대로 되돌린다 */
+export function folderParent(path: string, rootPath: string): string | null {
+  if (!isAbsPath(path)) return path === '' ? absParent(normRoot(rootPath)) : parentOf(path);
+  const up = absParent(path);
+  return up === null ? null : toWorkspacePath(up, rootPath);
+}
+function absParent(abs: string): string | null {
+  if (abs === '/' || /^[a-zA-Z]:$/.test(abs)) return null;
+  const slash = abs.lastIndexOf('/');
+  if (slash <= 0) return '/';
+  return abs.slice(0, slash);
+}
+
+/** 워크스페이스 경로(루트 상대 또는 이미 절대)를 절대 경로로 — 세션 열기(host.openFolder)용. Windows rootPath 는 '/' 로 정규화 */
+export function toAbsPath(path: string, rootPath: string): string {
+  if (isAbsPath(path)) return path;
+  const root = normRoot(rootPath);
+  return path === '' ? root : `${root}/${path}`;
+}
+
+/** 절대 경로를 워크스페이스 기준으로 — root 자신은 '', 그 아래면 루트 상대, 밖이면 그대로.
+ *  밖에서 안으로 들어올 때 탭이 파일 조작이 되는 루트 상대 꼴로 수렴하게 */
+export function toWorkspacePath(abs: string, rootPath: string): string {
+  const root = normRoot(rootPath);
+  if (abs === root) return '';
+  return abs.startsWith(`${root}/`) ? abs.slice(root.length + 1) : abs;
+}
+
 // 재사용 collator — localeCompare 는 호출마다 collator 를 만들어 수만 항목 정렬이 초 단위였다
 const collator = new Intl.Collator(undefined, { sensitivity: 'base' });
 function sortEntries(entries: DirEntry[]): DirEntry[] {
@@ -37,6 +76,10 @@ export function createFiles(backend: ThinBackend) {
     /** 자식 로드가 800ms 를 넘긴 디렉토리 — twistie 가 스피너로 바뀐다 (VS Code asyncDataTree
      *  의 slow 상태: 빠른 로드엔 깜빡임 없이, 느린 로드엔 "걸려 있음"을 그 행에서 알린다) */
     slowDirs: new Set<string>(),
+    /** 폴더 탭(FolderView)이 보는 디렉토리 나열 — 트리와 별개로 임의 경로를 든다. 값 null 은
+     *  로드 중, error 는 나열 실패(사라진 디렉토리 등). acquireDir/releaseDir 참조 계수로 살고
+     *  refreshDir 가 트리의 로드된 디렉토리와 같은 규칙으로 갱신한다 (explorer-folder-tab) */
+    listing: new Map<string, { entries: DirEntry[] | null; error?: string }>(),
   });
 
   /** 디렉토리 나열 결과 구독 — SCM 이 repo 표식(와이어 v13)으로 하위 저장소를 즉시 등록한다 */
@@ -106,6 +149,33 @@ export function createFiles(backend: ThinBackend) {
     files.expanded.add(node.path);
   }
 
+  /** 폴더 탭 열의 나열 참조 — 참조 계수가 0→1 이 될 때 readDir, 이미 있으면 왕복 없음.
+   *  같은 경로를 여러 폴더 탭(부모·현재·미리보기 열)이 같이 본다 */
+  const listingRefs = new Map<string, number>();
+  function acquireDir(path: string): void {
+    listingRefs.set(path, (listingRefs.get(path) ?? 0) + 1);
+    if (files.listing.has(path)) return;
+    files.listing.set(path, { entries: null });
+    void loadListing(path);
+  }
+  function releaseDir(path: string): void {
+    const n = (listingRefs.get(path) ?? 0) - 1;
+    if (n > 0) {
+      listingRefs.set(path, n);
+      return;
+    }
+    listingRefs.delete(path);
+    files.listing.delete(path);
+  }
+  async function loadListing(path: string): Promise<void> {
+    try {
+      const entries = await readDir(path);
+      if (files.listing.has(path)) files.listing.set(path, { entries });
+    } catch (e) {
+      if (files.listing.has(path)) files.listing.set(path, { entries: null, error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
   function findNode(path: string, nodes: TreeNode[] = files.root): TreeNode | null {
     for (const n of nodes) {
       if (n.path === path) return n;
@@ -122,13 +192,19 @@ export function createFiles(backend: ThinBackend) {
    */
   async function refreshDir(path: string): Promise<void> {
     const node = path === '' ? null : findNode(path);
-    if (path !== '' && (!node || node.kind !== 'directory' || !node.children)) return;
+    const inTree = path === '' || (node !== null && node.kind === 'directory' && node.children !== null);
+    const listed = files.listing.has(path);
+    if (!inTree && !listed) return;
     let entries: DirEntry[];
     try {
       entries = await readDir(path);
-    } catch {
-      return; // 디렉터리가 사라진 경우 등 — 부모 리프레시가 노드를 지운다
+    } catch (e) {
+      // 디렉터리가 사라진 경우 등 — 트리는 부모 리프레시가 노드를 지우고, 폴더 탭 열은 사유를 보인다
+      if (files.listing.has(path)) files.listing.set(path, { entries: null, error: e instanceof Error ? e.message : String(e) });
+      return;
     }
+    if (files.listing.has(path)) files.listing.set(path, { entries });
+    if (!inTree) return;
     // WHY: await 사이에 부모 리프레시가 이 노드를 갈아끼웠을 수 있다 — 고아에 쓰면 조용히 증발
     if (node && findNode(path) !== node) return;
     const oldNodes = node ? node.children! : files.root;
@@ -148,7 +224,8 @@ export function createFiles(backend: ThinBackend) {
     else files.root = next;
   }
 
-  /** 로드된(children 있는) 디렉터리 경로 전체. 루트('') 포함. 전체 리프레시용. */
+  /** 로드된(children 있는) 디렉터리 경로 전체 + 폴더 탭 나열 경로. 루트('') 포함. 전체 리프레시·
+   *  fileops 의 최근접 로드 조상 판정용. */
   function loadedDirPaths(): string[] {
     const out = [''];
     const walk = (nodes: TreeNode[]) => {
@@ -160,6 +237,7 @@ export function createFiles(backend: ThinBackend) {
       }
     };
     walk(files.root);
+    for (const p of files.listing.keys()) if (!out.includes(p)) out.push(p);
     return out;
   }
 
@@ -203,6 +281,7 @@ export function createFiles(backend: ThinBackend) {
   return {
     files, initFiles, toggleDir, refreshDir, loadedDirPaths, onDirLoaded,
     quickOpen, invalidateQuickOpen, refreshTree, collapseAll, visibleNodes, revealPath,
+    acquireDir, releaseDir,
   };
 }
 
@@ -215,3 +294,5 @@ export const quickOpen = (pattern: string): Promise<QuickOpenResult> => ctx().fi
 export const collapseAll = (): void => ctx().files.collapseAll();
 export const visibleNodes = (): TreeNode[] => ctx().files.visibleNodes();
 export const revealPath = (path: string): Promise<void> => ctx().files.revealPath(path);
+export const acquireDir = (path: string): void => ctx().files.acquireDir(path);
+export const releaseDir = (path: string): void => ctx().files.releaseDir(path);

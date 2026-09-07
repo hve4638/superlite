@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import type { Doc, EditorGroup, SplitSide } from '../../model/editors';
-import { editors, moveTabSplit, moveTabToGroup, openFile, openFileSplit, openHex } from '../../model/editors';
+import { addGroupBeside, editors, moveTabSplit, moveTabToGroup, openFile, openFileSplit, openFolderTab, openFolderTabSplit, openHex } from '../../model/editors';
+import { createTerminal } from '../../model/terminal';
 import { editorDrag, endEditorDrag } from './tabDnd';
 import TabBar from './TabBar.vue';
 import MonacoHost from './MonacoHost.vue';
@@ -9,6 +10,7 @@ import ImageView from './ImageView.vue';
 import HexView from './HexView.vue';
 import HtmlPreview from './HtmlPreview.vue';
 import TerminalView from './TerminalView.vue';
+import FolderView from './FolderView.vue';
 import FileIcon from '../widgets/FileIcon.vue';
 import ProgressBar from '../widgets/ProgressBar.vue';
 
@@ -50,6 +52,13 @@ function onBodyDrop(e: DragEvent) {
   } else if (editorDrag.kind === 'file') {
     if (zone === 'center') void openFile(editorDrag.path, { groupId: props.group.id });
     else void openFileSplit(editorDrag.path, props.group.id, zone);
+  } else if (editorDrag.kind === 'folder') {
+    if (zone === 'center') openFolderTab(editorDrag.path, { groupId: props.group.id });
+    else openFolderTabSplit(editorDrag.path, props.group.id, zone);
+  } else if (editorDrag.kind === 'new-folder') {
+    openFolderTab('', { groupId: zone === 'center' ? props.group.id : addGroupBeside(props.group.id, zone) ?? undefined });
+  } else if (editorDrag.kind === 'new-terminal') {
+    createTerminal({ groupId: zone === 'center' ? props.group.id : addGroupBeside(props.group.id, zone) ?? undefined });
   }
   dropZone.value = 'none';
   endEditorDrag();
@@ -68,6 +77,7 @@ const crumbs = computed(() =>
 type Overlay =
   | { kind: 'hex' | 'preview'; path: string }
   | { kind: 'terminal'; term: number }
+  | { kind: 'folder'; tabId: string; path: string }
   | { kind: 'image'; path: string; data: string }
   | { kind: 'unopenable'; reason: NonNullable<Doc['unopenable']> }
   | { kind: 'loading' };
@@ -76,6 +86,7 @@ const overlay = computed<Overlay | null>(() => {
   if (!t) return null;
   if (t.kind === 'hex' || t.kind === 'preview') return { kind: t.kind, path: t.path };
   if (t.kind === 'terminal') return { kind: 'terminal', term: t.term };
+  if (t.kind === 'folder') return { kind: 'folder', tabId: t.id, path: t.path };
   const doc = editors.docs.get(t.path);
   // 문서가 아직 안 읽힌 파일 탭(openFile 이 탭을 먼저 띄운다) — 빈 본문으로 이전 탭의 모델을 가린다
   if (t.kind === 'file' && doc === undefined) return { kind: 'loading' };
@@ -121,6 +132,8 @@ const SHORTCUTS = [
       <HexView v-if="overlay?.kind === 'hex'" :key="overlay.path" :path="overlay.path" />
       <HtmlPreview v-else-if="overlay?.kind === 'preview'" :key="overlay.path" :path="overlay.path" @focus="focusGroup" />
       <TerminalView v-else-if="overlay?.kind === 'terminal'" :key="overlay.term" :term="overlay.term" :group-id="group.id" />
+      <!-- 폴더 탭 — 탭 안 이동은 id 가 바뀌므로 key 를 두지 않는다 (같은 인스턴스가 path 변화를 따라간다) -->
+      <FolderView v-else-if="overlay?.kind === 'folder'" :group-id="group.id" :tab-id="overlay.tabId" :path="overlay.path" />
       <ImageView v-else-if="overlay?.kind === 'image'" :path="overlay.path" :data="overlay.data" />
       <div v-else-if="overlay?.kind === 'loading'" class="loading" />
       <!-- 열 수 없는 파일(크기 초과·이진) 안내 -->

@@ -20,6 +20,10 @@ export interface DirEntry {
   kind: 'file' | 'directory';
   /** 디렉토리가 git 저장소 루트(.git 보유)면 true (와이어 v13) — 트리 펼침이 곧 하위 저장소 인식 */
   repo?: boolean;
+  /** 수정 시각(ms epoch, 와이어 v15) — 폴더 탭 자세히 보기. metadata 실패면 없다 */
+  mtime?: number;
+  /** 바이트 크기(파일만, 와이어 v15) */
+  size?: number;
 }
 
 export interface SearchMatch {
@@ -126,7 +130,8 @@ export interface QuickOpenResult {
 
 export interface ThinBackend {
   workspace(): Promise<WorkspaceInfo>;
-  /** path 디렉토리의 직계 엔트리. 정렬은 호출자 책임. */
+  /** path 디렉토리의 직계 엔트리. 정렬은 호출자 책임. 절대 경로(와이어 v15)면 워크스페이스 밖도
+   *  나열한다 — 항목 path 는 절대('/' 구분), repo 표식 없음 (폴더 탭의 밖 탐색) */
   readDir(path: string): Promise<DirEntry[]>;
   /** 크기 초과(maxBytes 또는 백엔드 기본 상한)·이진/미지원 인코딩은 reject 가 아니라
    *  unopenable 로 온다 — 실존하지 않는 경로 등 실제 실패만 reject 다. maxBytes 는

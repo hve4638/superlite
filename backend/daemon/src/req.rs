@@ -178,7 +178,12 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
         })),
         "readDir" => {
             let rel = p["path"].as_str().unwrap_or("");
-            let dir = safe_join(root, rel)?;
+            // 절대 경로(와이어 v15) — 폴더 탭이 워크스페이스 밖을 탐색한다. 허용 근거는 browseDir 과
+            // 같다 (인증 경계는 relay). 항목 path 도 절대('/' 구분)이고 repo 표식은 달지 않는다 —
+            // git RPC 는 루트 상대라 밖의 저장소를 다룰 수 없다
+            let abs = Path::new(rel).is_absolute();
+            let dir = if abs { file_path(root, rel)? } else { safe_join(root, rel)? };
+            let rel = rel.trim_end_matches(['/', '\\']);
             let mut out = Vec::new();
             for ent in std::fs::read_dir(&dir).map_err(err)? {
                 let ent = ent.map_err(err)?;
@@ -186,25 +191,35 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
                 if FILES_EXCLUDED.contains(&name.as_str()) {
                     continue;
                 }
-                let path = if rel.is_empty() {
+                let path = if rel.is_empty() && !abs {
                     name.clone()
                 } else {
                     format!("{rel}/{name}")
                 };
                 // WHY: file_type() 은 심링크를 안 따라간다 — node_modules 의 심링크 디렉터리가
                 //      file 로 보인다. metadata() 는 따라간다 (깨진 링크는 file 취급).
-                let is_dir = std::fs::metadata(ent.path())
-                    .map(|m| m.is_dir())
-                    .unwrap_or(false);
+                let meta = std::fs::metadata(ent.path()).ok();
+                let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
                 let kind = if is_dir { "directory" } else { "file" };
+                let mut item = json!({"name": name, "path": path, "kind": kind});
+                // mtime(ms)·size(파일만) — 폴더 탭 자세히 보기 열 (와이어 v15). metadata 는 이미 읽었다
+                if let Some(m) = &meta {
+                    if let Ok(t) = m.modified() {
+                        if let Ok(d) = t.duration_since(std::time::UNIX_EPOCH) {
+                            item["mtime"] = json!(d.as_millis() as u64);
+                        }
+                    }
+                    if !is_dir {
+                        item["size"] = json!(m.len());
+                    }
+                }
                 // repo(와이어 v13): 자식 .git 이 있는 디렉토리 — 트리 펼침이 곧 하위 저장소 인식이다
                 // (.git 자체는 FILES_EXCLUDED 로 숨겨져 프론트가 직접 볼 수 없다). 루트 첫 나열이
                 // 직계 자식 저장소를, 이후 펼침이 더 깊은 저장소를 알린다. 최초 탐색은 gitRepos
-                if is_dir && is_repo(&ent.path()) {
-                    out.push(json!({"name": name, "path": path, "kind": kind, "repo": true}));
-                } else {
-                    out.push(json!({"name": name, "path": path, "kind": kind}));
+                if is_dir && !abs && is_repo(&ent.path()) {
+                    item["repo"] = json!(true);
                 }
+                out.push(item);
             }
             Ok(Value::Array(out))
         }

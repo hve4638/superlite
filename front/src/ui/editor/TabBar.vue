@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import type { EditorGroup, Tab } from '../../model/editors';
-import { closeTab, editors, isHtml, moveTabToGroup, openFile, pinTab, reloadPreview, toggleHtmlPreview, setActiveTab } from '../../model/editors';
+import { closeTab, editors, isHtml, moveTabToGroup, openFile, openFolderTab, pinTab, reloadPreview, toggleHtmlPreview, setActiveTab } from '../../model/editors';
 import { createTerminal } from '../../model/terminal';
 import { notify } from '../../model/notifications';
 import { DND_EDITOR, detachEditorTab, multiWindow, requestTabsMove, sessionRoot, sessions } from '../../model/sessions';
@@ -86,7 +86,8 @@ function onDragEnd(e: DragEvent) {
 // foreign = 다른 창에서 끌고 온 에디터 탭 (dragover 중엔 타입만 읽힌다)
 const dropIndex = ref<number | null>(null);
 const foreign = ref(false);
-const tabDragging = computed(() => editorDrag.kind === 'tab' || foreign.value);
+// 삽입선을 보이는 드래그 — 탭 이동과 타이틀바 새 탭 아이콘 (파일·폴더 드롭은 끝에 붙는다)
+const tabDragging = computed(() => editorDrag.kind === 'tab' || editorDrag.kind === 'new-folder' || editorDrag.kind === 'new-terminal' || foreign.value);
 
 function isForeign(e: DragEvent): boolean {
   return editorDrag.kind === 'none' && multiWindow() && (e.dataTransfer?.types.includes(DND_EDITOR) ?? false);
@@ -121,6 +122,12 @@ function onTabsDrop(e: DragEvent) {
     onForeignDrop(e);
   } else if (editorDrag.kind === 'tab') {
     moveTabToGroup(editorDrag.groupId, editorDrag.tabId, props.group.id, dropIndex.value ?? undefined);
+  } else if (editorDrag.kind === 'folder') {
+    openFolderTab(editorDrag.path, { groupId: props.group.id });
+  } else if (editorDrag.kind === 'new-folder') {
+    openFolderTab('', { groupId: props.group.id, index: dropIndex.value ?? undefined });
+  } else if (editorDrag.kind === 'new-terminal') {
+    createTerminal({ groupId: props.group.id, index: dropIndex.value ?? undefined });
   } else {
     void openFile(editorDrag.path, { groupId: props.group.id });
   }
@@ -179,6 +186,7 @@ function onForeignDrop(e: DragEvent) {
         @mousedown.middle.prevent="onClose(tab.id)"
       >
         <span v-if="tab.kind === 'terminal'" class="codicon codicon-terminal tab-icon" />
+        <span v-else-if="tab.kind === 'folder'" class="codicon codicon-folder tab-icon" />
         <FileIcon v-else :name="iconName(tab)" />
         <span class="tab-label">{{ tab.name }}</span>
         <span v-if="descriptions.get(tab.id)" class="tab-description">{{ descriptions.get(tab.id) }}</span>
@@ -202,10 +210,7 @@ function onForeignDrop(e: DragEvent) {
           <span class="codicon codicon-code" />
         </span>
       </template>
-      <!-- 새 터미널 탭 (이 그룹에) — Split Editor 아이콘 자리, 분할은 Ctrl+\ 로 (terminal-usability) -->
-      <span class="group-action" title="New Terminal (Ctrl+`)" @click="createTerminal({ groupId: group.id })">
-        <span class="codicon codicon-terminal" />
-      </span>
+      <!-- 새 터미널·폴더 탭 버튼은 타이틀바 오른쪽 (전역 동작 — 탭이 없는 그룹에서도 보여야 한다). 분할은 Ctrl+\ -->
     </div>
   </div>
 </template>

@@ -82,7 +82,7 @@ async function sync() {
   // 뷰어(EditorGroupView)가 편집기를 가리고 있고, diff 쪽은 이진의 gitOriginalContent 요청
   // 자체를 피해야 한다
   // hex·preview·terminal 탭도 모델 없음 — 전용 뷰가 편집기를 가린다
-  if (tab.kind === 'hex' || tab.kind === 'preview' || tab.kind === 'terminal') return;
+  if (tab.kind === 'hex' || tab.kind === 'preview' || tab.kind === 'terminal' || tab.kind === 'folder') return;
   const doc = editors.docs.get(tab.path);
   if (doc?.unopenable !== undefined || doc?.image !== undefined) return;
   // 아직 안 읽힌 파일 탭 — 모델을 만들면 '' 로 굳는다. docs 워처가 도착 시 다시 sync 한다
