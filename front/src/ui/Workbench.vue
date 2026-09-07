@@ -17,7 +17,6 @@ import ActivityBar from './ActivityBar.vue';
 import SideBar from './SideBar.vue';
 import StatusBar from './StatusBar.vue';
 import EditorArea from './editor/EditorArea.vue';
-import PanelArea from './panel/PanelArea.vue';
 import QuickInput from './QuickInput.vue';
 import ContextMenu from './ContextMenu.vue';
 import Sash from './widgets/Sash.vue';
@@ -27,35 +26,23 @@ import ConflictToast from './widgets/ConflictToast.vue';
 import NotificationToasts from './widgets/NotificationToasts.vue';
 
 const SIDEBAR_MIN = 170;
-const PANEL_MIN = 77;
 
 function clampSideBar(width: number): number {
   const max = Math.round(window.innerWidth * 0.8);
   return Math.min(max, Math.max(SIDEBAR_MIN, width));
 }
 
-function clampPanel(height: number): number {
-  const max = window.innerHeight - 35 - 22 - 100;
-  return Math.min(max, Math.max(PANEL_MIN, height));
-}
-
 // 드래그 시작 시점 크기 — Sash 의 누적 델타를 여기에 더해 클램프한다
 let sideBarStart = 0;
-let panelStart = 0;
 
 function resizeSideBar(dx: number) {
   workbench.sideBarWidth = clampSideBar(sideBarStart + dx);
 }
 
-function resizePanel(dy: number) {
-  workbench.panelHeight = clampPanel(panelStart - dy);
-}
-
-// WHY: 창을 줄이면 저장된 사이드바/패널 크기가 가용 공간을 넘어 에디터가 0px 로
+// WHY: 창을 줄이면 저장된 사이드바 크기가 가용 공간을 넘어 에디터가 0px 로
 //      붕괴할 수 있다 — 리사이즈 때 클램프만 다시 적용한다.
 function onWindowResize() {
   workbench.sideBarWidth = clampSideBar(workbench.sideBarWidth);
-  if (workbench.panelVisible) workbench.panelHeight = clampPanel(workbench.panelHeight);
 }
 onMounted(() => window.addEventListener('resize', onWindowResize));
 onBeforeUnmount(() => window.removeEventListener('resize', onWindowResize));
@@ -66,7 +53,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', onWindowResize));
     <TitleBar />
     <!-- WHY: 세션(탭) 전환마다 본문을 통째로 재마운트한다 — monaco 에디터·트리 스크롤 같은
          컴포넌트 국소 명령형 상태가 세션을 넘어 새지 않게. 모델 상태는 세션 컨텍스트에
-         남아 있으므로 재마운트가 곧 복원이다 (xterm 은 바인딩 맵이 살아 재부착) -->
+         남아 있으므로 재마운트가 곧 복원이다 (xterm 은 terminalHost 바인딩 맵이 살아 재부착) -->
     <div :key="sessions.activeId" class="workbench-middle">
       <ActivityBar />
       <div v-if="workbench.sideBarVisible" class="sidebar-slot">
@@ -81,19 +68,6 @@ onBeforeUnmount(() => window.removeEventListener('resize', onWindowResize));
       <div class="main-slot">
         <div class="editor-slot">
           <EditorArea />
-        </div>
-        <div
-          v-if="workbench.panelVisible"
-          class="panel-slot"
-          :style="{ height: `${workbench.panelHeight}px` }"
-        >
-          <PanelArea />
-          <Sash
-            direction="horizontal"
-            class="panel-sash"
-            @dragstart="panelStart = workbench.panelHeight"
-            @resize="resizePanel"
-          />
         </div>
       </div>
     </div>
@@ -170,12 +144,5 @@ onBeforeUnmount(() => window.removeEventListener('resize', onWindowResize));
   flex: 1;
   min-height: 0;
   display: flex;
-}
-.panel-slot {
-  position: relative;
-  flex-shrink: 0;
-}
-.panel-sash {
-  top: -2px;
 }
 </style>

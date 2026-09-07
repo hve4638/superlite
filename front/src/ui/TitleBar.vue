@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue';
-import { workbench, toggleSideBar, togglePanel, openQuickInput, openContextMenu } from '../model/workbench';
+import { workbench, toggleSideBar, openQuickInput, openContextMenu } from '../model/workbench';
 import {
   inApp,
   appWindow,
@@ -269,11 +269,6 @@ function commitRename(): void {
         class="codicon codicon-layout-sidebar-left layout-icon"
         :class="{ off: !workbench.sideBarVisible }"
         @click="toggleSideBar()"
-      />
-      <span
-        class="codicon codicon-layout-panel layout-icon"
-        :class="{ off: !workbench.panelVisible }"
-        @click="togglePanel()"
       />
     </div>
     <div v-if="inApp" class="window-controls">

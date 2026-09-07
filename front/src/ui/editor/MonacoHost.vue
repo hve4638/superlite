@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { EditorGroup } from '../../model/editors';
 import { editorView, editors, indentOf } from '../../model/editors';
 import { scm } from '../../model/scm';
@@ -59,6 +59,13 @@ function ensureDiffEditor(): monaco.editor.IStandaloneDiffEditor {
   return diffEditor;
 }
 
+/** 포커스를 다음 tick 으로 — WHY: 이 sync 는 post 워처인데 부모(EditorGroupView)의 v-show="!overlay"
+ *  반영이 그 뒤에 온다. 터미널·hex·프리뷰 탭에서 파일 탭으로 옮길 때 호스트가 아직 display:none 이라
+ *  focus() 가 무시된다. 요청(pendingFocus)은 호출측이 이미 소비했다 */
+function focusLater(ed: monaco.editor.ICodeEditor) {
+  void nextTick(() => ed.focus());
+}
+
 /** pendingReveal(검색 결과 클릭 등)을 이 그룹의 활성 파일이 소유하면 소비한다 */
 function consumeReveal(ed: monaco.editor.IStandaloneCodeEditor, path: string) {
   const req = editors.pendingReveal;
@@ -74,8 +81,8 @@ async function sync() {
   // 열 수 없는 문서(크기 초과·이진)·이미지 문서는 모델을 만들지 않는다 — 안내 화면·이미지
   // 뷰어(EditorGroupView)가 편집기를 가리고 있고, diff 쪽은 이진의 gitOriginalContent 요청
   // 자체를 피해야 한다
-  // hex·preview 탭도 모델 없음 — 전용 뷰가 편집기를 가린다
-  if (tab.kind === 'hex' || tab.kind === 'preview') return;
+  // hex·preview·terminal 탭도 모델 없음 — 전용 뷰가 편집기를 가린다
+  if (tab.kind === 'hex' || tab.kind === 'preview' || tab.kind === 'terminal') return;
   const doc = editors.docs.get(tab.path);
   if (doc?.unopenable !== undefined || doc?.image !== undefined) return;
   if (tab.kind === 'diff' && tab.deleted) {
@@ -86,7 +93,7 @@ async function sync() {
     if (ed.getModel() !== model) ed.setModel(model);
     if (editors.activeGroupId === props.group.id && editors.pendingFocus) {
       editors.pendingFocus = false;
-      ed.focus();
+      focusLater(ed);
     }
     return;
   }
@@ -104,7 +111,7 @@ async function sync() {
       //      Delete 가 파일 삭제로 이어진다 (VS Code 동일). scm.head 갱신 sync 도 포커스를 안 뺏는다
       if (editors.pendingFocus) {
         editors.pendingFocus = false;
-        ed.focus();
+        focusLater(ed);
       }
     }
   } else {
@@ -118,7 +125,7 @@ async function sync() {
     }
     if (editors.activeGroupId === props.group.id && editors.pendingFocus) {
       editors.pendingFocus = false;
-      ed.getModifiedEditor().focus();
+      focusLater(ed.getModifiedEditor());
     }
   }
 }

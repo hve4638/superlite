@@ -8,6 +8,7 @@ import MonacoHost from './MonacoHost.vue';
 import ImageView from './ImageView.vue';
 import HexView from './HexView.vue';
 import HtmlPreview from './HtmlPreview.vue';
+import TerminalView from './TerminalView.vue';
 import FileIcon from '../widgets/FileIcon.vue';
 
 const props = defineProps<{ group: EditorGroup }>();
@@ -65,12 +66,14 @@ const crumbs = computed(() =>
  *  종류가 늘면 여기 분기 하나와 템플릿 분기 하나 — monaco 가림(v-show="!overlay")은 자동 */
 type Overlay =
   | { kind: 'hex' | 'preview'; path: string }
+  | { kind: 'terminal'; term: number }
   | { kind: 'image'; path: string; data: string }
   | { kind: 'unopenable'; reason: NonNullable<Doc['unopenable']> };
 const overlay = computed<Overlay | null>(() => {
   const t = active.value;
   if (!t) return null;
   if (t.kind === 'hex' || t.kind === 'preview') return { kind: t.kind, path: t.path };
+  if (t.kind === 'terminal') return { kind: 'terminal', term: t.term };
   const doc = editors.docs.get(t.path);
   if (doc?.image !== undefined) return { kind: 'image', path: t.path, data: doc.image };
   if (doc?.unopenable) return { kind: 'unopenable', reason: doc.unopenable };
@@ -111,6 +114,7 @@ const SHORTCUTS = [
       <!-- overlay 종류별 뷰 (hex·preview 는 path 키라 탭 전환 시 컴포넌트가 갈린다) -->
       <HexView v-if="overlay?.kind === 'hex'" :key="overlay.path" :path="overlay.path" />
       <HtmlPreview v-else-if="overlay?.kind === 'preview'" :key="overlay.path" :path="overlay.path" @focus="focusGroup" />
+      <TerminalView v-else-if="overlay?.kind === 'terminal'" :key="overlay.term" :term="overlay.term" :group-id="group.id" />
       <ImageView v-else-if="overlay?.kind === 'image'" :path="overlay.path" :data="overlay.data" />
       <!-- 열 수 없는 파일(크기 초과·이진) 안내 -->
       <div v-else-if="overlay?.kind === 'unopenable'" class="unopenable">

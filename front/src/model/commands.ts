@@ -1,4 +1,4 @@
-import { openQuickInput, showViewlet, toggleSideBar, togglePanel, workbench } from './workbench';
+import { openQuickInput, showViewlet, toggleSideBar } from './workbench';
 import { openFolderDialog } from './host';
 import { closeTab, editors, reopenClosedEditor, saveActive, splitActiveEditor, activeGroup, activeTab, openHex, toggleHtmlPreview, isHtml, toggleWordWrap, stepEditorZoom, setEditorZoom } from './editors';
 import { createTerminal } from './terminal';
@@ -13,6 +13,8 @@ export interface Command {
   title: string;
   /** 표시용 키바인딩 라벨 (예: "Ctrl+Shift+P") */
   keybinding?: string;
+  /** 터미널 포커스 중에도 워크벤치가 가로챈다 (VS Code commandsToSkipShell). 없으면 셸행 */
+  skipShell?: boolean;
   run: () => void;
 }
 
@@ -45,6 +47,13 @@ export function isWorkbenchChord(e: KeyboardEvent): boolean {
   return byChord.has(chordOf(e));
 }
 
+/** 터미널 포커스 중에도 워크벤치가 가로채는 chord 인지 — skipShell 표식 커맨드만.
+ *  WHY: 나머지(Ctrl+W 단어 삭제, Ctrl+B tmux 접두, Ctrl+S 등)는 셸이 받아야 한다.
+ *      Ctrl+B 는 VS Code 기본과 달리 셸로 보낸다 (사용자 지시, terminal-usability) */
+export function isShellSkippingChord(e: KeyboardEvent): boolean {
+  return byChord.get(chordOf(e))?.skipShell === true;
+}
+
 export function installKeybindings(target: Window): void {
   target.addEventListener('keydown', (e) => {
     const cmd = byChord.get(chordOf(e));
@@ -60,6 +69,7 @@ export function setupCommands(): void {
     id: 'workbench.action.showCommands',
     title: 'Show All Commands',
     keybinding: 'Ctrl+Shift+P',
+    skipShell: true,
     run: () => openQuickInput('commands'),
   }, 'ctrl+shift+p', 'f1');
 
@@ -67,6 +77,7 @@ export function setupCommands(): void {
     id: 'workbench.action.quickOpen',
     title: 'Go to File...',
     keybinding: 'Ctrl+P',
+    skipShell: true,
     run: () => openQuickInput('files'),
   }, 'ctrl+p');
 
@@ -74,6 +85,7 @@ export function setupCommands(): void {
     id: 'workbench.view.explorer',
     title: 'View: Show Explorer',
     keybinding: 'Ctrl+Shift+E',
+    skipShell: true,
     run: () => showViewlet('explorer'),
   }, 'ctrl+shift+e');
 
@@ -81,6 +93,7 @@ export function setupCommands(): void {
     id: 'workbench.action.findInFiles',
     title: 'Search: Find in Files',
     keybinding: 'Ctrl+Shift+F',
+    skipShell: true,
     run: () => showViewlet('search'),
   }, 'ctrl+shift+f');
 
@@ -88,6 +101,7 @@ export function setupCommands(): void {
     id: 'workbench.view.scm',
     title: 'View: Show Source Control',
     keybinding: 'Ctrl+Shift+G',
+    skipShell: true,
     run: () => showViewlet('scm'),
   }, 'ctrl+shift+g');
 
@@ -98,30 +112,18 @@ export function setupCommands(): void {
     run: toggleSideBar,
   }, 'ctrl+b');
 
-  register({
-    id: 'workbench.action.togglePanel',
-    title: 'View: Toggle Panel Visibility',
-    keybinding: 'Ctrl+J',
-    run: togglePanel,
-  }, 'ctrl+j');
-
-  register({
-    id: 'workbench.action.terminal.toggleTerminal',
-    title: 'Terminal: Toggle Terminal',
-    keybinding: 'Ctrl+`',
-    run: togglePanel,
-  }, 'ctrl+`');
-
+  // 터미널은 편집기 탭 — 하단 패널이 없으므로 Ctrl+J(패널 토글)·Ctrl+Shift+`(구 새 터미널)는 없다.
+  // Ctrl+` 는 누를 때마다 새 터미널 탭 (사용자 지시 2026-09-07)
   register({
     id: 'workbench.action.terminal.new',
     title: 'Terminal: Create New Terminal',
-    keybinding: 'Ctrl+Shift+`',
+    keybinding: 'Ctrl+`',
+    skipShell: true,
     run: () => {
       if (activeSessionEmpty()) return; // 빈 세션 — 백엔드 연결이 없어 터미널이 없다
       createTerminal();
-      if (!workbench.panelVisible) togglePanel();
     },
-  }, 'ctrl+shift+`');
+  }, 'ctrl+`');
 
   register({
     id: 'workbench.action.files.save',
@@ -188,6 +190,7 @@ export function setupCommands(): void {
       id: 'workbench.action.nextSessionTab',
       title: 'View: Switch to Next Session Tab',
       keybinding: 'Ctrl+Shift+Tab',
+    skipShell: true,
       run: () => cycleSession(1),
     }, 'ctrl+shift+tab');
   }
@@ -196,6 +199,7 @@ export function setupCommands(): void {
     id: 'workbench.action.nextEditor',
     title: 'View: Open Next Editor',
     keybinding: 'Ctrl+Tab',
+    skipShell: true,
     run: () => cycleTab(1),
   }, 'ctrl+tab', 'ctrl+pagedown');
 
@@ -203,6 +207,7 @@ export function setupCommands(): void {
     id: 'workbench.action.previousEditor',
     title: 'View: Open Previous Editor',
     keybinding: 'Ctrl+PageUp',
+    skipShell: true,
     run: () => cycleTab(-1),
   }, 'ctrl+pageup');
 
@@ -243,18 +248,21 @@ export function setupCommands(): void {
       id: 'workbench.action.zoomIn',
       title: 'View: Zoom In',
       keybinding: 'Ctrl+Shift+=',
+      skipShell: true, // 앱 전역 줌은 터미널 포커스 중에도
       run: () => zoomWindow('in'),
     }, 'ctrl+shift+=', 'ctrl+shift++');
     register({
       id: 'workbench.action.zoomOut',
       title: 'View: Zoom Out',
       keybinding: 'Ctrl+Shift+-',
+      skipShell: true, // 앱 전역 줌은 터미널 포커스 중에도
       run: () => zoomWindow('out'),
     }, 'ctrl+shift+-');
     register({
       id: 'workbench.action.zoomReset',
       title: 'View: Reset Zoom',
       keybinding: 'Ctrl+Shift+0',
+      skipShell: true, // 앱 전역 줌은 터미널 포커스 중에도
       run: () => zoomWindow('reset'),
     }, 'ctrl+shift+0');
   }

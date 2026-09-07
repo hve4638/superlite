@@ -28,7 +28,7 @@ import { tauri } from './tauri';
  *
  * 다중 창 (앱 전용, decision/workspace-session-tabs.md 2026-09-03 개정): 창마다 이 관리자가
  * 하나씩 있고 native 가 창 단위로 목록을 준다. 탭을 창 밖에 놓으면 새 창(detachSession·
- * detachEditorTab·detachTerminal), 다른 창에 놓으면 그 창이 출처 창에 이동을 요청하고
+ * detachEditorTab — 터미널 탭 포함), 다른 창에 놓으면 그 창이 출처 창에 이동을 요청하고
  * (request*), 출처 창이 그 시점 상태를 직렬화해 이동을 확정한다 — 핸드오프는 항상 출처가
  * 만들고 native 는 내용을 모른 채 전달한다. 도착한 핸드오프는 applyHandoff 가 세션에 덮어쓴다.
  */
@@ -53,7 +53,6 @@ export type Handoff =
  *  터미널 {window, session, root, id} */
 export const DND_SESSION = 'application/x-superlite-session';
 export const DND_EDITOR = 'application/x-superlite-editor';
-export const DND_TERMINAL = 'application/x-superlite-terminal';
 
 export type SessionTab = { id: string; name: string; root: string | null };
 
@@ -480,11 +479,11 @@ function undoTabsHandoff(fromSession: string, h: Extract<Handoff, { kind: 'tabs'
   const ctx = ctxs.get(fromSession);
   if (!ctx) return;
   for (const e of h.editors) ctx.editors.acceptTab(e, pick.editorTab?.groupId);
-  // 같은 세션의 터미널 — 데몬 쪽은 그대로라 로컬 핸들만 다시 잡는다
-  ctx.terminals.adoptTerminals(h.terminals);
+  // 같은 세션의 터미널 — 데몬 쪽은 그대로라 로컬 핸들만 다시 잡는다 (탭도 다시 열린다)
+  ctx.terminals.adoptTerminals(h.terminals, undefined, { groupId: pick.editorTab?.groupId });
 }
 
-type TabsPick = { editorTab?: { groupId: number; tabId: string }; terminal?: number };
+type TabsPick = { editorTab?: { groupId: number; tabId: string } };
 
 /** 이 세션의 root — 에디터·터미널 탭 이동은 같은 root 사이에서만 (와이어 경로가 root 상대) */
 export function sessionRoot(id: string): string | null {
@@ -495,15 +494,16 @@ function tabsHandoff(fromSession: string, pick: TabsPick): Extract<Handoff, { ki
   const ctx = ctxs.get(fromSession);
   if (!ctx) return null;
   const editors: TabHandoff[] = [];
+  const terminals: TerminalSnapshot[] = [];
   if (pick.editorTab) {
     const h = ctx.editors.takeTabForHandoff(pick.editorTab.groupId, pick.editorTab.tabId);
-    if (h) editors.push(h);
-  }
-  const terminals: TerminalSnapshot[] = [];
-  if (pick.terminal !== undefined) {
-    terminals.push(...ctx.terminals.snapshot(pick.terminal));
-    // 데몬 터미널은 살려 둔다 — 받는 쪽이 adoptTerminal 로 가져간다
-    ctx.terminals.releaseTerminal(pick.terminal);
+    if (h && h.tab.kind === 'terminal') {
+      // 터미널 탭 — 탭 대신 PTY 스냅샷(버퍼)을 싣는다. 데몬 터미널은 살려 둔다 (받는 쪽이 adoptTerminal 로)
+      terminals.push(...ctx.terminals.snapshot(h.tab.term));
+      ctx.terminals.releaseTerminal(h.tab.term);
+    } else if (h) {
+      editors.push(h);
+    }
   }
   if (editors.length === 0 && terminals.length === 0) return null;
   return { kind: 'tabs', fromSession, editors, terminals };
@@ -512,11 +512,6 @@ function tabsHandoff(fromSession: string, pick: TabsPick): Extract<Handoff, { ki
 /** 활성 세션의 에디터 탭을 창 밖에 놓음 → 같은 root 의 새 세션이 새 창에 뜨고 그 탭을 받는다 */
 export function detachEditorTab(groupId: number, tabId: string, x: number, y: number): void {
   detachTabs({ editorTab: { groupId, tabId } }, x, y);
-}
-
-/** 활성 세션의 터미널(인스턴스 id)을 창 밖에 놓음 — 데몬 터미널은 새 창의 세션이 adoptTerminal 로 가져간다 */
-export function detachTerminal(id: number, x: number, y: number): void {
-  detachTabs({ terminal: id }, x, y);
 }
 
 function detachTabs(pick: TabsPick, x: number, y: number): void {
@@ -533,18 +528,17 @@ function detachTabs(pick: TabsPick, x: number, y: number): void {
 interface TabsMoveRequest {
   fromSession: string;
   editorTab?: { groupId: number; tabId: string };
-  terminal?: number;
   toWindow: string;
   toSession: string;
   toGroupId?: number;
   toIndex?: number;
 }
 
-/** 대상 창의 탭바·터미널 영역 드롭 — 출처 창에 요청. root 일치 검사는 호출측(UI)이 드래그
+/** 대상 창의 탭바 드롭 — 출처 창에 요청 (터미널 탭 포함). root 일치 검사는 호출측(UI)이 드래그
  *  데이터의 root 로 미리 한다 */
 export function requestTabsMove(
   fromWindow: string,
-  pick: { fromSession: string; editorTab?: { groupId: number; tabId: string }; terminal?: number },
+  pick: { fromSession: string; editorTab?: { groupId: number; tabId: string } },
   to: { toGroupId?: number; toIndex?: number },
 ): void {
   const payload: TabsMoveRequest = { ...pick, toWindow: windowLabel ?? '', toSession: sessions.activeId, ...to };
@@ -596,7 +590,7 @@ function applyHandoff(h: Handoff): void {
     if (t && h.name) t.name = h.name; // 사용자가 바꾼 라벨은 창을 옮겨도 유지
   } else {
     for (const e of h.editors) ctx.editors.acceptTab(e, h.toGroupId, h.toIndex);
-    ctx.terminals.adoptTerminals(h.terminals, h.fromSession);
+    ctx.terminals.adoptTerminals(h.terminals, h.fromSession, { groupId: h.toGroupId, index: h.toIndex });
   }
   activateSession(sid);
 }
@@ -606,7 +600,7 @@ export function hasAnyDirty(): boolean {
   return [...ctxs.values()].some((c) => c.editors.hasDirtyDocs());
 }
 
-/** 전 세션의 터미널 목록 — TerminalPane 의 xterm 바인딩 수명 판정용 (배경 세션 것을
+/** 전 세션의 터미널 목록 — terminalHost 의 xterm 바인딩 수명 판정용 (배경 세션 것을
  *  죽이지 않기 위해 합집합이 필요하다). sessions.list 와 각 목록을 읽어 반응성이 잡힌다 */
 export function allTerminals(): TerminalInstance[] {
   return sessions.list.flatMap((t) => ctxs.get(t.id)?.terminals.terminals.list ?? []);

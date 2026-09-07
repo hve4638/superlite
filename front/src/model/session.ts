@@ -55,7 +55,7 @@ export function createSessionCtx(backend: ThinBackend, browseOnly = false): Sess
   files.onDirLoaded(scm.noteDirEntries);
   const search = createSearch(backend);
   const workbench = createWorkbench(backend);
-  const terminals = createTerminals(backend, workbench);
+  const terminals = createTerminals(backend, editors);
   const fileops = createFileops(backend, editors, files, scm);
   const watch = createWatch(backend, editors, files, scm, search);
   let initP: Promise<void> | null = null;

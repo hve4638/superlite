@@ -9,8 +9,6 @@ export interface WorkbenchSnapshot {
   sideBarVisible: boolean;
   sideBarWidth: number;
   activeViewlet: ViewletId;
-  panelVisible: boolean;
-  panelHeight: number;
 }
 
 export interface ContextMenuItem {
@@ -37,9 +35,6 @@ export function createWorkbench(backend: ThinBackend) {
     sideBarVisible: true,
     sideBarWidth: 300,
     activeViewlet: 'explorer' as ViewletId,
-
-    panelVisible: false,
-    panelHeight: 0,
 
     quickInput: {
       open: false,
@@ -77,15 +72,6 @@ export function createWorkbench(backend: ThinBackend) {
     workbench.sideBarVisible = true;
   }
 
-  function togglePanel(): void {
-    if (!workbench.panelVisible && workbench.panelHeight === 0) {
-      // WHY: 레퍼런스(1280x800)에서 최초 패널 높이는 가용 높이(타이틀바·상태바 제외)의 36% ≈ 267px.
-      //      px 고정값 대신 이 비율을 쓰면 다른 뷰포트에서도 레퍼런스와 같은 위치에 열린다.
-      workbench.panelHeight = Math.round((window.innerHeight - 35 - 22) * 0.36);
-    }
-    workbench.panelVisible = !workbench.panelVisible;
-  }
-
   function openQuickInput(mode: 'files' | 'commands' | 'folder'): void {
     workbench.quickInput.open = true;
     workbench.quickInput.mode = mode;
@@ -107,8 +93,8 @@ export function createWorkbench(backend: ThinBackend) {
   }
 
   function snapshot(): WorkbenchSnapshot {
-    const { sideBarVisible, sideBarWidth, activeViewlet, panelVisible, panelHeight } = workbench;
-    return { sideBarVisible, sideBarWidth, activeViewlet, panelVisible, panelHeight };
+    const { sideBarVisible, sideBarWidth, activeViewlet } = workbench;
+    return { sideBarVisible, sideBarWidth, activeViewlet };
   }
 
   function restore(s: WorkbenchSnapshot): void {
@@ -116,7 +102,7 @@ export function createWorkbench(backend: ThinBackend) {
   }
 
   return {
-    workbench, initWorkbench, toggleSideBar, showViewlet, togglePanel,
+    workbench, initWorkbench, toggleSideBar, showViewlet,
     openQuickInput, closeQuickInput, openContextMenu, closeContextMenu, snapshot, restore,
   };
 }
@@ -127,7 +113,6 @@ export const workbench = viewOf(() => ctx().workbench.workbench);
 export const toggleSideBar = (): void => ctx().workbench.toggleSideBar();
 export const showViewlet = (id: ViewletId, toggle = false): void =>
   ctx().workbench.showViewlet(id, toggle);
-export const togglePanel = (): void => ctx().workbench.togglePanel();
 export const openQuickInput = (mode: 'files' | 'commands' | 'folder'): void =>
   ctx().workbench.openQuickInput(mode);
 export const closeQuickInput = (): void => ctx().workbench.closeQuickInput();

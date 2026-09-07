@@ -51,7 +51,22 @@ export interface PreviewTab {
   preview: boolean;
 }
 
-export type Tab = FileTab | DiffTab | HexTab | PreviewTab;
+/** 터미널 탭 — 하단 패널 대신 편집기 탭에 산다 (terminal-usability). 문서 없음(path ''),
+ *  본체는 model/terminal 의 인스턴스(term = 인스턴스 id, 페이지 전역 유일). dirty·preview·복원 이력 없음 */
+export interface TerminalTab {
+  kind: 'terminal';
+  /** 'terminal:'+term */
+  id: string;
+  /** 문서가 없다 — 경로 키 맵·rename·삭제 경로가 자연히 비껴간다 */
+  path: '';
+  /** 셸 이름 */
+  name: string;
+  dirty: false;
+  preview: false;
+  term: number;
+}
+
+export type Tab = FileTab | DiffTab | HexTab | PreviewTab | TerminalTab;
 
 /** hex 뷰어 청크 크기 — 범위 읽기(readFile offset) 단위. 4KB 이상이라 항상 payload 프레임으로 온다 */
 export const HEX_CHUNK = 64 * 1024;
@@ -280,6 +295,31 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
      *  포커스가 트리에 남는다 (VS Code 동일 — Delete 가 파일 삭제로 이어져야 한다) */
     pendingFocus: false,
   });
+
+  // WHY: 터미널 탭 × 는 PTY 정리로 이어져야 하는데 editors 는 terminal 모듈을 모른다 —
+  //      createTerminals 가 disposeTerminal 을 등록한다 (세션별 슬롯)
+  let terminalCloser: ((term: number) => void) | null = null;
+  function setTerminalCloser(fn: (term: number) => void): void {
+    terminalCloser = fn;
+  }
+
+  /** 터미널 탭 열기 — model/terminal 의 register 가 부른다. at 이 없으면 활성 그룹 끝 */
+  function openTerminalTab(term: number, name: string, at?: { groupId?: number; index?: number }): void {
+    const group = (at?.groupId !== undefined ? editors.groups.find((g) => g.id === at.groupId) : undefined) ?? activeGroup();
+    const tab: TerminalTab = { kind: 'terminal', id: `terminal:${term}`, path: '', name, dirty: false, preview: false, term };
+    group.tabs.splice(Math.min(at?.index ?? group.tabs.length, group.tabs.length), 0, tab);
+    group.activeTabId = tab.id;
+    editors.activeGroupId = group.id;
+  }
+
+  /** 인스턴스 id 의 터미널 탭을 모든 그룹에서 닫는다 — 셸 종료·세션 회수 (PTY 는 이미 정리됨) */
+  function closeTerminalTabs(term: number): void {
+    for (const g of [...editors.groups]) {
+      for (const t of [...g.tabs]) {
+        if (t.kind === 'terminal' && t.term === term) closeTab(g.id, t.id, true);
+      }
+    }
+  }
 
   function activeGroup(): EditorGroup {
     return editors.groups.find((g) => g.id === editors.activeGroupId) ?? editors.groups[0];
@@ -600,8 +640,13 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     }
     const tab = takeTab(groupId, tabId);
     if (!tab) return;
-    editors.recentlyClosed.push({ kind: tab.kind, path: tab.path, deleted: tab.kind === 'diff' ? tab.deleted : undefined });
-    if (editors.recentlyClosed.length > RECENTLY_CLOSED_CAP) editors.recentlyClosed.shift();
+    if (tab.kind === 'terminal') {
+      // 복원 이력 없음 — 죽은 셸은 되살릴 수 없다. 훅이 PTY 를 정리한다 (removeAt 경유면 이미 없어 무해)
+      terminalCloser?.(tab.term);
+    } else {
+      editors.recentlyClosed.push({ kind: tab.kind, path: tab.path, deleted: tab.kind === 'diff' ? tab.deleted : undefined });
+      if (editors.recentlyClosed.length > RECENTLY_CLOSED_CAP) editors.recentlyClosed.shift();
+    }
     collapseIfEmpty(groupId);
   }
 
@@ -690,7 +735,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
   /** 활성 탭을 오른쪽 새 그룹으로 분할 (Ctrl+\). diff 탭이면 대상 파일을 연다. */
   async function splitActiveEditor(): Promise<void> {
     const tab = activeTab();
-    if (!tab) return;
+    if (!tab || tab.kind === 'terminal') return;
     const ref = activeGroup();
     const group: EditorGroup = { id: nextGroupId++, tabs: [], activeTabId: null };
     editors.groups.splice(editors.groups.indexOf(ref) + 1, 0, group);
@@ -947,6 +992,11 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
   /** 스냅샷을 이 세션에 덮어쓴다 — 새 창의 빈 세션에 쓰는 것이 전제 (기존 탭은 버린다).
    *  monaco 모델은 doc 스냅샷에서 다시 만들어진다 (세션 전환과 같은 경로) */
   function restore(s: EditorsSnapshot): void {
+    // 터미널 탭은 걷어낸다 — 인스턴스 id 가 창마다 달라 adoptTerminals 가 새 탭으로 다시 연다
+    for (const g of s.groups) {
+      g.tabs = g.tabs.filter((t) => t.kind !== 'terminal');
+      if (g.activeTabId !== null && !g.tabs.some((t) => t.id === g.activeTabId)) g.activeTabId = g.tabs[0]?.id ?? null;
+    }
     editors.groups = s.groups;
     editors.layout = s.layout;
     editors.activeGroupId = s.activeGroupId;
@@ -954,6 +1004,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     editors.docs = new Map(s.docs);
     editors.orphaned.clear();
     editors.pendingFocus = true;
+    for (const g of [...editors.groups]) collapseIfEmpty(g.id);
   }
 
   /** 탭 하나를 다른 창으로 보내기 위해 뗀다 — 닫기 확인·최근 닫은 탭 이력을 거치지 않는다
@@ -962,6 +1013,11 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
   function takeTabForHandoff(groupId: number, tabId: string): TabHandoff | null {
     const tab = takeTab(groupId, tabId);
     if (!tab) return null;
+    if (tab.kind === 'terminal') {
+      // 문서가 없다 — 탭만 뗀다. PTY 스냅샷·해제는 호출측(sessions)이 terminals 로 한다
+      collapseIfEmpty(groupId);
+      return { tab, doc: null };
+    }
     const doc = editors.docs.get(tab.path);
     const refs = editors.groups.reduce((n, g) => n + g.tabs.filter((t) => t.path === tab.path).length, 0);
     if (refs === 0) {
@@ -977,6 +1033,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
    *  이 세션이 같은 문서를 이미 열고 있으면 이쪽 버퍼를 유지한다 (같은 root 라 같은 파일 —
    *  두 버퍼 중 하나는 잃는데, 받는 쪽이 보고 있던 것을 지킨다). 같은 탭이 이미 있으면 활성화만 */
   function acceptTab(h: TabHandoff, groupId?: number, index?: number): void {
+    if (h.tab.kind === 'terminal') return; // 터미널은 adoptTerminals 가 새 인스턴스로 탭을 연다
     const group = (groupId !== undefined ? editors.groups.find((g) => g.id === groupId) : undefined) ?? activeGroup();
     if (editors.docs.has(h.tab.path) && h.doc && h.doc.content !== h.doc.savedContent) {
       // 넘어온 쪽이 미저장인데 이쪽 버퍼를 지킨다 — 조용히 버리지 않고 알린다
@@ -1010,6 +1067,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     splitActiveEditor, updateContent, setOrphaned, remapPaths, closePathTabs,
     reloadDocFromDisk, hasDirtyDocs, saveActive, overwriteConflict, revertConflict, indentOf,
     snapshot, restore, takeTabForHandoff, acceptTab,
+    openTerminalTab, closeTerminalTabs, setTerminalCloser,
   };
 }
 

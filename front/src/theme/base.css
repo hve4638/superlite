@@ -6,6 +6,16 @@
   src: url('../assets/seti.woff') format('woff');
 }
 
+@font-face {
+  /* Cascadia Mono (가변 굵기 200–700) — microsoft/cascadia-code v2407.24, SIL OFL 1.1
+     (assets/CascadiaMono.LICENSE.txt). 터미널 글꼴 폴백 — 시스템에 Cascadia 가 있으면 그쪽이
+     먼저 잡히고(fonts.ts 스택), 없는 기기(리눅스·구형 Windows)에서 이 동봉본을 쓴다.
+     family 이름을 다르게 둬 시스템본과 겹치지 않는다 */
+  font-family: 'Cascadia Mono Bundled';
+  font-weight: 200 700;
+  src: url('../assets/CascadiaMono.woff2') format('woff2');
+}
+
 * {
   box-sizing: border-box;
 }

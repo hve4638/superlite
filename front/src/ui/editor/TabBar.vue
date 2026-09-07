@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import type { EditorGroup, Tab } from '../../model/editors';
-import { closeTab, editors, isHtml, moveTabToGroup, openFile, pinTab, reloadPreview, toggleHtmlPreview, setActiveTab, splitActiveEditor } from '../../model/editors';
+import { closeTab, editors, isHtml, moveTabToGroup, openFile, pinTab, reloadPreview, toggleHtmlPreview, setActiveTab } from '../../model/editors';
+import { createTerminal } from '../../model/terminal';
 import { notify } from '../../model/notifications';
 import { DND_EDITOR, detachEditorTab, multiWindow, requestTabsMove, sessionRoot, sessions } from '../../model/sessions';
 import { windowLabel } from '../../model/window';
@@ -168,7 +169,7 @@ function onForeignDrop(e: DragEvent) {
           'drop-before': tabDragging && dropIndex === i,
           'drop-after': tabDragging && dropIndex === i + 1 && i === group.tabs.length - 1,
         }"
-        :title="tab.path"
+        :title="tab.kind === 'terminal' ? tab.name : tab.path"
         draggable="true"
         @dragstart="onDragStart($event, tab)"
         @dragend="onDragEnd($event)"
@@ -177,7 +178,8 @@ function onForeignDrop(e: DragEvent) {
         @dblclick="pinTab(group.id, tab.id)"
         @mousedown.middle.prevent="onClose(tab.id)"
       >
-        <FileIcon :name="iconName(tab)" />
+        <span v-if="tab.kind === 'terminal'" class="codicon codicon-terminal tab-icon" />
+        <FileIcon v-else :name="iconName(tab)" />
         <span class="tab-label">{{ tab.name }}</span>
         <span v-if="descriptions.get(tab.id)" class="tab-description">{{ descriptions.get(tab.id) }}</span>
         <span class="tab-actions">
@@ -200,8 +202,9 @@ function onForeignDrop(e: DragEvent) {
           <span class="codicon codicon-code" />
         </span>
       </template>
-      <span class="group-action" title="Split Editor Right (Ctrl+\)" @click="splitActiveEditor()">
-        <span class="codicon codicon-split-horizontal" />
+      <!-- 새 터미널 탭 (이 그룹에) — Split Editor 아이콘 자리, 분할은 Ctrl+\ 로 (terminal-usability) -->
+      <span class="group-action" title="New Terminal (Ctrl+`)" @click="createTerminal({ groupId: group.id })">
+        <span class="codicon codicon-terminal" />
       </span>
     </div>
   </div>
@@ -272,6 +275,11 @@ function onForeignDrop(e: DragEvent) {
   height: 1px;
   background: var(--vscode-tab-activeBorder);
   z-index: 10;
+}
+.tab-icon {
+  font-size: 16px;
+  margin-right: 6px;
+  flex-shrink: 0;
 }
 .tab-label {
   font-size: 13px;

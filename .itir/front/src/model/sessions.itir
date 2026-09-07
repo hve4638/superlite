@@ -16,7 +16,6 @@ export val sessions
 export val loading
 export val DND_SESSION
 export val DND_EDITOR
-export val DND_TERMINAL
 
 export fn configureSessions(env) {
   role: 환경 주입 (host.ts 전용) — kind 와 탭별 백엔드 연결 생성기, 데몬 소켓 요청자 요청의 처리기(onRequest, 와이어 v9 — 세션 컨텍스트 생성 시 그 백엔드의 onRequest 를 이 처리기에 묶는다. 어떤 요청이 있는지는 조립 지점이 정한다)
@@ -115,15 +114,12 @@ export fn sessionRoot(id) -> String? {
 export fn detachEditorTab(groupId, tabId, x, y) {
   role: 활성 세션의 에디터 탭 창 밖 드롭 → 탭을 떼어(takeTabForHandoff) native detach_tabs — 같은 root 의 새 세션이 새 창에 뜨고 그 탭을 받는다 (toSession 은 native 가 채움)
 }
-export fn detachTerminal(id, x, y) {
-  role: 활성 세션의 터미널(인스턴스 id) 창 밖 드롭 → 스냅샷(버퍼)+releaseTerminal 후 detach_tabs — 새 창의 세션이 adoptTerminal(와이어 v10)로 데몬 터미널을 가져간다
-}
 export fn requestTabsMove(fromWindow, pick, to) {
-  role: 대상 창의 탭바·터미널 영역 드롭 — forward 로 출처에 tabs-move-request. 출처가 탭을 떼어 tabs-handoff 를 대상 창에 forward 로 바로 보낸다 (native 큐를 거치지 않는다). root 일치 검사는 호출측(UI)이 드래그 데이터의 root 로 미리 한다. 핸드오프 생성은 파괴적(탭 제거·터미널 핸들 해제)이라 invoke 가 거절되면 undoTabsHandoff 로 출처 세션에 되돌린다 (미저장 버퍼·살아 있는 PTY 가 고아가 되지 않게)
+  role: 대상 창의 탭바 드롭 — forward 로 출처에 tabs-move-request. 터미널 탭도 같은 경로 — 출처(tabsHandoff)가 떼어낸 탭이 terminal 종류면 에디터 핸드오프 대신 terminals.snapshot(버퍼)+releaseTerminal 로 싣고, 받는 쪽은 adoptTerminals(와이어 v10)로 데몬 터미널을 가져와 toGroupId/toIndex 에 탭을 연다. 출처가 탭을 떼어 tabs-handoff 를 대상 창에 forward 로 바로 보낸다 (native 큐를 거치지 않는다). root 일치 검사는 호출측(UI)이 드래그 데이터의 root 로 미리 한다. 핸드오프 생성은 파괴적(탭 제거·터미널 핸들 해제)이라 invoke 가 거절되면 undoTabsHandoff 로 출처 세션에 되돌린다 (미저장 버퍼·살아 있는 PTY 가 고아가 되지 않게)
 }
 export fn hasAnyDirty() -> Bool {
   role: 모든 세션의 미저장 문서 여부 — beforeunload 안전망 (배경 탭의 dirty 도 지킨다)
 }
 export fn allTerminals() -> TerminalInstance[] {
-  role: 전 세션 터미널 합집합 — TerminalPane 의 xterm 바인딩 수명 판정용 (배경 세션 것을 죽이지 않기 위해)
+  role: 전 세션 터미널 합집합 — ui/editor terminalHost 의 xterm 바인딩 수명 판정용 (배경 세션 것을 죽이지 않기 위해)
 }

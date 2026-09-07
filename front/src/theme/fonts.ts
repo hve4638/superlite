@@ -11,5 +11,11 @@ export const MONO_FONT_FAMILY =
 
 export const EDITOR_FONT_SIZE = 14;
 
-export const TERMINAL_FONT_SIZE = 14;
-export const TERMINAL_LINE_HEIGHT = 1.1;
+// 터미널은 Windows Terminal 기본값을 따른다 (사용자 방향 2026-09-07, terminal-usability):
+// Cascadia Mono 12pt(=16px), 줄 높이 1.2. 시스템본(Windows 10/11 은 Terminal 과 함께 설치)을
+// 먼저 잡고, 없으면 동봉본 'Cascadia Mono Bundled'(base.css @font-face, OFL) — 어느 기기에서든
+// 같은 글꼴이 나온다. 한글은 Cascadia 에 없어 맑은 고딕 폴백이 받는다
+export const TERMINAL_FONT_FAMILY =
+  "'Cascadia Mono', 'Cascadia Code', 'Cascadia Mono Bundled', Consolas, 'Droid Sans Mono', 'Malgun Gothic', '맑은 고딕', monospace";
+export const TERMINAL_FONT_SIZE = 16;
+export const TERMINAL_LINE_HEIGHT = 1.2;

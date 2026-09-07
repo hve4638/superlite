@@ -2,7 +2,7 @@ import { reactive } from '@vue/reactivity';
 import type { TerminalSession, ThinBackend } from '../backend/types';
 import { ctx, viewOf } from './ctx';
 import { notify } from './notifications';
-import type { createWorkbench } from './workbench';
+import type { createEditors } from './editors';
 
 export interface TerminalInstance {
   id: number;
@@ -30,24 +30,27 @@ export function setTerminalSerializer(fn: (id: number) => string | null): void {
 //      바인딩 맵(id 키, 세션 전환에도 살아남는다)이 세션 간에 충돌하지 않는다
 let nextId = 1;
 
-/** 세션별 터미널 모듈 — 목록·배압 상태와 backend 이벤트 구독이 세션에 묶인다 */
-export function createTerminals(backend: ThinBackend, workbenchM: ReturnType<typeof createWorkbench>) {
-  const { workbench, togglePanel } = workbenchM;
+/** 탭을 열 자리 — 그룹·index (창 간 드롭 위치). 없으면 활성 그룹 끝 */
+export type TerminalTabAt = { groupId?: number; index?: number };
 
+/** 세션별 터미널 모듈 — 목록·배압 상태와 backend 이벤트 구독이 세션에 묶인다.
+ *  터미널은 편집기 탭에 산다 — 등록이 탭을 열고, 정리가 탭을 닫고, 탭 × 는 훅으로 여기 온다 */
+export function createTerminals(backend: ThinBackend, editorsM: ReturnType<typeof createEditors>) {
   const terminals = reactive({
     // WHY: session 객체는 반응성이 필요 없고 xterm 이 직접 잡는 외부 핸들이라
     //      reactive 프록시로 감싸지 않도록 markRaw 성격의 shallow 구조를 유지한다.
     //      (list 는 push/splice 만 추적하면 충분)
     list: [] as TerminalInstance[],
-    activeId: 0,
   });
 
-  function createTerminal(): TerminalInstance {
-    return register(backend.createTerminal(80, 24), 'bash');
+  editorsM.setTerminalCloser((term) => disposeTerminal(term));
+
+  function createTerminal(at?: TerminalTabAt): TerminalInstance {
+    return register(backend.createTerminal(80, 24), 'bash', undefined, at);
   }
 
-  /** 목록 등록 + 활성화 — 생성과 인수(adopt)가 공유한다 */
-  function register(session: TerminalSession, title: string, restoreBuffer?: string): TerminalInstance {
+  /** 목록 등록 + 탭 열기 — 생성과 인수(adopt)가 공유한다 */
+  function register(session: TerminalSession, title: string, restoreBuffer?: string, at?: TerminalTabAt): TerminalInstance {
     const inst: TerminalInstance = { id: nextId++, title, session };
     if (restoreBuffer) inst.restoreBuffer = restoreBuffer;
     // 셸이 스스로 종료(exit·crash)하면 탭도 닫는다 (VS Code 기본 동작). 실제 종료 코드가
@@ -60,7 +63,7 @@ export function createTerminals(backend: ThinBackend, workbenchM: ReturnType<typ
       if (code !== null) disposeTerminal(inst.id);
     });
     terminals.list.push(inst);
-    terminals.activeId = inst.id;
+    editorsM.openTerminalTab(inst.id, title, at);
     return inst;
   }
 
@@ -81,28 +84,23 @@ export function createTerminals(backend: ThinBackend, workbenchM: ReturnType<typ
     removeAt(idx);
   }
 
-  /** 목록에서 뺀 뒤의 뒷정리 — 활성 이양, 마지막이면 패널 닫기 (release·dispose 공용).
-   *  WHY: 마지막 터미널이 빠지면 패널을 닫는다 (VS Code) — kill 버튼·셸 종료·세션 회수·창 이동이
-   *      전부 여기를 지나므로 여기가 합류점이다 */
+  /** 목록에서 뺀 뒤의 뒷정리 — 탭 닫기 (release·dispose 공용). 셸 종료·세션 회수·창 이동이
+   *  전부 여기를 지난다. 탭 × 경유(훅)면 탭은 이미 없어 no-op */
   function removeAt(idx: number): void {
     const [inst] = terminals.list.splice(idx, 1);
     inputBlocked.delete(inst.session.id);
-    if (terminals.activeId === inst.id) {
-      terminals.activeId = terminals.list[terminals.list.length - 1]?.id ?? 0;
-    }
-    if (terminals.list.length === 0 && workbench.panelVisible) togglePanel();
+    editorsM.closeTerminalTabs(inst.id);
   }
 
   /** 다른 창에서 넘어온 터미널 인수 — from 이 없으면 같은 세션(id 재-attach)의 기존 터미널,
    *  있으면 같은 root 의 다른 세션 것을 데몬에서 옮겨 받는다 (와이어 v10). 백엔드가 인수를
-   *  지원하지 않으면(mock·empty) 무동작. 받은 터미널이 있으면 패널을 보인다 */
-  function adoptTerminals(snaps: TerminalSnapshot[], from?: string): void {
+   *  지원하지 않으면(mock·empty) 무동작. at 은 탭을 열 그룹·index (드롭 위치) */
+  function adoptTerminals(snaps: TerminalSnapshot[], from?: string, at?: TerminalTabAt): void {
     if (!backend.adoptTerminal) return;
     for (const s of snaps) {
       const session = backend.adoptTerminal(from ? { from: { session: from, term: s.term } } : { term: s.term });
-      register(session, s.title, s.buffer);
+      register(session, s.title, s.buffer, at);
     }
-    if (snaps.length > 0 && !workbench.panelVisible) togglePanel();
   }
 
   function disposeTerminal(id: number): void {
@@ -110,10 +108,6 @@ export function createTerminals(backend: ThinBackend, workbenchM: ReturnType<typ
     if (idx === -1) return;
     terminals.list[idx].session.dispose();
     removeAt(idx);
-  }
-
-  function setActiveTerminal(id: number): void {
-    terminals.activeId = id;
   }
 
   // 입력 배압 진입 — 입력이 소비되지 않아 이후 입력이 로컬 대기 중임을 알린다.
@@ -141,12 +135,11 @@ export function createTerminals(backend: ThinBackend, workbenchM: ReturnType<typ
     notify('warning', 'Terminal sessions were lost while disconnected');
   });
 
-  return { terminals, createTerminal, disposeTerminal, setActiveTerminal, snapshot, releaseTerminal, adoptTerminals };
+  return { terminals, createTerminal, disposeTerminal, snapshot, releaseTerminal, adoptTerminals };
 }
 
 // ---- 활성 세션 전달 shim
 
 export const terminals = viewOf(() => ctx().terminals.terminals);
-export const createTerminal = (): TerminalInstance => ctx().terminals.createTerminal();
+export const createTerminal = (at?: TerminalTabAt): TerminalInstance => ctx().terminals.createTerminal(at);
 export const disposeTerminal = (id: number): void => ctx().terminals.disposeTerminal(id);
-export const setActiveTerminal = (id: number): void => ctx().terminals.setActiveTerminal(id);
