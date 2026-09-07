@@ -1,5 +1,5 @@
 // 와이어 계약(JSON-RPC 메서드·이벤트)은 import 가 아니라 여기서 강제 못 한다 —
 // TS 쪽 사영은 front/src/backend/types.itir 의 port ThinBackend.
-role: 워크스페이스 데몬 한 바이너리, 두 모드 (ticket terminal-daemon-split) — 파일 데몬(인자 없음: fs·git·rg·quickOpen·파일 감시, 유휴 grace 뒤 종료 — 변동 계층)과 터미널 데몬 termd(--term: PTY·detach 버퍼·adopt·셸 심 frontRequest, 살아 있는 터미널이 있는 한 앱·빌드 교체와 무관하게 생존 — 와이어를 따로 동결한 안정 계층). 각각 로컬 IPC(unix socket / Windows named pipe) JSON-RPC. 두 소켓의 분기·합류는 relay 와 --pipe 헬퍼가 common pair 로
+role: 워크스페이스 데몬 — 로컬 IPC(unix socket / Windows named pipe) JSON-RPC, fs·git·rg·PTY·파일 감시, tmux 식 수명 (마지막 접속 후 grace 뒤 종료). 터미널의 생존은 내장 tmux 서버(tmux 모듈, 와이어 v17)가 맡는다 — 데몬은 PTY 안에 tmux 클라이언트를 띄우고 자신은 종전대로 짧게 산다
 
-import { socket_path, term_socket_path, lock_path, pid_path, plain, pair } from '../../common/src'
+import { socket_path, lock_path, pid_path, plain } from '../../common/src'

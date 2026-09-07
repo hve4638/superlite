@@ -16,7 +16,6 @@ mkdirSync(wsRoot);
 const env = {
   ...process.env,
   SUPERLITE_SOCK: join(dir, 'daemon.sock'),
-  SUPERLITE_TERM_SOCK: join(dir, 'term.sock'),
   SUPERLITE_HTTP: '127.0.0.1:18788',
   SUPERLITE_GRACE_SECS: '2',
 };

@@ -5,16 +5,19 @@ import { runSearch, clearSearch, collapseAllResults } from '../model/search';
 import { refreshHosts } from '../model/remote';
 import { collapseAll, refreshTree } from '../model/files';
 import { activeSessionEmpty } from '../model/sessions';
+import { createTerminal, refreshTerminals } from '../model/terminal';
 import ExplorerView from './views/ExplorerView.vue';
 import SearchView from './views/SearchView.vue';
 import ScmView from './views/ScmView.vue';
 import RemoteView from './views/RemoteView.vue';
+import TerminalsView from './views/TerminalsView.vue';
 
 const TITLES: Record<string, string> = {
   explorer: 'Explorer',
   search: 'Search',
   scm: 'Source Control',
   remote: 'Remote Explorer',
+  terminals: 'Terminals',
 };
 
 const view = computed(() => {
@@ -22,6 +25,7 @@ const view = computed(() => {
     case 'search': return SearchView;
     case 'scm': return ScmView;
     case 'remote': return RemoteView;
+    case 'terminals': return TerminalsView;
     default: return ExplorerView;
   }
 });
@@ -34,14 +38,14 @@ const title = computed(() => {
   return TITLES[workbench.activeViewlet];
 });
 
-/** 탐색기 뷰 인스턴스 — 새 파일·새 폴더의 인라인 입력은 뷰 안에 산다 (defineExpose) */
-const viewRef = ref<{ newFile: () => void; newFolder: () => void } | null>(null);
+/** 뷰 인스턴스 — 탐색기의 새 파일·새 폴더 인라인 입력, 터미널 뷰의 tmux.conf 편집 토글 (defineExpose) */
+const viewRef = ref<{ newFile?: () => void; newFolder?: () => void; toggleConf?: () => void } | null>(null);
 
 // 뷰별 타이틀 액션 (탐색기는 폴더 pane 헤더의 액션이 제목으로 올라온 것 — 빈 세션엔 없음)
 const ACTIONS: Record<string, { icon: string; label: string; run: () => void }[]> = {
   explorer: [
-    { icon: 'codicon-new-file', label: 'New File...', run: () => viewRef.value?.newFile() },
-    { icon: 'codicon-new-folder', label: 'New Folder...', run: () => viewRef.value?.newFolder() },
+    { icon: 'codicon-new-file', label: 'New File...', run: () => viewRef.value?.newFile?.() },
+    { icon: 'codicon-new-folder', label: 'New Folder...', run: () => viewRef.value?.newFolder?.() },
     { icon: 'codicon-refresh', label: 'Refresh Explorer', run: () => void refreshTree() },
     { icon: 'codicon-collapse-all', label: 'Collapse Folders in Explorer', run: collapseAll },
   ],
@@ -53,6 +57,11 @@ const ACTIONS: Record<string, { icon: string; label: string; run: () => void }[]
   scm: [],
   remote: [
     { icon: 'codicon-refresh', label: 'Refresh', run: () => void refreshHosts() },
+  ],
+  terminals: [
+    { icon: 'codicon-add', label: 'New Terminal', run: () => void createTerminal() },
+    { icon: 'codicon-refresh', label: 'Refresh', run: () => void refreshTerminals() },
+    { icon: 'codicon-settings-gear', label: 'Edit tmux.conf', run: () => viewRef.value?.toggleConf?.() },
   ],
 };
 const actions = computed(() => {

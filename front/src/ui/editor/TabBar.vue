@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
 import type { EditorGroup, Tab } from '../../model/editors';
 import { closeTab, editors, isHtml, moveTabToGroup, openFile, openFolderTab, pinTab, reloadPreview, toggleHtmlPreview, setActiveTab } from '../../model/editors';
-import { createTerminal } from '../../model/terminal';
+import { createTerminal, requestKillTerminal, terminals } from '../../model/terminal';
 import { notify } from '../../model/notifications';
 import { DND_EDITOR, detachEditorTab, multiWindow, requestTabsMove, sessionRoot, sessions } from '../../model/sessions';
 import { windowLabel } from '../../model/window';
@@ -54,8 +54,31 @@ function dirHint(path: string): string {
   return `${segs[0]}${sep}…${sep}${segs[segs.length - 1]}`;
 }
 
-function onClose(tabId: string) {
-  closeTab(props.group.id, tabId);
+// 터미널 탭 (ticket term-list-reconnect): 닫기·휠 클릭·Ctrl+W 는 detach — tmux 세션은 백그라운드에
+// 남는다. Ctrl+닫기·Ctrl+휠 클릭은 강제 종료 (확인 후 tmux 세션 kill). Ctrl 을 누른 동안 닫기 버튼이
+// 붉게 바뀌어 둘을 구분한다. tmux 세션이 없는 탭(plain)은 Ctrl 이어도 그냥 닫는다
+const ctrlHeld = ref(false);
+const onKey = (e: KeyboardEvent) => { ctrlHeld.value = e.ctrlKey; };
+const onBlur = () => { ctrlHeld.value = false; };
+onMounted(() => {
+  window.addEventListener('keydown', onKey, true);
+  window.addEventListener('keyup', onKey, true);
+  window.addEventListener('blur', onBlur);
+});
+onUnmounted(() => {
+  window.removeEventListener('keydown', onKey, true);
+  window.removeEventListener('keyup', onKey, true);
+  window.removeEventListener('blur', onBlur);
+});
+function killable(tab: Tab): boolean {
+  return tab.kind === 'terminal' && terminals.list.some((t) => t.id === tab.term && t.tmux !== undefined);
+}
+function onClose(tab: Tab, e?: MouseEvent) {
+  if (tab.kind === 'terminal' && e?.ctrlKey && killable(tab)) {
+    requestKillTerminal(tab.term);
+    return;
+  }
+  closeTab(props.group.id, tab.id);
 }
 
 function onDragStart(e: DragEvent, tab: Tab) {
@@ -183,7 +206,7 @@ function onForeignDrop(e: DragEvent) {
         @dragover="onTabDragOver($event, i)"
         @click="setActiveTab(group.id, tab.id)"
         @dblclick="pinTab(group.id, tab.id)"
-        @mousedown.middle.prevent="onClose(tab.id)"
+        @mousedown.middle.prevent="onClose(tab, $event)"
       >
         <span v-if="tab.kind === 'terminal'" class="codicon codicon-terminal tab-icon" />
         <span v-else-if="tab.kind === 'folder'" class="codicon codicon-folder tab-icon" />
@@ -191,7 +214,12 @@ function onForeignDrop(e: DragEvent) {
         <span class="tab-label">{{ tab.name }}</span>
         <span v-if="descriptions.get(tab.id)" class="tab-description">{{ descriptions.get(tab.id) }}</span>
         <span class="tab-actions">
-          <span class="tab-action" @click.stop="onClose(tab.id)">
+          <span
+            class="tab-action"
+            :class="{ kill: ctrlHeld && killable(tab) }"
+            :title="killable(tab) ? (ctrlHeld ? 'Kill Terminal' : 'Close (Ctrl+click: Kill Terminal)') : undefined"
+            @click.stop="onClose(tab, $event)"
+          >
             <span class="codicon codicon-close" />
             <span v-if="tab.dirty" class="codicon codicon-circle-filled" />
           </span>
@@ -339,6 +367,10 @@ function onForeignDrop(e: DragEvent) {
 /* 닫기 버튼: active 탭은 항상, inactive 탭은 hover 시에만 */
 .tab:not(.dirty):not(.active):not(:hover) .codicon-close {
   visibility: hidden;
+}
+/* Ctrl 을 누른 동안 터미널 탭의 닫기 = 강제 종료 — 붉게 */
+.tab-action.kill .codicon-close {
+  color: var(--vscode-errorForeground, #f14c4c);
 }
 /* dirty 탭: ● 표시, 버튼에 hover 하면 × 로 교체 */
 .codicon-circle-filled {

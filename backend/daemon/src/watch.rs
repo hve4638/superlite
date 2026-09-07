@@ -41,38 +41,26 @@ pub(crate) fn start_watcher(root: PathBuf, tx: UnboundedSender<String>, slot: Wa
             _ => "",
         };
         for p in &ev.paths {
-            let Ok(rel) = p.strip_prefix(&cb_root) else {
-                continue;
-            };
+            let Ok(rel) = p.strip_prefix(&cb_root) else { continue };
             let rel = crate::wire_rel(&rel.to_string_lossy());
             if rel.is_empty() || !event_allowed(&rel) {
                 continue;
             }
             // rename/불명 이벤트는 존재하면 create, 없으면 delete 로 — 프론트는 둘 다 처리한다
-            let kind = if kind.is_empty() {
-                if p.exists() {
-                    "create"
-                } else {
-                    "delete"
-                }
-            } else {
-                kind
-            };
+            let kind = if kind.is_empty() { if p.exists() { "create" } else { "delete" } } else { kind };
             if raw_tx.send((rel, kind)).is_err() {
                 return; // 집계 태스크 종료 — 연결이 끊겼다
             }
         }
     };
-    let mut watcher = match notify::RecommendedWatcher::new(
-        cb,
-        notify::Config::default().with_follow_symlinks(false),
-    ) {
-        Ok(w) => w,
-        Err(e) => {
-            eprintln!("superlite-daemon: 워처 생성 실패: {e}");
-            return;
-        }
-    };
+    let mut watcher =
+        match notify::RecommendedWatcher::new(cb, notify::Config::default().with_follow_symlinks(false)) {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("superlite-daemon: 워처 생성 실패: {e}");
+                return;
+            }
+        };
     // WHY: 재귀 등록은 트리 전체를 걷는 블로킹 작업 — read 루프에서 하면 attach 직후의
     //      모든 요청(부팅이 기다리는 readDir 등)이 등록 완료까지 멈춘다.
     tokio::task::spawn_blocking(move || {
@@ -84,9 +72,7 @@ pub(crate) fn start_watcher(root: PathBuf, tx: UnboundedSender<String>, slot: Wa
 
     tokio::spawn(async move {
         loop {
-            let Some((path, kind)) = raw_rx.recv().await else {
-                return;
-            };
+            let Some((path, kind)) = raw_rx.recv().await else { return };
             // 첫 이벤트부터 75ms 창으로 모은다 (VS Code 의 집계 창과 동일한 감각)
             let deadline = tokio::time::Instant::now() + Duration::from_millis(75);
             let mut batch: HashMap<String, &'static str> = HashMap::new();

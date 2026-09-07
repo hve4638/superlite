@@ -3,7 +3,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { SerializeAddon } from '@xterm/addon-serialize';
 import '@xterm/xterm/css/xterm.css';
-import { setTerminalSerializer } from '../../model/terminal';
+import { setTerminalSerializer, setTerminalZoom, stepTerminalZoom, terminalView } from '../../model/terminal';
 import type { TerminalInstance } from '../../model/terminal';
 import { allTerminals } from '../../model/sessions';
 import { isShellSkippingChord } from '../../model/commands';
@@ -118,10 +118,26 @@ const CAMPBELL = {
   brightWhite: '#F2F2F2',
 };
 
+const ZOOM_KEYS: Record<string, 1 | -1 | 0> = { Equal: 1, NumpadAdd: 1, Minus: -1, NumpadSubtract: -1, Digit0: 0, Numpad0: 0 };
+function terminalFontSize(): number {
+  return Math.round((TERMINAL_FONT_SIZE * terminalView.zoom) / 100);
+}
+// 줌 변경 → 열려 있는 모든 xterm 에 적용. 보이는 것만 fit (숨은 것은 다음 마운트의 fit 이 잡는다)
+watch(
+  () => terminalView.zoom,
+  () => {
+    for (const [id, b] of bindings) {
+      if (!b.term) continue;
+      b.term.options.fontSize = terminalFontSize();
+      fitTerminal(id);
+    }
+  },
+);
+
 function open(inst: TerminalInstance, b: Binding): void {
   const term = new Terminal({
     fontFamily: TERMINAL_FONT_FAMILY,
-    fontSize: TERMINAL_FONT_SIZE,
+    fontSize: terminalFontSize(),
     lineHeight: TERMINAL_LINE_HEIGHT,
     cursorBlink: true,
     cursorStyle: 'bar', // Windows Terminal 기본
@@ -137,6 +153,16 @@ function open(inst: TerminalInstance, b: Binding): void {
     //      그 밖의 워크벤치 chord(Ctrl+W·Ctrl+B·Ctrl+S…)는 xterm 이 셸로 보내고 전파를 끊는다
     if (isShellSkippingChord(e)) return false;
     if (e.type !== 'keydown' || !e.ctrlKey || e.altKey || e.metaKey) return true;
+    // Ctrl+= / Ctrl+- / Ctrl+0 (숫자패드 포함): 터미널 줌 — 편집기 줌과 별개의 값. 전파를 끊어
+    // 워크벤치의 편집기 줌 chord 로 흘러가지 않게 한다 (Shift 얹은 앱 전역 줌은 위 skipShell 경로)
+    const zoom = !e.shiftKey ? ZOOM_KEYS[e.code] : undefined;
+    if (zoom !== undefined) {
+      if (zoom === 0) setTerminalZoom(100);
+      else stepTerminalZoom(zoom);
+      e.preventDefault();
+      e.stopPropagation();
+      return false;
+    }
     // Ctrl+C: 선택이 있으면 복사 + 선택 해제(인터럽트 아님), 없으면 셸로 (VS Code 동작)
     if (!e.shiftKey && e.code === 'KeyC' && term.hasSelection()) {
       copyText(term.getSelection(), () => term.focus());

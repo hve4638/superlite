@@ -2,7 +2,7 @@ import { reactive } from '@vue/reactivity';
 import type { ThinBackend } from '../backend/types';
 import { ctx, viewOf } from './ctx';
 
-export type ViewletId = 'explorer' | 'search' | 'scm' | 'remote';
+export type ViewletId = 'explorer' | 'search' | 'scm' | 'remote' | 'terminals';
 
 /** 창 이동 핸드오프의 레이아웃 몫 — 부위 크기·표시 여부만 (오버레이는 나르지 않는다) */
 export interface WorkbenchSnapshot {

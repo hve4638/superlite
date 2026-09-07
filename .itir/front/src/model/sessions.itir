@@ -66,6 +66,9 @@ export fn moveSession(id, to) {
 export fn rootOfBackend(backend) -> String? {
   role: 백엔드 핸들 → 그 세션 탭의 root — 강제 정리가 원격 host 를 알아내는 경로
 }
+export fn allSessionCtxs() -> SessionCtx[] {
+  role: 열려 있는 모든 세션 컨텍스트 — tmux.conf 저장을 접속 중인 데몬 전부에 적용할 때
+}
 export fn activeSessionCtx() -> SessionCtx? {
   role: 활성 세션 컨텍스트 (없으면 null)
 }

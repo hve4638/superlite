@@ -4,9 +4,11 @@
 // 강제 정리)이고 각자 v-if + props 로 띄운다. 상한(한 화면에 둘 이상 동시 필요)은 아직 아니다.
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 
-// secondaryLabel 이 있으면 3버튼 (Save / Don't Save / Cancel 류 — 에디터 닫기 확인)
-defineProps<{ message: string; detail: string; confirmLabel: string; secondaryLabel?: string }>();
-const emit = defineEmits<{ confirm: []; secondary: []; cancel: [] }>();
+// secondaryLabel 이 있으면 3버튼 (Save / Don't Save / Cancel 류 — 에디터 닫기 확인).
+// checkboxLabel 이 있으면 "다시 묻지 않기" 류 체크박스 — 확인 이벤트에 체크 여부를 실어 준다 (터미널 강제 종료)
+defineProps<{ message: string; detail?: string; confirmLabel: string; secondaryLabel?: string; checkboxLabel?: string }>();
+const emit = defineEmits<{ confirm: [checked: boolean]; secondary: []; cancel: [] }>();
+const checked = ref(false);
 
 const confirmBtn = ref<HTMLButtonElement | null>(null);
 
@@ -18,7 +20,7 @@ function onKeydown(e: KeyboardEvent): void {
   } else if (e.key === 'Enter') {
     e.preventDefault();
     e.stopPropagation();
-    emit('confirm');
+    emit('confirm', checked.value);
   }
 }
 
@@ -36,11 +38,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown, true));
         <span class="codicon codicon-warning" />
         <div class="dialog-text">
           <div class="dialog-message">{{ message }}</div>
-          <div class="dialog-detail">{{ detail }}</div>
+          <div v-if="detail" class="dialog-detail">{{ detail }}</div>
+          <label v-if="checkboxLabel" class="dialog-checkbox"><input v-model="checked" type="checkbox" />{{ checkboxLabel }}</label>
         </div>
       </div>
       <div class="dialog-actions">
-        <button ref="confirmBtn" class="dialog-button primary" @click="emit('confirm')">
+        <button ref="confirmBtn" class="dialog-button primary" @click="emit('confirm', checked)">
           {{ confirmLabel }}
         </button>
         <button v-if="secondaryLabel" class="dialog-button" @click="emit('secondary')">
@@ -93,6 +96,14 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown, true));
   line-height: 18px;
   opacity: 0.9;
   user-select: text;
+}
+.dialog-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  cursor: pointer;
+  user-select: none;
 }
 .dialog-actions {
   display: flex;

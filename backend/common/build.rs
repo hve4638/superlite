@@ -21,21 +21,16 @@ fn main() {
             let dirty = git(&["status", "--porcelain", "--untracked-files=no"])
                 .map(|s| !s.is_empty())
                 .unwrap_or(false);
-            if dirty {
-                format!("{h}-dirty")
-            } else {
-                h
-            }
+            if dirty { format!("{h}-dirty") } else { h }
         }
         None => "unknown".into(), // git 부재·tarball — 버전만으로 식별한다
     };
     if let Some(dir) = git(&["rev-parse", "--absolute-git-dir"]) {
         println!("cargo:rerun-if-changed={dir}/HEAD");
         // 워크트리의 HEAD 는 refs/heads/<branch> 를 가리킨다 — ref 파일은 공용 git dir 에 있다
-        if let (Some(common), Some(r)) = (
-            git(&["rev-parse", "--git-common-dir"]),
-            git(&["symbolic-ref", "-q", "HEAD"]),
-        ) {
+        if let (Some(common), Some(r)) =
+            (git(&["rev-parse", "--git-common-dir"]), git(&["symbolic-ref", "-q", "HEAD"]))
+        {
             println!("cargo:rerun-if-changed={common}/{r}");
             println!("cargo:rerun-if-changed={common}/packed-refs");
         }
@@ -45,11 +40,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SUPERLITE_CHANNEL");
     let channel = std::env::var("SUPERLITE_CHANNEL").unwrap_or_default();
     println!("cargo:rustc-env=SUPERLITE_CHANNEL={channel}");
-    let slug = if channel.is_empty() {
-        "superlite".into()
-    } else {
-        format!("superlite-{channel}")
-    };
+    let slug = if channel.is_empty() { "superlite".into() } else { format!("superlite-{channel}") };
     println!("cargo:rustc-env=SUPERLITE_SLUG={slug}");
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

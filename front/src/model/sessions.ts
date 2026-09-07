@@ -121,6 +121,11 @@ export function rootOfBackend(backend: ThinBackend): string | null {
 }
 
 /** 활성 세션 컨텍스트 (없으면 null) */
+/** 열려 있는 모든 세션 컨텍스트 — tmux.conf 저장을 접속 중인 데몬(로컬·원격) 전부에 적용할 때 */
+export function allSessionCtxs(): SessionCtx[] {
+  return [...ctxs.values()];
+}
+
 export function activeSessionCtx(): SessionCtx | null {
   return ctxs.get(sessions.activeId) ?? null;
 }

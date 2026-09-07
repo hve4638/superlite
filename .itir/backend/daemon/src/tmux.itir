@@ -1,0 +1,41 @@
+import { err } from '.'
+
+role: 내장 tmux 통합 (ticket term-list-reconnect, ws decision/process-topology.md 2026-09-07 개정) — 터미널의 "꺼지지 않는 실행 요소"를 tmux 서버에 위임한다. 데몬은 PTY 안에서 tmux 클라이언트(attach-session)를 띄울 뿐, 셸 생존·스크롤백·다중 attach·detach 는 tmux 서버 몫. 세션 원장도 tmux 다 — 별도 DB 없이 세션 환경변수 SUPERLITE_TMUX_WORKSPACE_PATH(ENV_ROOT)가 워크스페이스를 가리키고 기본 키는 #{session_id}. 서버는 -L <SLUG> 전용 소켓(사용자의 tmux 서버·~/.tmux.conf 와 격리, SUPERLITE_TMUX_SOCK 이면 -S — check 하니스), 설정은 내장 base.conf(tmux-base.conf — 로그인 셸·TMUX/TMUX_PANE 제거·SUPERLITE_TMUX_SOCKET·status off·prefix None·mouse on 등)를 캐시 폴더에 써 두고 -f 로, 끝에 사용자 conf(user.conf — 클라이언트 tmux.conf 를 tmuxConf 로 받은 것)를 source. unix 전용 — Windows 는 Unsupported (터미널 보존 없음, 사용자 결정)
+
+export val ENV_ROOT
+export class Mode {
+  role: 이 데몬의 터미널 방식 — Tmux{bin} | Plain{error?}(unix 인데 tmux 부재·실패 — 경고와 함께 PTY 직접) | Unsupported(Windows)
+}
+export fn mode() -> Mode {
+  role: 데몬당 한 번 판정(OnceLock) — Windows 면 Unsupported, SUPERLITE_TMUX=0 이면 Plain(경고 없음, 검증용), 아니면 후보(SUPERLITE_TMUX_BIN → 데몬 옆 tmux → 데몬 옆 tmux-<os>-<arch> → PATH)를 tmux -V 로 확인
+}
+export fn mode_json() -> Value {
+  role: attach 응답 terminal 필드 {mode, error?} — 프론트가 사이드바 아이콘·경고 배지를 정한다
+}
+export fn user_conf_path() -> PathBuf
+export fn base_args() -> args {
+  role: 공통 앞부분 -L/-S 소켓 + -f base.conf (base.conf 재기록 포함)
+}
+export fn new_session(bin, root, env) -> id_and_name {
+  role: 새 tmux 세션 detached 로 — 이름은 <폴더명>-<n> (충돌 시 n 증가), cwd root, -e 로 세션 환경변수(셸 심 좌표·ENV_ROOT). -P -F 로 session_id 를 받아 돌려준다
+}
+export fn name_of(bin, id) -> name {
+  role: attach 시 프론트 탭 제목용 세션 이름 (display-message) — 실패면 id
+}
+export fn list(bin, root?) -> items[] {
+  role: 살아 있는 세션 [{id, name, root, attached, activity(ms), created(ms), command}] — ls -F 뒤 세션마다 show-environment 로 ENV_ROOT 를 붙여 root 로 거른다 (없는 세션은 우리 것이 아님). 서버 없음은 빈 목록
+}
+export fn detach_args(tty) -> args {
+  role: 특정 클라이언트(그 pty tty)를 clean detach 하는 인자 — 탭 닫기 정리(term::kill_term)용
+}
+export fn bin() -> Path? {
+  role: tmux 바이너리 경로 (Tmux 모드일 때만) — kill_term 의 detach 명령용
+}
+export fn wait_client_gone(bin, tty, timeout) {
+  role: tty 의 클라이언트가 tmux 목록에서 사라질 때까지 블로킹 (list-clients 폴링, timeout). detach-client 뒤 이 시점까지 기다린 뒤에야 pty(master)를 닫는다 — 클라이언트 프로세스가 종료해도 서버가 detach 를 끝내기 전에 master 를 닫으면 그 pane(셸)까지 죽는다 (실측 2026-09-07)
+}
+export fn kill(bin, id)
+export fn rename(bin, id, name)
+export fn apply_conf(bin, content) -> message {
+  role: 클라이언트 tmux.conf 를 user.conf 로 기록하고 서버가 떠 있으면 source-file — 반환은 tmux 가 낸 경고·오류 텍스트(문법 오류는 실패가 아니라 프론트 알림감), 서버 없음은 빈 문자열
+}

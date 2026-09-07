@@ -110,6 +110,26 @@ export interface TerminalSession {
   /** 로컬 핸들만 놓는다 — 데몬 터미널은 죽이지 않는다 (다른 창의 세션이 adoptTerminal 로
    *  이어받는 탭 이동 전용). 옵셔널 — mock·empty 는 이동 대상이 아니다 */
   release?(): void;
+  /** 내장 tmux (와이어 v17): 이 PTY 가 붙은 tmux 세션 — 생성·attach 직후 한 번. info 가 null 이면
+   *  tmux 를 못 써 일반 터미널로 대체된 것이고 error 가 사유 (사이드바 경고 배지) */
+  onTmux?(cb: (info: { id: string; name: string } | null, error?: string) => void): void;
+}
+
+/** 데몬의 터미널 방식 (attach 응답, 와이어 v17) — tmux: 내장 tmux 서버(세션 생존·목록·다중 attach),
+ *  plain: unix 인데 tmux 를 못 써 PTY 직접(경고 배지), unsupported: Windows (아이콘 자체가 없다) */
+export type TerminalMode = 'tmux' | 'plain' | 'unsupported';
+
+/** 살아 있는 tmux 세션 하나 (listTerminals 항목) — id 는 tmux session id(`$3`, 이름을 바꿔도 불변),
+ *  root 는 세션 환경변수 SUPERLITE_TMUX_WORKSPACE_PATH, attached 는 붙은 클라이언트 수, activity·
+ *  created 는 unix ms, command 는 활성 패널의 현재 명령 */
+export interface TerminalInfo {
+  id: string;
+  name: string;
+  root: string;
+  attached: number;
+  activity: number;
+  created: number;
+  command: string;
 }
 
 /** 원격 접속 단계 (relay 의 connectStage 이벤트) — ssh: 원격 정보 조회(인증 포함) → helper: 헬퍼
@@ -194,7 +214,19 @@ export interface ThinBackend {
   gitBranches(repo: string): Promise<string[]>;
   /** 브랜치 전환 (git checkout). 충돌 등 실패는 reject */
   gitCheckout(repo: string, branch: string): Promise<void>;
-  createTerminal(cols: number, rows: number): TerminalSession;
+  /** attach (와이어 v17): 새 셸 대신 기존 tmux 세션(TerminalInfo.id)에 붙는다 — 같은 세션을 여러
+   *  탭·창이 동시에 볼 수 있다 */
+  createTerminal(cols: number, rows: number, attach?: string): TerminalSession;
+  /** 살아 있는 tmux 세션 목록 (와이어 v17, 옵셔널 — WsBackend 만). 기본은 이 워크스페이스 것, all 이면
+   *  이 서버의 전부. plain·unsupported 데몬은 빈 배열 */
+  listTerminals?(all?: boolean): Promise<TerminalInfo[]>;
+  /** tmux 세션 종료 (강제 닫기 — 실행 중인 프로세스가 죽는다). 탭 닫기는 detach 라 세션이 남는다 */
+  killTerminal?(id: string): Promise<void>;
+  renameTerminal?(id: string, name: string): Promise<void>;
+  /** 클라이언트 tmux.conf 를 이 데몬에 적용 — 반환은 tmux 가 낸 경고·오류 문자열 (없으면 '') */
+  applyTmuxConf?(content: string): Promise<string>;
+  /** 데몬의 터미널 방식 구독 — attach 응답마다 (재접속 포함). error 는 plain 의 사유 */
+  onTerminalMode?(cb: (mode: TerminalMode, error: string | null) => void): void;
   /**
    * 기존 데몬 터미널을 이 연결의 핸들로 잡는다 (탭을 다른 창으로 옮기기, 옵셔널 — WsBackend 만).
    * term 만 주면 같은 세션이 이미 소유한 터미널(세션 탭 분리 — 같은 session id 재-attach)의

@@ -1,6 +1,5 @@
 // 재접속 스모크 — 같은 session id 로 다시 붙으면 터미널이 살아 있고, 끊김 중 출력이
-// 버퍼에서 flush 되며, 백엔드(앱)가 죽어도 터미널 데몬(termd)이 터미널을 지켜 새 백엔드가
-// 이어받는다 (ticket terminal-daemon-split). 터미널이 다 닫히면 termd 도 유휴 종료한다.
+// 버퍼에서 flush 되며, 세션 grace 를 넘기면 회수된다.
 //   cargo build --workspace 후: node backend/relay/check-reconnect.mjs
 import assert from 'node:assert';
 import { spawn } from 'node:child_process';
@@ -21,12 +20,13 @@ mkdirSync(wsRoot);
 const env = {
   ...process.env,
   SUPERLITE_SOCK: join(dir, 'daemon.sock'),
-  SUPERLITE_TERM_SOCK: join(dir, 'term.sock'),
   SUPERLITE_HTTP: '127.0.0.1:18793',
-  SUPERLITE_GRACE_SECS: '2', // 백엔드 제어 연결이 있는 한 안 죽는다 — 유휴 종료 확인용으로 짧게
+  SUPERLITE_GRACE_SECS: '5',
+  SUPERLITE_TMUX: '0', // raw PTY 의미(배압·detach 버퍼)를 재는 검사 — 내장 tmux 는 check-tmux.mjs 가 따로 본다
+  SUPERLITE_SESSION_GRACE_SECS: '2', // reaper 주기 5s — 회수 확인은 최대 ~7s 대기
 };
 const bin = fileURLToPath(new URL('../../target/debug/superlite-backend', import.meta.url));
-let backend = spawn(bin, [wsRoot], { env, stdio: 'ignore' });
+const backend = spawn(bin, [wsRoot], { env, stdio: 'ignore' });
 backend.on('error', () => {});
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -82,36 +82,35 @@ try {
   assert.ok(c2.data.join('').includes('again-3'), `재접속 후 echo: ${JSON.stringify(c2.data)}`);
   c2.ws.close();
 
-  // 4) 백엔드(앱)가 죽어도 터미널은 산다 — 파일 데몬은 grace 뒤 물러나지만 termd 는 살아
-  //    있는 터미널을 가진 세션이 있는 한 남는다. 새 백엔드가 같은 세션으로 붙으면 이어받는다
-  backend.kill('SIGKILL');
-  await sleep(4000);
-  assert.ok(!existsSync(env.SUPERLITE_SOCK), '파일 데몬은 백엔드 사망 후 유휴 종료해야 한다');
-  assert.ok(existsSync(env.SUPERLITE_TERM_SOCK), '터미널 데몬은 살아 있는 터미널이 있어 남아야 한다');
-  backend = spawn(bin, [wsRoot], { env, stdio: 'ignore' });
-  backend.on('error', () => {});
+  // 4) 세션 grace(2s) + reaper 주기(5s) 를 넘기면 터미널은 회수 — 새 attach 는 빈 세션.
+  //    resumed=false 가 프론트의 "세션 잃음" 신호다 (죽은 터미널 정리 근거)
+  await sleep(8000);
   const c3 = await connect('s1');
-  assert.strictEqual((await c3.attach).resumed, true, '새 백엔드의 attach 는 resumed=true (termd 세션)');
-  await sleep(300);
-  c3.send('termWrite', { term: 1, data: 'echo survive-$((3+3))\r' });
+  assert.strictEqual((await c3.attach).resumed, false, '회수 후 attach 는 resumed=false');
+  c3.send('termWrite', { term: 1, data: 'echo zombie-$((3+3))\r' });
   await sleep(700);
-  assert.ok(c3.data.join('').includes('survive-6'), `백엔드 교체 후 같은 셸: ${JSON.stringify(c3.data)}`);
-
-  // 5) 터미널을 닫으면 세션이 비고, 백엔드까지 죽으면 termd 도 유휴 종료한다 (소켓 파일 제거가
-  //    graceful 종료의 증거). 살아 있는 터미널이 termd 를 붙드는 조건의 반대편 검증이다
-  c3.send('disposeTerminal', { term: 1 });
-  await sleep(300);
+  assert.ok(!c3.data.join('').includes('zombie-6'), `회수 후 유령 응답: ${JSON.stringify(c3.data)}`);
+  // 같은 id 로 새 터미널은 만들 수 있어야 한다 (빈 세션의 정상 동작)
+  c3.send('createTerminal', { term: 1, cols: 80, rows: 24 });
+  await sleep(700);
+  c3.send('termWrite', { term: 1, data: 'echo fresh-$((4+4))\r' });
+  await sleep(700);
+  assert.ok(c3.data.join('').includes('fresh-8'), `회수 후 새 터미널: ${JSON.stringify(c3.data)}`);
   c3.ws.close();
+
+  // 5) 유휴 종료: 백엔드가 죽고 세션까지 회수되면 데몬은 자진 종료한다 (소켓 파일 제거가
+  //    graceful 종료의 증거). detach 세션이 있는 동안은 안 죽는 조건의 반대편 검증이다.
   backend.kill();
+  const sock = env.SUPERLITE_SOCK;
   let gone = false;
   for (let i = 0; i < 40; i++) {
     await sleep(500);
-    if (!existsSync(env.SUPERLITE_TERM_SOCK)) {
+    if (!existsSync(sock)) {
       gone = true;
       break;
     }
   }
-  assert.ok(gone, '터미널 데몬이 유휴 종료하지 않았다 (터미널 0 인데 잔류)');
+  assert.ok(gone, '데몬이 유휴 종료하지 않았다 (세션 회수 후에도 잔류)');
 
   console.log('reconnect check: OK');
 } finally {

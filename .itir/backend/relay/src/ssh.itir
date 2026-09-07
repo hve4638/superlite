@@ -50,7 +50,7 @@ fn remote_daemon_bin(info) -> path {
   role: 원격 OS·arch 용 데몬 바이너리 — 로컬과 같은 규칙(lib daemon_bin_for)으로 앱 옆 daemon/<os>-<arch> 를 고른다 (Windows 배포 세트가 musl 정적 daemon/linux-x86_64 를 동봉 — build.sh). 없으면 파일명·위치를 담은 오류
 }
 fn ensure_remote_bin(host, opts, info, tx?) -> remote_path {
-  role: 원격 헬퍼(=데몬 바이너리) 배치 보장 — $HOME/.cache/<SLUG>/bin/<내용해시>/ (채널별) 에 없으면 remote_daemon_bin 산출물을 ssh stdin 으로 업로드. 해시 키라 재빌드=재배포·빌드 혼용 없음. 단계 'helper'(존재 확인)·'upload'(bytes 동봉, 없을 때만) 통보
+  role: 원격 헬퍼(=데몬 바이너리) 배치 보장 — $HOME/.cache/<SLUG>/bin/<내용해시>/ (채널별) 에 없으면 remote_daemon_bin 산출물을 ssh stdin 으로 업로드. 동봉 tmux(crate tmux_bin_for)가 있으면 같은 폴더에 `tmux` 로 함께 (데몬이 자기 옆에서 먼저 찾는다, 와이어 v17). 존재 확인은 exec 하나로 둘 다(D·T 표식). 해시 키라 재빌드=재배포·빌드 혼용 없음. 단계 'helper'(존재 확인)·'upload'(bytes 동봉, 없을 때만) 통보
 }
 fn clean_remote(host) -> report {
   role: 원격 문제 데몬 정리 — probe_remote → ensure_remote_bin → `ssh host superlite-daemon --clean` exec, stdout 반환. 헬퍼가 곧 원격의 데몬이므로 정리 명령도 같은 바이너리

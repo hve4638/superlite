@@ -6,8 +6,11 @@
 #   superlite.exe, WebView2Loader.dll
 #   daemon/windows-x86_64.exe   앱이 로컬에서 띄우는 데몬
 #   daemon/linux-x86_64         musl 정적 linux 데몬 — linux 원격(ssh)에 올려 실행
+#   daemon/tmux-linux-x86_64    musl 정적 tmux (고정 버전 릴리스 바이너리) — 내장 터미널 서버, 데몬과 함께
+#                               원격에 올린다 (ticket term-list-reconnect). Windows 는 tmux 없음 (터미널 보존 없음)
 # 데몬은 앱 옆 daemon/<os>-<arch>[.exe] 한 규칙으로 찾는다 (backend/relay lib.rs
-# daemon_bin_for — 이름은 rust std::env::consts::OS·ARCH 값 그대로).
+# daemon_bin_for — 이름은 rust std::env::consts::OS·ARCH 값 그대로). tmux 는 daemon/tmux-<os>-<arch>
+# (relay tmux_bin_for — 원격 업로드용. 데몬 자신은 자기 옆의 tmux / tmux-<os>-<arch> / PATH 순으로 찾는다).
 # 어느 빌드인지(버전·커밋·와이어)는 끝의 echo 로 — 방금 만든 데몬 자신의 --version.
 # 사전 준비: rustup target add x86_64-pc-windows-gnu x86_64-unknown-linux-musl
 #           cargo install tauri-cli --version '^2' --locked ; apt install nsis (리눅스 makensis 로 cross 생성)
@@ -68,6 +71,20 @@ if [ -n "$channel" ]; then
     product=$(sed -n 's/.*"productName": *"\([^"]*\)".*/\1/p' "$overlay")
     tauri_cfg="$tauri_cfg --config tauri.$channel.conf.json"
     export SUPERLITE_CHANNEL=$channel
+fi
+
+# 정적 tmux — mjakob-gh/build-static-tmux 릴리스(musl·ncurses·libevent 정적, ISC/BSD/MIT — THIRD-PARTY.md)
+# 를 고정 버전·해시로 내려받아 target/tmux/ 에 둔다. 버전을 올릴 때는 해시와 THIRD-PARTY.md 도 함께
+tmux_ver=3.7b
+tmux_sha=a3b6f89a3630655204c322e8960226a0132f225aba3ab2677812ec9b04567c27
+tmux_gz=target/tmux-$tmux_ver.linux-amd64.gz
+tmux_bin=target/tmux/tmux-linux-x86_64
+if [ ! -f "$tmux_bin" ]; then
+    mkdir -p target/tmux
+    [ -f "$tmux_gz" ] || curl -fsSL -o "$tmux_gz" "https://github.com/mjakob-gh/build-static-tmux/releases/download/v$tmux_ver/tmux.linux-amd64.gz"
+    echo "$tmux_sha  $tmux_gz" | sha256sum -c - >/dev/null || { echo "tmux.linux-amd64.gz 해시 불일치" >&2; rm -f "$tmux_gz"; exit 2; }
+    gunzip -c "$tmux_gz" > "$tmux_bin"
+    chmod +x "$tmux_bin"
 fi
 
 (cd front && npm run build)

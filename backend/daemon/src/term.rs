@@ -25,6 +25,25 @@ pub(crate) struct Term {
     budget: Arc<InputBudget>,
     /// 출력 경로 — 리더·쓰기 스레드가 매 전송마다 읽는다. adopt(세션 간 이동)가 갈아끼운다
     route: Arc<Mutex<Route>>,
+    /// tmux 클라이언트면 이 pty 의 슬레이브 tty (detach-client -t 대상). None = plain (SIGHUP).
+    /// tmux 는 SIGHUP·master 급종료가 그 pane(셸)까지 죽여서(실측 2026-09-07) detach-client 로 clean
+    /// detach 하고, 서버가 그 detach 를 처리한 뒤에야 master 를 닫는다 (tmux::wait_client_gone)
+    detach: Option<String>,
+}
+
+/// master pty 의 슬레이브 tty 경로 (detach-client -t 대상) — ptsname 은 정적 버퍼라 직렬화한다.
+/// unix 전용 (Windows 는 tmux 가 없어 detach 대상도 없다)
+#[cfg(unix)]
+fn pts_name(fd: std::os::unix::io::RawFd) -> Option<String> {
+    use std::sync::Mutex;
+    static LK: Mutex<()> = Mutex::new(());
+    let _g = LK.lock().unwrap();
+    // SAFETY: fd 는 열린 master pty. 반환 포인터는 정적 버퍼 — 락 안에서 즉시 복사한다
+    let p = unsafe { libc::ptsname(fd) };
+    if p.is_null() {
+        return None;
+    }
+    unsafe { std::ffi::CStr::from_ptr(p) }.to_str().ok().map(str::to_string)
 }
 
 pub(crate) type Terms = Arc<Mutex<HashMap<u64, Term>>>;
@@ -50,13 +69,7 @@ impl Route {
 /// to_id 로 붙이고 출력 경로를 to 의 sink 로 돌린다. 배압 카운터는 리셋 — 받는 쪽 연결은
 /// 0 에서 세기 시작한다. root 일치 검사는 호출자(main) 몫.
 /// 락 순서: from → (놓고) route → (놓고) to. terms 락 아래에서 route 를 잡지 않는다
-pub(crate) fn adopt(
-    from: &Terms,
-    from_id: u64,
-    to: &Terms,
-    to_id: u64,
-    to_sink: &Sink,
-) -> Result<(), String> {
+pub(crate) fn adopt(from: &Terms, from_id: u64, to: &Terms, to_id: u64, to_sink: &Sink) -> Result<(), String> {
     if to.lock().unwrap().contains_key(&to_id) {
         return Err("term id 충돌".into());
     }
@@ -97,10 +110,7 @@ pub(crate) struct InputBudget {
 
 impl InputBudget {
     fn new() -> Arc<Self> {
-        Arc::new(InputBudget {
-            bytes: AtomicUsize::new(0),
-            dropping: AtomicBool::new(false),
-        })
+        Arc::new(InputBudget { bytes: AtomicUsize::new(0), dropping: AtomicBool::new(false) })
     }
 
     /// 터미널·전역 상한 안에서 n 바이트 확보 — 초과면 되돌리고 false (폐기 신호)
@@ -154,13 +164,7 @@ struct FlowState {
 
 impl Flow {
     fn new() -> Arc<Self> {
-        Arc::new(Flow {
-            state: Mutex::new(FlowState {
-                unacked: 0,
-                dead: false,
-            }),
-            cv: Condvar::new(),
-        })
+        Arc::new(Flow { state: Mutex::new(FlowState { unacked: 0, dead: false }), cv: Condvar::new() })
     }
 
     /// 보낸 만큼 더하고, high 를 넘겼으면 low 이하로 내려올 때까지 대기
@@ -243,11 +247,31 @@ pub(crate) fn sink_send(sink: &Sink, msg: String, evictable: bool) {
 
 // WHY: portable-pty 의 kill 은 SIGHUP 후 최대 200ms 를 재우며 대기한다 — read 루프/워커를
 //      막지 않게 스레드로 보내고, wait 까지 해서 좀비를 남기지 않는다.
+// tmux 클라이언트는 SIGHUP 대신 master(pty) 를 닫아 EOF 로 물러나게 한다 — SIGHUP 은 클라이언트를
+// 급사시켜 tmux 의 그 pane(셸)까지 죽이는데(실측 2026-09-07), master 닫힘은 tmux 가 clean detach 로
+// 처리해 세션·셸이 산다. plain 은 종전대로 SIGHUP 으로 셸을 끝낸다.
 pub(crate) fn kill_term(mut t: Term) {
     t.flow.kill(); // 배압 대기 중인 리더를 깨워야 스레드가 회수된다
     std::thread::spawn(move || {
-        let _ = t.child.kill();
-        let _ = t.child.wait();
+        // WHY: tmux 는 detach-client 로 먼저 clean detach 한다 — master(pty)나 writer 를 먼저 닫으면
+        //      클라이언트가 아직 붙은 채 HUP 을 받아 급종료되고, tmux 가 그 pane(셸)까지 destroy
+        //      한다(실측 2026-09-07). clean detach 는 tmux 세션·셸을 살린다. detach 는 클라이언트를
+        //      스스로 종료시키므로, wait 로 종료를 확인한 뒤에야 t(master·writer)를 떨군다.
+        match &t.detach {
+            Some(tty) => {
+                if let Some(bin) = crate::tmux::bin() {
+                    let _ = std::process::Command::new(bin).args(crate::tmux::detach_args(tty)).output();
+                    let _ = t.child.wait(); // 클라이언트 프로세스 종료
+                    // 서버가 detach 를 완전히 처리(클라이언트 목록에서 제거)한 뒤에야 master 를 닫는다
+                    crate::tmux::wait_client_gone(bin, tty, std::time::Duration::from_secs(2));
+                }
+            }
+            None => {
+                let _ = t.child.kill(); // plain: SIGHUP 으로 셸을 끝낸다
+                let _ = t.child.wait();
+            }
+        }
+        drop(t); // master·writer 를 닫는다 (tmux 는 클라이언트가 이미 나갔으므로 무영향)
     });
 }
 
@@ -269,15 +293,13 @@ pub(crate) fn handle_term(
             }
             let cols = p["cols"].as_u64().unwrap_or(80) as u16;
             let rows = p["rows"].as_u64().unwrap_or(24) as u16;
-            if let Err(e) = spawn_term(id, cols, rows, root, session, terms.clone(), sink.clone()) {
+            // attach (와이어 v17): 기존 tmux 세션 id — 사이드바 목록·레이아웃 복원이 준다
+            let attach = p["attach"].as_str();
+            if let Err(e) = spawn_term(id, cols, rows, root, session, attach, terms.clone(), sink.clone()) {
                 let msg = json!({"event": "termData", "term": id, "data": format!("pty 생성 실패: {e}\r\n")});
                 sink_send(sink, msg.to_string(), true);
                 // code 없는 termExit = 비정상 — 프론트가 탭을 유지해 위 에러 출력을 보여준다
-                sink_send(
-                    sink,
-                    json!({"event": "termExit", "term": id}).to_string(),
-                    false,
-                );
+                sink_send(sink, json!({"event": "termExit", "term": id}).to_string(), false);
             }
         }
         "termWrite" => {
@@ -336,23 +358,49 @@ pub(crate) fn handle_term(
     }
 }
 
-fn spawn_term(
-    id: u64,
-    cols: u16,
-    rows: u16,
-    root: &Path,
-    session: Option<&str>,
-    terms: Terms,
-    sink: Sink,
-) -> Result<(), String> {
-    let pty = native_pty_system()
-        .openpty(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .map_err(err)?;
+/// PTY 에서 돌릴 프로그램 — tmux 방식이면 tmux 클라이언트(attach-session), 아니면 셸 직접.
+/// tmux 새 세션은 여기서 detached 로 먼저 만든다 (id 를 알아야 termTmux 로 프론트에 알린다).
+/// tmux 방식인데 세션 생성·조회가 실패하면 셸 직접 실행으로 대체하고 사유를 돌려준다 (경고용)
+struct Program {
+    cmd: CommandBuilder,
+    /// Some((id, name)) = tmux 세션에 붙는다. None = plain
+    tmux: Option<(String, String)>,
+    /// tmux 방식이었는데 plain 으로 대체된 사유
+    fallback: Option<String>,
+}
+
+fn program(root: &Path, session: Option<&str>, attach: Option<&str>) -> Program {
+    // 셸 심(`superlite <path>`, ticket cli-open-command)이 이 데몬·세션을 찾는 좌표 (와이어 v9).
+    // SUPERLITE_SOCK 은 common 의 우회 변수와 같은 이름 — 셸 안에서 띄운 백엔드·심이 socket_path()
+    // 만으로 이 데몬(격리 인스턴스 포함)에 붙는다. 원격에서는 원격 데몬이 만드니 자연히 원격 소켓
+    let mut env: Vec<(&str, String)> =
+        vec![("SUPERLITE_SOCK", superlite_common::socket_path().to_string_lossy().into_owned())];
+    if let Some(sid) = session {
+        env.push(("SUPERLITE_SESSION", sid.to_string()));
+    }
+    let mut fallback = None;
+    if let crate::tmux::Mode::Tmux { bin } = crate::tmux::mode() {
+        // tmux 세션 환경변수로 — 새 창·패널의 셸에 상속되고, 워크스페이스 역방향 조회 키가 된다
+        env.push((crate::tmux::ENV_ROOT, root.to_string_lossy().into_owned()));
+        let target = match attach {
+            Some(id) => Ok((id.to_string(), crate::tmux::name_of(bin, id))),
+            None => crate::tmux::new_session(bin, root, &env),
+        };
+        match target.and_then(|t| crate::tmux::base_args().map(|a| (t, a))) {
+            Ok(((id, name), args)) => {
+                let mut cmd = CommandBuilder::new(bin);
+                cmd.args(args);
+                cmd.args(["attach-session", "-t", &id]);
+                cmd.cwd(root);
+                cmd.env("TERM", "xterm-256color");
+                // 데몬이 tmux 안에서 떴어도 클라이언트가 중첩 경고를 내지 않게
+                cmd.env_remove("TMUX");
+                cmd.env_remove("TMUX_PANE");
+                return Program { cmd, tmux: Some((id, name)), fallback: None };
+            }
+            Err(e) => fallback = Some(e),
+        }
+    }
     #[cfg(unix)]
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
     // Windows 는 $SHELL 규약이 없다 — ComSpec(cmd.exe)이 대응물. ponytail: PowerShell 선호는 설정 몫
@@ -363,34 +411,47 @@ fn spawn_term(
     // ConPTY 세계엔 TERM 규약이 없다 — 심어두면 Windows 태생 도구들이 오판한다
     #[cfg(unix)]
     cmd.env("TERM", "xterm-256color");
-    // 요청자(셸 심 `superlite <path>`, ticket cli-open-command)가 데몬·세션을 찾는 좌표
-    // (와이어 v9). SUPERLITE_SOCK·SUPERLITE_TERM_SOCK 은 common 의 우회 변수와 같은 이름 —
-    // 셸 안에서 띄운 백엔드·심이 socket_path()/term_socket_path() 만으로 이 데몬 쌍(격리
-    // 인스턴스 포함)에 붙는다. frontRequest 는 termd(TERM_SOCK)로 온다.
-    // 원격에서는 원격 termd 가 PTY 를 만드므로 자연히 원격 소켓이 된다
-    cmd.env(
-        "SUPERLITE_SOCK",
-        superlite_common::socket_path().as_os_str(),
-    );
-    cmd.env(
-        "SUPERLITE_TERM_SOCK",
-        superlite_common::term_socket_path().as_os_str(),
-    );
-    if let Some(sid) = session {
-        cmd.env("SUPERLITE_SESSION", sid);
+    for (k, v) in env {
+        cmd.env(k, v);
     }
+    Program { cmd, tmux: None, fallback }
+}
+
+fn spawn_term(
+    id: u64,
+    cols: u16,
+    rows: u16,
+    root: &Path,
+    session: Option<&str>,
+    attach: Option<&str>,
+    terms: Terms,
+    sink: Sink,
+) -> Result<(), String> {
+    let pty = native_pty_system()
+        .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
+        .map_err(err)?;
+    let Program { cmd, tmux, fallback } = program(root, session, attach);
+    // tmux 클라이언트는 정리 시 detach-client -t <이 pty tty> 로 clean detach 한다 (kill_term).
+    // tty 를 못 구하면 detach 없음 → SIGHUP 폴백 (그 경우 pane 이 죽지만 tty 부재는 드물다)
+    #[cfg(unix)]
+    let detach = tmux.as_ref().and_then(|_| pty.master.as_raw_fd()).and_then(pts_name);
+    #[cfg(not(unix))]
+    let detach: Option<String> = None;
     let child = pty.slave.spawn_command(cmd).map_err(err)?;
+    // termTmux (와이어 v17): 프론트가 탭 제목·사이드바 대조·강제 종료 대상으로 쓰는 세션 id, 또는
+    // tmux 실패로 plain 이 된 사유 (경고 배지). 첫 출력보다 먼저 나간다
+    if let Some((tid, name)) = &tmux {
+        sink_send(&sink, json!({"event": "termTmux", "term": id, "id": tid, "name": name}).to_string(), false);
+    } else if let Some(e) = fallback {
+        sink_send(&sink, json!({"event": "termTmux", "term": id, "error": e}).to_string(), false);
+    }
     let mut writer = pty.master.take_writer().map_err(err)?;
     let mut reader = pty.master.try_clone_reader().map_err(err)?;
     let flow = Flow::new();
     // 터미널별 쓰기 스레드 — Term drop(dispose·회수) 으로 채널이 닫히면 끝난다.
     // 막힌 write 중이라면 child kill 후 pty 쪽 에러로 풀린다
     let budget = InputBudget::new();
-    let route = Arc::new(Mutex::new(Route {
-        id,
-        sink,
-        terms: terms.clone(),
-    }));
+    let route = Arc::new(Mutex::new(Route { id, sink, terms: terms.clone() }));
     let (input, input_rx) = std::sync::mpsc::channel::<String>();
     {
         let (budget, route) = (budget.clone(), route.clone());
@@ -420,17 +481,10 @@ fn spawn_term(
     }
     // WHY: 리더 스레드가 종료 시 맵에서 자기 항목을 지우므로, 스레드 시작 전에 등록해야
     //      즉사한 셸이 맵에 유령으로 남는 race 가 없다
-    terms.lock().unwrap().insert(
-        id,
-        Term {
-            input,
-            master: pty.master,
-            child,
-            flow: flow.clone(),
-            budget,
-            route: route.clone(),
-        },
-    );
+    terms
+        .lock()
+        .unwrap()
+        .insert(id, Term { input, master: pty.master, child, flow: flow.clone(), budget, route: route.clone(), detach });
     // WHY: portable-pty 의 reader 는 블로킹 — 전용 스레드에서 읽어 writer 채널로 넘긴다
     std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
@@ -447,11 +501,7 @@ fn spawn_term(
                 // WHY: 배압 단위는 프론트의 data.length(UTF-16)와 같아야 ack 가 상쇄된다
                 let chars = text.encode_utf16().count() as u64;
                 let (id, sink) = Route::snapshot(&route);
-                sink_send(
-                    &sink,
-                    json!({"event": "termData", "term": id, "data": text}).to_string(),
-                    true,
-                );
+                sink_send(&sink, json!({"event": "termData", "term": id, "data": text}).to_string(), true);
                 // 미ack 이 고수위를 넘으면 여기서 멈춘다 — PTY 커널 버퍼가 차면 셸도 멈춘다
                 flow.add_and_wait(chars);
             }
@@ -490,16 +540,10 @@ mod tests {
         assert!(b.try_reserve(TERM_INPUT_MAX_BYTES));
         assert!(!b.try_reserve(1), "터미널 상한 초과는 거부되어야 한다");
         assert!(b.begin_dropping(), "첫 폐기는 안내한다");
-        assert!(
-            !b.begin_dropping(),
-            "같은 에피소드의 반복 폐기는 조용해야 한다"
-        );
+        assert!(!b.begin_dropping(), "같은 에피소드의 반복 폐기는 조용해야 한다");
         b.release(TERM_INPUT_MAX_BYTES);
         assert!(b.try_reserve(1), "큐를 비우면 다시 받는다");
-        assert!(
-            b.begin_dropping(),
-            "큐가 비면 에피소드가 끝나 다음 폐기를 다시 안내한다"
-        );
+        assert!(b.begin_dropping(), "큐가 비면 에피소드가 끝나 다음 폐기를 다시 안내한다");
         b.release(1); // 전역 카운터 원상복구 (테스트 간 공유 상태)
     }
 
@@ -515,24 +559,11 @@ mod tests {
             sink_send(&sink, big.clone(), true); // 총 1.2MiB — 상한(1MiB)을 넘긴다
         }
         let guard = sink.lock().unwrap();
-        let SinkState::Detached(buf, bytes) = &*guard else {
-            panic!("Detached 여야 한다")
-        };
-        assert_eq!(
-            buf.front().unwrap().1,
-            "exit-1",
-            "termExit 는 보존되어야 한다"
-        );
-        assert!(
-            buf.iter().all(|(_, m)| m != "old-data"),
-            "가장 오래된 termData 는 버려져야 한다"
-        );
+        let SinkState::Detached(buf, bytes) = &*guard else { panic!("Detached 여야 한다") };
+        assert_eq!(buf.front().unwrap().1, "exit-1", "termExit 는 보존되어야 한다");
+        assert!(buf.iter().all(|(_, m)| m != "old-data"), "가장 오래된 termData 는 버려져야 한다");
         assert!(*bytes <= DETACH_BUFFER_MAX);
-        assert_eq!(
-            *bytes,
-            buf.iter().map(|(_, m)| m.len()).sum::<usize>(),
-            "바이트 정산 일치"
-        );
+        assert_eq!(*bytes, buf.iter().map(|(_, m)| m.len()).sum::<usize>(), "바이트 정산 일치");
     }
 
     /// adopt — 실제 pty 를 한 세션(A)에서 다른 세션(B)으로 옮기면 이후 출력·입력 ack 가 B 의
@@ -545,60 +576,27 @@ mod tests {
         }
         fn events(sink: &Sink) -> Vec<String> {
             let g = sink.lock().unwrap();
-            let SinkState::Detached(buf, _) = &*g else {
-                panic!("Detached 여야 한다")
-            };
+            let SinkState::Detached(buf, _) = &*g else { panic!("Detached 여야 한다") };
             buf.iter().map(|(_, m)| m.clone()).collect()
         }
         let (terms_a, sink_a): (Terms, Sink) = (Terms::default(), detached());
         let (terms_b, sink_b): (Terms, Sink) = (Terms::default(), detached());
         std::env::set_var("SHELL", "/bin/sh");
-        spawn_term(
-            1,
-            80,
-            24,
-            Path::new("/"),
-            None,
-            terms_a.clone(),
-            sink_a.clone(),
-        )
-        .expect("pty");
+        spawn_term(1, 80, 24, Path::new("/"), None, terms_a.clone(), sink_a.clone()).expect("pty");
         // A 에 이미 있는 id 로는 못 붙인다 / 없는 출처는 실패
-        assert!(
-            adopt(&terms_a, 9, &terms_b, 7, &sink_b).is_err(),
-            "없는 출처 터미널"
-        );
+        assert!(adopt(&terms_a, 9, &terms_b, 7, &sink_b).is_err(), "없는 출처 터미널");
         adopt(&terms_a, 1, &terms_b, 7, &sink_b).expect("adopt");
-        assert!(
-            !terms_a.lock().unwrap().contains_key(&1),
-            "출처 맵에서 빠져야 한다"
-        );
-        assert!(
-            terms_b.lock().unwrap().contains_key(&7),
-            "대상 맵에 새 id 로 있어야 한다"
-        );
+        assert!(!terms_a.lock().unwrap().contains_key(&1), "출처 맵에서 빠져야 한다");
+        assert!(terms_b.lock().unwrap().contains_key(&7), "대상 맵에 새 id 로 있어야 한다");
         // B 의 id 로 입력 → 셸 출력이 B sink 에 term 7 로 도착한다
-        handle_term(
-            "termWrite",
-            &json!({"term": 7, "data": "echo adopted-ok\n"}),
-            &terms_b,
-            &sink_b,
-            Path::new("/"),
-            None,
-        );
+        handle_term("termWrite", &json!({"term": 7, "data": "echo adopted-ok\n"}), &terms_b, &sink_b, Path::new("/"), None);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
             let evs = events(&sink_b);
-            if evs
-                .iter()
-                .any(|m| m.contains("\"term\":7") && m.contains("adopted-ok"))
-            {
+            if evs.iter().any(|m| m.contains("\"term\":7") && m.contains("adopted-ok")) {
                 break;
             }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "B sink 에 출력이 와야 한다: {evs:?}"
-            );
+            assert!(std::time::Instant::now() < deadline, "B sink 에 출력이 와야 한다: {evs:?}");
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         assert!(
@@ -617,15 +615,10 @@ mod tests {
 fn split_valid_utf8(bytes: &[u8]) -> (String, Vec<u8>) {
     match std::str::from_utf8(bytes) {
         Ok(s) => (s.to_string(), Vec::new()),
-        Err(e) if e.error_len().is_some() => {
-            (String::from_utf8_lossy(bytes).into_owned(), Vec::new())
-        }
+        Err(e) if e.error_len().is_some() => (String::from_utf8_lossy(bytes).into_owned(), Vec::new()),
         Err(e) => {
             let valid = e.valid_up_to();
-            (
-                std::str::from_utf8(&bytes[..valid]).unwrap().to_string(),
-                bytes[valid..].to_vec(),
-            )
+            (std::str::from_utf8(&bytes[..valid]).unwrap().to_string(), bytes[valid..].to_vec())
         }
     }
 }

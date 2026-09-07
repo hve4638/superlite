@@ -1,9 +1,13 @@
 <script setup lang="ts">
+import { computed } from 'vue';
 import { workbench, showViewlet, type ViewletId } from '../model/workbench';
 import { scm } from '../model/scm';
 import { remoteEnabled } from '../model/remote';
+import { terminalState } from '../model/terminal';
 
-const items: { id: ViewletId; icon: string; label: string }[] = [
+// 터미널 뷰 — 데몬이 tmux 방식(또는 tmux 를 못 써 plain 으로 대체 — 경고 배지)일 때만. Windows
+// (unsupported)와 attach 응답 전(unknown)·mock 은 아이콘 자체가 없다 (ticket term-list-reconnect)
+const items = computed<{ id: ViewletId; icon: string; label: string }[]>(() => [
   { id: 'explorer', icon: 'codicon-files', label: 'Explorer' },
   { id: 'search', icon: 'codicon-search', label: 'Search' },
   { id: 'scm', icon: 'codicon-source-control', label: 'Source Control' },
@@ -11,7 +15,10 @@ const items: { id: ViewletId; icon: string; label: string }[] = [
   ...(remoteEnabled()
     ? [{ id: 'remote' as ViewletId, icon: 'codicon-remote-explorer', label: 'Remote Explorer' }]
     : []),
-];
+  ...(terminalState.mode === 'tmux' || terminalState.mode === 'plain'
+    ? [{ id: 'terminals' as ViewletId, icon: 'codicon-terminal', label: 'Terminals' }]
+    : []),
+]);
 
 function isActive(id: ViewletId): boolean {
   return workbench.sideBarVisible && workbench.activeViewlet === id;
@@ -34,6 +41,11 @@ function isActive(id: ViewletId): boolean {
         <span v-if="item.id === 'scm' && scm.changes.length" class="badge">
           {{ scm.changes.length }}
         </span>
+        <span
+          v-if="item.id === 'terminals' && terminalState.error"
+          class="badge warn codicon codicon-error"
+          :title="`tmux 를 쓸 수 없어 일반 터미널로 동작 중: ${terminalState.error}`"
+        />
       </div>
     </div>
     <div class="actions-bottom">
@@ -94,5 +106,13 @@ function isActive(id: ViewletId): boolean {
   font-weight: 600;
   line-height: 16px;
   text-align: center;
+}
+/* tmux 불가 경고 — 우측 하단 붉은 느낌표 */
+.badge.warn {
+  padding: 0;
+  min-width: 16px;
+  background: var(--vscode-errorForeground, #f14c4c);
+  color: #fff;
+  font-size: 12px;
 }
 </style>

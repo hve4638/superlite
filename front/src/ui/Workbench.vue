@@ -12,6 +12,7 @@ import { sessions } from '../model/sessions';
 import { cancelDaemonClean, daemonClean } from '../model/daemon';
 import { confirmDaemonClean } from '../model/host';
 import { version } from '../model/version';
+import { terminalState, confirmKillTerminal, cancelKillTerminal } from '../model/terminal';
 import TitleBar from './TitleBar.vue';
 import ActivityBar from './ActivityBar.vue';
 import SideBar from './SideBar.vue';
@@ -93,6 +94,15 @@ onBeforeUnmount(() => window.removeEventListener('resize', onWindowResize));
       confirm-label="강제 정리"
       @confirm="confirmDaemonClean()"
       @cancel="cancelDaemonClean()"
+    />
+    <!-- 터미널 강제 종료 확인 (Ctrl+닫기) — 탭 닫기는 detach 라 세션이 남지만 이것은 tmux 세션을 죽인다 -->
+    <ConfirmDialog
+      v-if="terminalState.killConfirm"
+      message="터미널을 정말 종료하시겠습니까?"
+      confirm-label="종료"
+      checkbox-label="다시 묻지 않기"
+      @confirm="(dontAsk) => void confirmKillTerminal(dontAsk)"
+      @cancel="cancelKillTerminal()"
     />
     <!-- Help: About — 버전·커밋·와이어·데몬 경로 (ticket release-versioning) -->
     <AboutDialog v-if="version.aboutOpen" />

@@ -20,9 +20,9 @@ mkdirSync(wsRoot);
 const env = {
   ...process.env,
   SUPERLITE_SOCK: join(dir, 'daemon.sock'),
-  SUPERLITE_TERM_SOCK: join(dir, 'term.sock'),
   SUPERLITE_HTTP: '127.0.0.1:18792',
   SUPERLITE_GRACE_SECS: '5',
+  SUPERLITE_TMUX: '0', // raw PTY 의미(배압·detach 버퍼)를 재는 검사 — 내장 tmux 는 check-tmux.mjs 가 따로 본다
   SHELL: '/bin/bash', // 개발자 셸(배너가 긴 zsh 등)에 좌우되지 않게 고정
 };
 const bin = fileURLToPath(new URL('../../target/debug/superlite-backend', import.meta.url));

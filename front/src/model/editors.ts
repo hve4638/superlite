@@ -386,6 +386,28 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     editors.activeGroupId = group.id;
   }
 
+  /** 터미널 탭 제목 갱신 — tmux 세션 이름이 오면(termTmux) 'bash' 자리에 들어간다 */
+  function renameTerminalTab(term: number, name: string): void {
+    for (const g of editors.groups) {
+      for (const t of g.tabs) {
+        if (t.kind === 'terminal' && t.term === term) t.name = name;
+      }
+    }
+  }
+
+  /** 인스턴스 id 의 터미널 탭을 앞으로 — 사이드바에서 이미 열린 세션을 골랐을 때. 없으면 false */
+  function focusTerminalTab(term: number): boolean {
+    for (const g of editors.groups) {
+      const t = g.tabs.find((t) => t.kind === 'terminal' && t.term === term);
+      if (t) {
+        g.activeTabId = t.id;
+        editors.activeGroupId = g.id;
+        return true;
+      }
+    }
+    return false;
+  }
+
   /** 인스턴스 id 의 터미널 탭을 모든 그룹에서 닫는다 — 셸 종료·세션 회수 (PTY 는 이미 정리됨) */
   function closeTerminalTabs(term: number): void {
     for (const g of [...editors.groups]) {
@@ -1232,7 +1254,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     splitActiveEditor, updateContent, setOrphaned, remapPaths, closePathTabs,
     reloadDocFromDisk, hasDirtyDocs, saveActive, overwriteConflict, revertConflict, indentOf,
     snapshot, restore, takeTabForHandoff, acceptTab,
-    openTerminalTab, closeTerminalTabs, setTerminalCloser,
+    openTerminalTab, closeTerminalTabs, setTerminalCloser, renameTerminalTab, focusTerminalTab,
   };
 }
 

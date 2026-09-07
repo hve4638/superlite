@@ -1,14 +1,24 @@
 import { ctx, viewOf } from './ctx'
-import { TerminalSession, ThinBackend } from '../backend/types'
-import { notify } from './notifications'
-import { createEditors } from './editors'
+import { TerminalInfo, TerminalMode, TerminalSession, ThinBackend } from '../backend/types'
+import { errText, notify } from './notifications'
+import { backendApiUrl } from './host'
+import { allSessionCtxs } from './sessions'
+import { EDITOR_ZOOM_MAX, EDITOR_ZOOM_MIN, EDITOR_ZOOM_STEP, createEditors } from './editors'
 
-role: 터미널 인스턴스 목록 — 세션 핸들 보유, 렌더링(xterm)은 UI 몫. 터미널은 하단 패널이 아니라 편집기 탭에 산다 (terminal-usability 2026-09-07) — 인스턴스 등록이 editors.openTerminalTab 을 열고, 정리(removeAt)가 closeTerminalTabs 로 탭을 닫으며, 탭 닫기(×)는 editors 의 terminalCloser 훅으로 disposeTerminal 에 온다. 셸 자연 종료(onExit)와 데몬 세션 회수(onSessionLost) 시 죽은 터미널을 정리한다 (회수는 warning 알림 포함 — 회수 명단은 onSessionLost 가 주는 id 목록과 대조해, 끊김 중 만들어져 살아 있는 터미널은 남긴다). 입력 배압(onInputBlocked) 진입 시 warning 알림 — 터미널당 에피소드 1회로 중복 제거. 세션별 팩토리(createTerminals) + 활성 세션 전달 shim — backend 이벤트 구독이 팩토리 안에서 세션마다 이뤄진다 (WsBackend 콜백 슬롯은 인스턴스당 하나)
+role: 터미널 인스턴스 목록 — 세션 핸들 보유, 렌더링(xterm)은 UI 몫. 터미널은 하단 패널이 아니라 편집기 탭에 산다 (terminal-usability 2026-09-07) — 인스턴스 등록이 editors.openTerminalTab 을 열고, 정리(removeAt)가 closeTerminalTabs 로 탭을 닫으며, 탭 닫기(×)는 editors 의 terminalCloser 훅으로 disposeTerminal 에 온다. 셸 자연 종료(onExit)와 데몬 세션 회수(onSessionLost) 시 죽은 터미널을 정리한다 (회수는 warning 알림 포함 — 회수 명단은 onSessionLost 가 주는 id 목록과 대조해, 끊김 중 만들어져 살아 있는 터미널은 남긴다). 입력 배압(onInputBlocked) 진입 시 warning 알림 — 터미널당 에피소드 1회로 중복 제거. 세션별 팩토리(createTerminals) + 활성 세션 전달 shim — backend 이벤트 구독이 팩토리 안에서 세션마다 이뤄진다 (WsBackend 콜백 슬롯은 인스턴스당 하나). 내장 tmux (ticket term-list-reconnect): 세션별 state — 데몬 방식(mode, onTerminalMode)·plain 대체 사유(error — 사이드바 아이콘 경고 배지)·살아 있는 세션 목록(list)·강제 종료 확인 대상(killConfirm). 인스턴스는 termTmux 로 받은 tmux {id,name} 을 들고 탭 제목이 세션 이름이 된다. 탭 닫기(disposeTerminal)는 detach — 세션은 서버에 남는다. Ctrl+닫기는 requestKill → ConfirmDialog("터미널을 정말 종료하시겠습니까?" + "다시 묻지 않기" 체크박스) → confirmKill(dontAsk) 로 tmux 세션 종료 — 다시 묻지 않기는 localStorage 에 기억해 이후 requestKill 이 확인 없이 바로 종료한다 (2026-09-08)
 
 export type TerminalInstance
 export type TerminalSnapshot
 export type TerminalTabAt
 export val terminals
+export val terminalState
+export val terminalView
+export fn setTerminalZoom(percent) {
+  role: 터미널 전용 줌(terminalView.zoom, 퍼센트) — 편집기 줌과 별개의 값 (사용자 결정 2026-09-08: 터미널 개별 배율). 범위·단위는 편집기 상수를 같이 쓰고(50~200, 10 단위 스냅), 세션·창 무관 전역이라 localStorage 에 기억하며 다른 창의 변경은 storage 이벤트로 따라온다. terminalHost 가 지켜보다 열린 모든 xterm 의 fontSize 를 바꾸고 fit 한다. 터미널 포커스 중 Ctrl+= / Ctrl+- / Ctrl+0 (숫자패드 포함)이 이쪽으로 온다 — xterm 키 핸들러가 가로채 셸·편집기 줌 chord 로 가지 않게 한다. 상태바는 터미널 탭에서 이 값을 편집기 줌 자리에 보여준다
+}
+export fn stepTerminalZoom(dir) {
+  role: 한 단계(EDITOR_ZOOM_STEP) 확대·축소
+}
 
 export fn createTerminals(backend, editorsM) {
   role: 세션별 터미널 모듈 생성 — 목록·배압 상태·이벤트 구독이 세션에 묶이고, 탭 열기·닫기는 같은 세션의 editors 인스턴스로 간다. 터미널 id 카운터만 페이지 전역 — TerminalPane 의 xterm 바인딩 맵(id 키, 세션 전환에도 생존)이 세션 간 충돌하지 않게. 창 이동(앱): snapshot(데몬 term id·제목·xterm 버퍼 — 직렬화는 setTerminalSerializer 로 UI 가 등록), releaseTerminal(목록에서만 빼고 데몬 터미널은 살림 — 받는 창이 이어받는다), adoptTerminals(from 없으면 같은 세션의 기존 터미널 로컬 핸들 재구성, 있으면 백엔드 adoptTerminal 로 다른 세션 것을 옮겨 받음 — at 으로 탭을 열 그룹·index 지정)
@@ -18,6 +28,29 @@ export fn setTerminalSerializer(fn) {
 }
 export fn createTerminal(at?) -> TerminalInstance {
   role: 백엔드 PTY 세션 생성 + 목록 등록 + 탭 열기(at: 그룹·index, 기본 활성 그룹 끝). 실제 종료 코드가 있는 죽음(code ≠ null)은 스스로 목록에서 빠지도록 onExit 배선 — spawn 실패(code null)만 탭을 유지해 에러 출력을 읽게 한다
+}
+export fn attachTerminal(info, opts?) -> TerminalInstance? {
+  role: 사이드바 목록의 tmux 세션에 붙는다 — 이 창에 이미 열려 있으면 그 탭을 앞으로(newTab 이면 새 탭으로 하나 더 — 다중 attach). createTerminal(attach: id)
+}
+export fn refreshTerminals() {
+  role: 목록 갱신 (listTerminals) — 지원 없는 백엔드는 빈 목록
+}
+export fn requestKillTerminal(id) {
+  role: 강제 종료 확인 요청 (탭의 Ctrl+닫기) — tmux 세션이 없는 탭은 그냥 닫는다
+}
+export fn confirmKillTerminal(dontAsk?)
+export fn cancelKillTerminal()
+export fn killListedTerminal(tmuxId) {
+  role: tmux 세션 종료 + 이 창의 해당 탭 닫기 + 목록 갱신
+}
+export fn renameListedTerminal(tmuxId, name) {
+  role: 세션 이름 변경 + 열린 탭 제목 갱신
+}
+export fn loadTmuxConf() -> content {
+  role: 클라이언트 tmux.conf 읽기 — 백엔드 HTTP GET /tmux-conf (mock 은 빈 문자열)
+}
+export fn saveTmuxConf(content) {
+  role: PUT /tmux-conf 로 저장한 뒤 열려 있는 모든 세션의 데몬(로컬·원격)에 applyTmuxConf 로 즉시 적용 — tmux 가 낸 경고는 알림으로. 이후 접속은 relay 가 attach 직후 밀어 넣는다
 }
 export fn disposeTerminal(id) {
   role: 세션 정리 + 목록 제거 + 탭 닫기 (탭 ×·셸 종료·세션 회수 공통 경로 — 탭 × 는 훅 경유라 탭이 이미 없어 closeTerminalTabs 가 no-op)

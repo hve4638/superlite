@@ -8,6 +8,9 @@ import { workbench, openContextMenu } from '../../model/workbench'
 import { errText, notify } from '../../model/notifications'
 import { connection } from '../../model/watch'
 import { remote, refreshHosts, connectHost, openRecent, setHostState, setPaneOpen, RemoteHost } from '../../model/remote'
+import { terminalState, terminals, refreshTerminals, attachTerminal, killListedTerminal, renameListedTerminal, loadTmuxConf, saveTmuxConf } from '../../model/terminal'
+// 타입 전용 (TerminalInfo)
+import { TerminalInfo } from '../../backend/types'
 import { sessions, activeSessionEmpty, remoteHost, sessionRoot, DND_ROOTS } from '../../model/sessions'
 import { downloadEntry, uploadDropped, DroppedEntry } from '../../model/transfer'
 // 타입 전용 (FileSearchResult) — 런타임 호출은 model 을 거친다
@@ -18,4 +21,4 @@ import { InlineNameInput } from '../widgets/InlineNameInput'
 import { ConfirmDialog } from '../widgets/ConfirmDialog'
 import { Sash } from '../widgets/Sash'
 
-role: 사이드바 뷰 — 탐색기(폴더 pane 헤더 없음 — 사이드바 제목에 병합, 루트 첫 로드(files.loading)엔 제목 아래 2px 진행선(widgets ProgressBar). 트리·파일 조작 UI — 고정 22px 행 가상 스크롤, 보이는 행만 DOM, 활성 편집기 자동 reveal. 파일·폴더 행 모두 에디터 영역으로 끌 수 있다 — 파일은 편집기 탭, 폴더는 폴더 탭(startFileDrag 의 kind 'folder', explorer-folder-tab). 폴더 행 우클릭 메뉴 첫 항목 'Open in New Session' 은 그 폴더를 root 로 하는 새 세션 탭(host.openFolder(toAbsPath) — 같은 root 세션이 있으면 포커스만, 원격 세션이면 그 호스트 경로). 트리 끝에는 32px 아래 여백. 원격 세션에서만: 행 메뉴 Download... 와 트리 OS 드롭 업로드(data-upload-zone — 폴더 행은 그 폴더, 파일 행은 그 부모, 행 밖은 루트로. 대상 폴더 행 강조, 같은 이름이 있으면 ConfirmDialog 로 덮어쓰기 확인), ticket explorer-download)·검색·SCM(Staged Changes/Changes 두 그룹 — 행·그룹 hover 액션으로 stage/unstage/discard, discard 는 ConfirmDialog, staged 가 없으면 커밋 버튼 비활성, Graph pane 은 최근 커밋 로그와 브랜치 전환 메뉴)·원격 탐색기(FAVORITE·ALL 두 pane — 접힘은 전역 지속, ALL 은 끌어 조절; 호스트 행의 접속 액션, 우클릭 즐겨찾기·고정, 펼치면 최근 폴더 하위 행 — 클릭이 곧 접속). 뷰 상태와 동작은 각 model 모듈에 있다
+role: 사이드바 뷰 — 탐색기(폴더 pane 헤더 없음 — 사이드바 제목에 병합, 루트 첫 로드(files.loading)엔 제목 아래 2px 진행선(widgets ProgressBar). 트리·파일 조작 UI — 고정 22px 행 가상 스크롤, 보이는 행만 DOM, 활성 편집기 자동 reveal. 파일·폴더 행 모두 에디터 영역으로 끌 수 있다 — 파일은 편집기 탭, 폴더는 폴더 탭(startFileDrag 의 kind 'folder', explorer-folder-tab). 폴더 행 우클릭 메뉴 첫 항목 'Open in New Session' 은 그 폴더를 root 로 하는 새 세션 탭(host.openFolder(toAbsPath) — 같은 root 세션이 있으면 포커스만, 원격 세션이면 그 호스트 경로). 트리 끝에는 32px 아래 여백. 원격 세션에서만: 행 메뉴 Download... 와 트리 OS 드롭 업로드(data-upload-zone — 폴더 행은 그 폴더, 파일 행은 그 부모, 행 밖은 루트로. 대상 폴더 행 강조, 같은 이름이 있으면 ConfirmDialog 로 덮어쓰기 확인), ticket explorer-download)·검색·SCM(Staged Changes/Changes 두 그룹 — 행·그룹 hover 액션으로 stage/unstage/discard, discard 는 ConfirmDialog, staged 가 없으면 커밋 버튼 비활성, Graph pane 은 최근 커밋 로그와 브랜치 전환 메뉴)·원격 탐색기(FAVORITE·ALL 두 pane — 접힘은 전역 지속, ALL 은 끌어 조절; 호스트 행의 접속 액션, 우클릭 즐겨찾기·고정, 펼치면 최근 폴더 하위 행 — 클릭이 곧 접속)·터미널(TerminalsView, ticket term-list-reconnect — 이 워크스페이스의 살아 있는 tmux 세션 목록을 3초 폴링, 행 클릭 = 탭으로 열기(열려 있으면 그 탭 앞으로), 우클릭 새 탭·이름 바꾸기(인라인 입력)·종료, 열린 세션은 굵게, attached 수·마지막 활동. plain 대체 사유를 위에 경고로. 제목 액션 톱니가 클라이언트 tmux.conf 편집 영역(textarea + Save)을 토글 — defineExpose toggleConf). 뷰 상태와 동작은 각 model 모듈에 있다

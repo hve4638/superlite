@@ -2,8 +2,3 @@
 name = "superlite-common"
 version.workspace = true
 edition = "2021"
-
-[dependencies]
-# pair 모듈(두 데몬 소켓 라우팅·합류)이 relay 와 원격 헬퍼(--pipe)에 공용 — 종전엔 무의존이었다
-tokio = { version = "1", features = ["io-util", "sync", "rt"] }
-serde_json = "1"

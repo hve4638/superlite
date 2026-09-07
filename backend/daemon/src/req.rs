@@ -56,12 +56,7 @@ const EXCLUDE_GLOBS: [&str; 8] = [
 /// --no-require-git 만 주면 부모·글로벌 gitignore 까지 새어 들어와 파일이 조용히 사라진다.
 /// quickOpen 걷기의 WalkBuilder 설정(list_files)은 이 인자들의 라이브러리 대응이다.
 fn rg_exclude_args() -> Vec<&'static str> {
-    let mut args = vec![
-        "--hidden",
-        "--no-require-git",
-        "--no-ignore-parent",
-        "--no-ignore-global",
-    ];
+    let mut args = vec!["--hidden", "--no-require-git", "--no-ignore-parent", "--no-ignore-global"];
     for g in EXCLUDE_GLOBS {
         args.extend(["-g", g]);
     }
@@ -74,12 +69,7 @@ fn rg_exclude_args() -> Vec<&'static str> {
 /// typ=text 면 UTF-8 디코드, typ=base64 면 base64 재인코딩(종전 계약 유지).
 pub(crate) enum ReadOut {
     Json(Value),
-    Payload {
-        meta: Value,
-        body: Vec<u8>,
-        enc: &'static str,
-        typ: &'static str,
-    },
+    Payload { meta: Value, body: Vec<u8>, enc: &'static str, typ: &'static str },
 }
 
 /// payload 프레임 최소 크기 — 미만은 JSON 경로 유지 (소형 응답까지 이원화하지 않는다).
@@ -148,8 +138,10 @@ pub(crate) async fn read_file(p: &Value, root: &Path) -> Result<ReadOut, String>
             if content.len() >= PAYLOAD_MIN_BYTES {
                 // deflate-raw: 브라우저 DecompressionStream('deflate-raw') 대응 (zlib 헤더 없음)
                 use std::io::Write as _;
-                let mut enc =
-                    flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+                let mut enc = flate2::write::DeflateEncoder::new(
+                    Vec::new(),
+                    flate2::Compression::default(),
+                );
                 enc.write_all(content.as_bytes()).map_err(err)?;
                 let body = enc.finish().map_err(err)?;
                 return Ok(ReadOut::Payload {
@@ -159,9 +151,7 @@ pub(crate) async fn read_file(p: &Value, root: &Path) -> Result<ReadOut, String>
                     typ: "text",
                 });
             }
-            Ok(ReadOut::Json(
-                json!({"content": content, "etag": file_etag(&meta)}),
-            ))
+            Ok(ReadOut::Json(json!({"content": content, "etag": file_etag(&meta)})))
         }
         Err(_) => Ok(ReadOut::Json(json!({
             "unopenable": {"kind": "binary"},
@@ -258,11 +248,7 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
             // 새로 만들고(truncate), 이후 조각은 etag 검사 없이 끝에 덧붙인다
             if p["append"].as_bool() == Some(true) {
                 use std::io::Write as _;
-                let mut f = std::fs::OpenOptions::new()
-                    .append(true)
-                    .create(true)
-                    .open(&path)
-                    .map_err(err)?;
+                let mut f = std::fs::OpenOptions::new().append(true).create(true).open(&path).map_err(err)?;
                 f.write_all(&bytes).map_err(err)?;
                 return Ok(json!({"etag": file_etag(&std::fs::metadata(&path).map_err(err)?)}));
             }
@@ -358,10 +344,7 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
             for ent in std::fs::read_dir(path).map_err(err)? {
                 let ent = ent.map_err(err)?;
                 // metadata: 심링크 디렉토리도 후보다 (readDir 와 같은 이유)
-                if std::fs::metadata(ent.path())
-                    .map(|m| m.is_dir())
-                    .unwrap_or(false)
-                {
+                if std::fs::metadata(ent.path()).map(|m| m.is_dir()).unwrap_or(false) {
                     out.push(ent.file_name().to_string_lossy().into_owned());
                 }
             }
@@ -372,9 +355,7 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
         // 하위·중첩 저장소 탐색 (와이어 v13) — 루트 포함, 상대 경로 목록 (루트는 '')
         "gitRepos" => {
             let root = root.to_path_buf();
-            let repos = tokio::task::spawn_blocking(move || scan_repos(&root))
-                .await
-                .map_err(err)?;
+            let repos = tokio::task::spawn_blocking(move || scan_repos(&root)).await.map_err(err)?;
             Ok(json!(repos))
         }
         // git repo 가 아니어도 앱은 떠야 한다 — 빈 상태로 강등 (프론트는 branch·head 둘 다 빈
@@ -386,7 +367,7 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
             let dir = git_dir(root, p)?;
             let path = req_path(p)?;
             safe_join(&dir, path)?; // 검증만 — git 에는 상대 경로를 그대로 넘긴다
-                                    // untracked/신규 파일이면 git show 가 실패한다 → 빈 문자열 (계약)
+            // untracked/신규 파일이면 git show 가 실패한다 → 빈 문자열 (계약)
             match run(&dir, "git", &["show", &format!("HEAD:{path}")]).await {
                 Ok(s) => Ok(json!(s)),
                 Err(_) => Ok(json!("")),
@@ -394,12 +375,7 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
         }
         // 인덱스(스테이징) 만 커밋 — 전체 커밋은 프론트가 gitStage(전부) 를 먼저 보낸다
         "gitCommit" => {
-            run(
-                &git_dir(root, p)?,
-                "git",
-                &["commit", "-m", p["message"].as_str().unwrap_or("")],
-            )
-            .await?;
+            run(&git_dir(root, p)?, "git", &["commit", "-m", p["message"].as_str().unwrap_or("")]).await?;
             Ok(Value::Null)
         }
         "gitStage" => git_paths_cmd(&git_dir(root, p)?, p, &["add", "-A", "--"]).await,
@@ -432,12 +408,7 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
         "gitLog" => {
             let n = p["limit"].as_u64().unwrap_or(50).to_string();
             // %x1f 구분 — subject(%s) 는 한 줄이라 행 단위 파싱이 안전하다
-            let out = run(
-                &git_dir(root, p)?,
-                "git",
-                &["log", "--format=%H%x1f%s%x1f%an%x1f%ar", "-n", &n],
-            )
-            .await;
+            let out = run(&git_dir(root, p)?, "git", &["log", "--format=%H%x1f%s%x1f%an%x1f%ar", "-n", &n]).await;
             // unborn/비 git 은 빈 목록
             let out = out.unwrap_or_default();
             let items: Vec<Value> = out
@@ -453,12 +424,7 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
             Ok(json!(items))
         }
         "gitBranches" => {
-            let out = run(
-                &git_dir(root, p)?,
-                "git",
-                &["for-each-ref", "refs/heads", "--format=%(refname:short)"],
-            )
-            .await?;
+            let out = run(&git_dir(root, p)?, "git", &["for-each-ref", "refs/heads", "--format=%(refname:short)"]).await?;
             Ok(json!(out.lines().collect::<Vec<_>>()))
         }
         "gitCheckout" => {
@@ -484,9 +450,7 @@ async fn search(root: &Path, p: &Value) -> Result<Value, String> {
     let out = run_rg(root, &args).await?;
     let mut files: Vec<(String, Vec<Value>)> = Vec::new();
     for line in out.lines() {
-        let Ok(v) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
+        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
         if v["type"] != "match" {
             continue;
         }
@@ -500,10 +464,8 @@ async fn search(root: &Path, p: &Value) -> Result<Value, String> {
         let text = text.trim_end_matches(['\n', '\r']);
         // WHY: rg 오프셋은 바이트, 프론트(SearchView)의 slice 는 UTF-16 코드유닛 —
         //      한글 주석 라인에서 하이라이트가 어긋나므로 여기서 변환한다
-        let col = |b: &Value| {
-            text.get(..b.as_u64().unwrap_or(0) as usize)
-                .map_or(0, |s| s.encode_utf16().count())
-        };
+        let col =
+            |b: &Value| text.get(..b.as_u64().unwrap_or(0) as usize).map_or(0, |s| s.encode_utf16().count());
         let m = json!({
             "line": d["line_number"].as_u64().unwrap_or(1).saturating_sub(1),
             "lineText": text,
@@ -516,10 +478,7 @@ async fn search(root: &Path, p: &Value) -> Result<Value, String> {
         }
     }
     Ok(Value::Array(
-        files
-            .into_iter()
-            .map(|(path, ms)| json!({"path": path, "matches": ms}))
-            .collect(),
+        files.into_iter().map(|(path, ms)| json!({"path": path, "matches": ms})).collect(),
     ))
 }
 
@@ -558,9 +517,7 @@ fn scan_repos(root: &Path) -> Vec<String> {
         if depth >= REPO_SCAN_DEPTH {
             continue;
         }
-        let Ok(rd) = std::fs::read_dir(&dir) else {
-            continue;
-        };
+        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
         for ent in rd.flatten() {
             let name = ent.file_name().to_string_lossy().into_owned();
             if name.starts_with('.') || SKIP.contains(&name.as_str()) {
@@ -571,16 +528,10 @@ fn scan_repos(root: &Path) -> Vec<String> {
                 continue;
             }
             let path = ent.path();
-            let child_rel = if rel.is_empty() {
-                name
-            } else {
-                format!("{rel}/{name}")
-            };
+            let child_rel = if rel.is_empty() { name } else { format!("{rel}/{name}") };
             if is_repo(&path) {
                 if out.len() >= REPO_SCAN_MAX {
-                    eprintln!(
-                        "gitRepos: 저장소 {REPO_SCAN_MAX}개 초과 — 나머지는 트리 펼침으로만 등록"
-                    );
+                    eprintln!("gitRepos: 저장소 {REPO_SCAN_MAX}개 초과 — 나머지는 트리 펼침으로만 등록");
                     out.sort();
                     return out;
                 }
@@ -596,12 +547,7 @@ fn scan_repos(root: &Path) -> Vec<String> {
 async fn git_status(root: &Path) -> Result<Value, String> {
     // WHY: -z(NUL 구분)라야 경로가 quote 없이 원문 그대로 나온다 — 비ASCII·따옴표·제어문자 모두.
     // -uall: 신규 디렉토리를 'dir/' 한 줄이 아니라 파일 단위로 — 파일별 stage/discard 의 단위
-    let out = run(
-        root,
-        "git",
-        &["status", "--porcelain=v2", "--branch", "-uall", "-z"],
-    )
-    .await?;
+    let out = run(root, "git", &["status", "--porcelain=v2", "--branch", "-uall", "-z"]).await?;
     let mut branch = String::new();
     let mut head = String::new();
     let mut changes = Vec::new();
@@ -613,11 +559,7 @@ async fn git_status(root: &Path) -> Result<Value, String> {
         }
         // HEAD 커밋 해시 — 프론트 diff original 캐시의 무효화 키. unborn 은 "(initial)" → 빈 문자열
         if let Some(o) = entry.strip_prefix("# branch.oid ") {
-            head = if o == "(initial)" {
-                String::new()
-            } else {
-                o.to_string()
-            };
+            head = if o == "(initial)" { String::new() } else { o.to_string() };
             continue;
         }
         if let Some(rest) = entry.strip_prefix("? ") {
@@ -663,25 +605,14 @@ pub(crate) type QuickCache = tokio::sync::Mutex<Option<Arc<Vec<String>>>>;
 /// quickOpen RPC (와이어 v12) — 캐시(없거나 fresh 면 다시 걷는다)에서 pattern 을 거른다.
 /// 파일명 subsequence 매치가 앞(하이라이트 = 파일명 안 인덱스), 전체 경로 매치가 뒤(하이라이트
 /// 없음) — 종전 프론트 QuickInput 의 규칙 그대로. QUICK_MAX 에서 자르고 limitHit
-pub(crate) async fn quick_open(
-    p: &Value,
-    root: &Path,
-    cache: &QuickCache,
-) -> Result<Value, String> {
-    let pattern: Vec<char> = p["pattern"]
-        .as_str()
-        .unwrap_or("")
-        .chars()
-        .flat_map(char::to_lowercase)
-        .collect();
+pub(crate) async fn quick_open(p: &Value, root: &Path, cache: &QuickCache) -> Result<Value, String> {
+    let pattern: Vec<char> = p["pattern"].as_str().unwrap_or("").chars().flat_map(char::to_lowercase).collect();
     let fresh = p["fresh"].as_bool().unwrap_or(false);
     let files = {
         let mut slot = cache.lock().await;
         if fresh || slot.is_none() {
             let root = root.to_path_buf();
-            let files = tokio::task::spawn_blocking(move || list_files(&root))
-                .await
-                .map_err(err)??;
+            let files = tokio::task::spawn_blocking(move || list_files(&root)).await.map_err(err)??;
             *slot = Some(Arc::new(files));
         }
         Arc::clone(slot.as_ref().unwrap())
@@ -741,19 +672,13 @@ fn list_files(root: &Path) -> Result<Vec<String>, String> {
     let out = std::sync::Mutex::new(Vec::new());
     wb.build_parallel().run(|| {
         Box::new(|ent| {
-            let Ok(ent) = ent else {
-                return ignore::WalkState::Continue;
-            };
+            let Ok(ent) = ent else { return ignore::WalkState::Continue };
             if ent.file_type().is_some_and(|t| t.is_dir()) {
                 return ignore::WalkState::Continue;
             }
-            let Ok(rel) = ent.path().strip_prefix(root) else {
-                return ignore::WalkState::Continue;
-            };
-            let rel: Vec<String> = rel
-                .components()
-                .map(|c| c.as_os_str().to_string_lossy().into_owned())
-                .collect();
+            let Ok(rel) = ent.path().strip_prefix(root) else { return ignore::WalkState::Continue };
+            let rel: Vec<String> =
+                rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
             let mut out = out.lock().unwrap();
             if out.len() >= WALK_MAX {
                 return ignore::WalkState::Quit;

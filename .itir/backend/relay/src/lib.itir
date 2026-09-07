@@ -1,4 +1,4 @@
-role: 중계 코어 — 준비된 TcpListener 위에 /ws·/ssh/hosts·/ssh/state·/daemon/clean·/version 라우터를 얹어 serve. 두 데몬(파일 데몬·termd, Daemon enum)의 spawn·attach, 각각의 상주 제어 연결 포함. dist 는 옵션 (bin 은 정적 서빙, Tauri 앱은 자산 번들이라 불필요). root 는 세션 해석기(SessionRoots)가 정한다 — 고정 root(bin) 또는 세션 레지스트리 조회(Tauri 앱, decision/workspace-session-tabs.md). root 문자열이 ssh:// 스킴이면 원격 — 해석(Target)은 접속 직전 한 곳에서만 한다
+role: 중계 코어 — 준비된 TcpListener 위에 /ws·/ssh/hosts·/ssh/state·/daemon/clean·/tmux-conf(GET/PUT — 클라이언트 tmux.conf, 사이드바 터미널 뷰가 편집)·/version 라우터를 얹어 serve. attach 직후 클라이언트 tmux.conf 를 데몬에 tmuxConf 로 밀어 넣는다 (와이어 v17 — 원격별 관리 없이 이 백엔드 머신의 파일 하나가 원본). 데몬 spawn·attach, 상주 제어 연결 포함. dist 는 옵션 (bin 은 정적 서빙, Tauri 앱은 자산 번들이라 불필요). root 는 세션 해석기(SessionRoots)가 정한다 — 고정 root(bin) 또는 세션 레지스트리 조회(Tauri 앱, decision/workspace-session-tabs.md). root 문자열이 ssh:// 스킴이면 원격 — 해석(Target)은 접속 직전 한 곳에서만 한다
 
 export class SessionRoots {
   role: 세션 id → root 해석기 (rust enum). Fixed 는 모든 세션이 기동 인자의 root 하나(bin·종전 동작), Registry 는 native 쪽이 등록한 세션만 허용 — root 결정권이 native 에 남아 front 가 임의 경로를 지목할 통로가 없다. Registry 는 순서 보존 리스트 — 등록 순서가 곧 세션 탭 순서라 순서의 단일 출처를 레지스트리에 둔다 (세션 수가 한 자리라 선형 탐색으로 충분). 엔트리의 root 는 Option — 루트 없는 빈 세션(시작 페이지)도 레지스트리에 산다 (ticket app-empty-session). 원격 root(ssh://host/path)도 불투명 문자열로 나른다
@@ -28,7 +28,7 @@ fn clean_handler() {
   role: POST /daemon/clean?host= — 문제 데몬 정리 (superlite-daemon --clean). host 없으면 clean_local, 있으면 ssh::clean_remote. 프론트가 '데몬 기동 실패' 뒤 사용자 승인을 받은 경우에만 부른다 — 자동 호출 없음 (사용자 결정 2026-09-04). 응답 본문은 --clean 의 stdout, 실패는 502 + 사유. 인증은 authed, CORS 는 /ssh/* 와 같다
 }
 fn version_handler() {
-  role: GET /version — 이 빌드의 version·channel(빈 문자열 = stable)·commit·builtAt·wire(WIRE_VERSION)·termWire(TERM_WIRE_VERSION)·daemonBin(로컬 데몬 배치 경로, 부재면 오류 문자열) JSON. 프론트 About·시작 페이지가 쓴다. 데몬 와이어 밖 relay 자체 응답이라 WIRE_VERSION 불변, 웹·앱 동일 경로 (release-versioning). 인증·CORS 는 /ssh/* 와 같다
+  role: GET /version — 이 빌드의 version·channel(빈 문자열 = stable)·commit·builtAt·wire(WIRE_VERSION)·daemonBin(로컬 데몬 배치 경로, 부재면 오류 문자열) JSON. 프론트 About·시작 페이지가 쓴다. 데몬 와이어 밖 relay 자체 응답이라 WIRE_VERSION 불변, 웹·앱 동일 경로 (release-versioning). 인증·CORS 는 /ssh/* 와 같다
 }
 fn clean_local() -> report {
   role: 로컬 데몬 바이너리(daemon_bin_path)를 --clean 으로 실행해 stdout 반환
@@ -39,27 +39,33 @@ fn ws_handler() {
 fn token_eq() {
   role: 상수시간 토큰 비교 — 이른 반환 없이 XOR 누적
 }
-class Daemon {
-  role: 로컬 데몬 종류 Files | Term — 소켓(sock)·이름. 제어 연결·spawn 인자(--term)·relay 의 두 연결이 이걸로 갈린다
-}
-class LinkRead {
-  role: 데몬 쪽 읽기 — Single(원격: 헬퍼가 합류한 스트림 하나, pair.read_frame) | Pair(로컬: pair.spawn_merger 의 Merged). next 는 오염·EOF 에 None
-}
-class LinkWrite {
-  role: 데몬 쪽 쓰기 — Single(헬퍼 stdin) | Pair(pair.PairWriter — 메서드명 분기). send_line 하나로 relay 가 목적지를 모른다
-}
 fn relay() {
-  role: WebSocket ↔ 데몬 양방향 중계 (Local 은 파일 데몬·termd 두 IPC 소켓을 LinkRead/LinkWrite(Pair)로 — attach 는 id 0 으로 양쪽에 가고 합류기가 응답을 하나로 접는다, Remote 는 ssh::pipe_conn 의 stdio 하나 — 헬퍼가 같은 분기를 한다) — 메서드명 분기 외 내용은 불투명 (데몬이 해석자). 데몬발은 JSON 줄('{' 시작)→WS Text, 0x00 매직+4B BE 길이 프레임(와이어 v6)→WS Binary 재프레이밍. 방향별 전용 태스크 — 바이너리 프레임 읽기(read_frame)가 다중 await 라 select 취소에 안전하지 않아 단일 select 루프를 못 쓴다, 한쪽 종료 시 반대쪽 abort. 첫 줄 attach 에 해석된 root(원격은 원격 경로 — ssh::probe_remote 로 홈·OS·arch 를 얻어 `/~` 를 expand_home 으로 치환, OS·arch 에 맞는 데몬을 배치)와 (있으면) session id 를 실어 보낸다. 경로 없는 ssh://host(원격 빈 세션)는 홈에 watch:false(와이어 v7, 재귀 워처 생략)로 attach — 시작 페이지의 폴더 열기가 그 호스트를 탐색만 한다. 원격 폴더 세션은 첫 줄(attach 응답)의 rootPath 를 ssh::record_recent 로 적어 원격 탐색기의 최근 폴더가 된다. ssh child 는 relay 수명에 묶인다(kill_on_drop) — 종료 시 원격 데몬이 세션을 detach 로 돌린다. 접속 실패는 close 4502 + 사유(123B 내, close_with)로 프론트에 — ssh 접속 실패뿐 아니라 첫 프레임(attach 응답)이 에러이거나 응답 전에 EOF(원격 헬퍼의 데몬 기동 실패·바이너리 실행 불가 — 이때 사유는 ssh child stderr 의 마지막 줄)인 경우도 같은 통로. 4403 과 같은 '재시도 무의미' 통로로, 프론트는 재연결을 멈추고 사유를 보인다 (종전에는 코드 없는 close 라 1초 재연결·매번 ssh 재시도에 빠져 'Reconnecting…' 만 영원히 보였다). 첫 프레임을 기다리는 동안 프론트 Text 요청은 그대로 데몬에 흘리고 프론트 close 는 즉시 접는다. 원격 접속 절차는 connect_remote 가 맡고, 그 결과(RemoteConn: child·enter 가드·host·browse_only·stderr 마지막 줄·접속 중 모아 둔 요청)를 attach 이후에 쓴다
+  role: WebSocket ↔ 데몬 양방향 중계 (Local 은 IPC 소켓, Remote 는 ssh::pipe_conn 의 stdio — 프레이밍은 동일, 헬퍼는 생 바이트 중계) — 프레이밍만 알고 내용은 불투명 (데몬이 유일한 해석자). 데몬발은 JSON 줄('{' 시작)→WS Text, 0x00 매직+4B BE 길이 프레임(와이어 v6)→WS Binary 재프레이밍. 방향별 전용 태스크 — 바이너리 프레임 읽기(read_frame)가 다중 await 라 select 취소에 안전하지 않아 단일 select 루프를 못 쓴다, 한쪽 종료 시 반대쪽 abort. 첫 줄 attach 에 해석된 root(원격은 원격 경로 — ssh::probe_remote 로 홈·OS·arch 를 얻어 `/~` 를 expand_home 으로 치환, OS·arch 에 맞는 데몬을 배치)와 (있으면) session id 를 실어 보낸다. 경로 없는 ssh://host(원격 빈 세션)는 홈에 watch:false(와이어 v7, 재귀 워처 생략)로 attach — 시작 페이지의 폴더 열기가 그 호스트를 탐색만 한다. 원격 폴더 세션은 첫 줄(attach 응답)의 rootPath 를 ssh::record_recent 로 적어 원격 탐색기의 최근 폴더가 된다. ssh child 는 relay 수명에 묶인다(kill_on_drop) — 종료 시 원격 데몬이 세션을 detach 로 돌린다. 접속 실패는 close 4502 + 사유(123B 내, close_with)로 프론트에 — ssh 접속 실패뿐 아니라 첫 프레임(attach 응답)이 에러이거나 응답 전에 EOF(원격 헬퍼의 데몬 기동 실패·바이너리 실행 불가 — 이때 사유는 ssh child stderr 의 마지막 줄)인 경우도 같은 통로. 4403 과 같은 '재시도 무의미' 통로로, 프론트는 재연결을 멈추고 사유를 보인다 (종전에는 코드 없는 close 라 1초 재연결·매번 ssh 재시도에 빠져 'Reconnecting…' 만 영원히 보였다). 첫 프레임을 기다리는 동안 프론트 Text 요청은 그대로 데몬에 흘리고 프론트 close 는 즉시 접는다. 원격 접속 절차는 connect_remote 가 맡고, 그 결과(RemoteConn: child·enter 가드·host·browse_only·stderr 마지막 줄·접속 중 모아 둔 요청)를 attach 이후에 쓴다
 }
 fn connect_remote(ws_tx, ws_rx, host, path, spares) -> conn? {
   role: 원격 접속 절차. 먼저 ssh::Spares 의 예비 파이프를 소비한다 (ticket ssh-spare-pipe) — 있으면 exec 없이 attach 만 남고 connectStage 도 흐르지 않는다, 없거나 죽었으면 원격 정보 조회(probe_remote) → 헬퍼 배치(ensure_remote_bin) → 파이프 spawn(pipe_conn). 접속은 별도 태스크로 돌리며 단계(ssh→helper→upload→daemon)를 {"event":"connectStage"} 로 프론트에 흘린다 (relay 자체 이벤트, WIRE_VERSION 불변 — ssh-connect-status) — 그동안 프론트 Close 는 태스크 abort(= ssh child kill)로 즉시 접고, Text 요청은 RemoteConn.early 에 모아 relay 가 attach 줄 뒤에 순서대로 보낸다. 어느 쪽이든 접속 성립 직후 Spares.fill 로 다음 접속용 예비를 보충하고, 접속 수명은 Spares.enter 가드(RemoteConn._enter)로 표시한다 (실제 접속 0 → 만료 타이머). 경로 없는 ssh://host 는 browse_only — 홈(`/~` → expand_home)에 attach. 실패는 close 4502 + 사유로 프론트에 알린 뒤 None, 프론트가 먼저 끊어도 None
 }
 
+fn read_frame() {
+  role: 데몬 IPC 의 다음 프레임 — 첫 바이트로 JSON 줄/바이너리 payload 구분, 길이 상한(PAYLOAD_MAX) 초과·비 UTF-8 줄은 프레임 오염으로 연결 종료. 순차 읽기 전용 (select 안 사용 금지). 로컬·원격 공용 (boxed 읽기 반쪽)
+}
 fn close_with(tx, rx, code, reason) {
   role: '재시도 무의미' close(4403 미등록 세션·4502 접속 실패 + 사유, 123B 내 문자 경계로 절단)를 프론트에 — Close 를 보낸 뒤 클라이언트의 Close 응답을 최대 2초 기다린다 (바로 drop 하면 Chrome 이 1006 으로 보고해 코드·사유가 유실되고 프론트가 무한 재연결에 빠진다)
 }
-fn daemon_conn(kind, spawn) {
-  role: 한 종류의 데몬 소켓 접속. spawn 인자는 제어 루프만 true — relay 까지 spawn 하면 백엔드 하나가 데몬을 두 번 띄우는 race 가 생기므로 relay 는 재시도만 한다 (데몬 부재 시 제어 루프가 곧 재기동)
+fn daemon_conn() {
+  role: 데몬 소켓 접속. spawn 인자는 제어 루프만 true — relay 까지 spawn 하면 백엔드 하나가 데몬을 두 번 띄우는 race 가 생기므로 relay 는 재시도만 한다 (데몬 부재 시 제어 루프가 곧 재기동)
+}
+fn tmux_bin_for(os, arch) -> path? {
+  role: 동봉 tmux 바이너리 — 앱 옆 daemon/tmux-<os>-<arch> (build.sh 가 정적 릴리스를 둔다), 로컬은 SUPERLITE_TMUX_BIN 우회 먼저. 없으면 None — 원격은 원격 호스트의 tmux, 로컬 데몬은 PATH
+}
+fn tmux_conf_path() -> path? {
+  role: 클라이언트 tmux.conf — common config_dir()/tmux.conf
+}
+fn tmux_conf_get() {
+  role: GET /tmux-conf — 파일 내용 (없으면 빈 문자열)
+}
+fn tmux_conf_put() {
+  role: PUT /tmux-conf — 본문을 파일로. 접속 중인 데몬 적용은 프론트가 세션마다 tmuxConf 로 (relay 는 연결을 모아 두지 않는다)
 }
 fn daemon_bin_for(os, arch) -> path {
   role: OS·arch 에 맞는 데몬 바이너리 배치 규칙 하나 — 실행 파일 옆 daemon/<os>-<arch>[.exe] (이름은 std::env::consts::OS·ARCH 값 그대로, 매핑 표 없음). 로컬(내 OS·arch)이면 SUPERLITE_DAEMON_BIN 우회가 먼저, daemon/ 에 없으면 형제 superlite-daemon 폴백 (cargo 가 target/debug 에 평평하게 놓는다 — check 하니스·cargo run). 원격용은 daemon/ 에 없으면 파일명·위치를 담은 오류
@@ -67,6 +73,6 @@ fn daemon_bin_for(os, arch) -> path {
 fn daemon_bin_path() {
   role: 로컬 데몬 바이너리 — daemon_bin_for(내 OS, 내 arch)
 }
-fn control_loop(kind) {
-  role: 백엔드 자체 수명 — 그 종류의 데몬 기동 보장 + 30초 ping 생존 신호. serve 가 Files·Term 둘을 띄운다
+fn control_loop() {
+  role: 백엔드 자체 수명 — 데몬 기동 보장 + 30초 ping 생존 신호
 }

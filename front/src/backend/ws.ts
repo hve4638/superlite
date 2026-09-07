@@ -9,7 +9,7 @@
  * 끊기는 순간 진행 중이던 요청만 실패한다 (실행 여부 불명 — 네트워크 실패의 본질).
  */
 import type {
-  ConnectStage, DirEntry, FileContent, FileSearchResult, FileStat, FsChange, GitLogItem, GitStatus, QuickOpenResult, TerminalSession, ThinBackend, WorkspaceInfo, WriteResult,
+  ConnectStage, DirEntry, FileContent, FileSearchResult, FileStat, FsChange, GitLogItem, GitStatus, QuickOpenResult, TerminalInfo, TerminalMode, TerminalSession, ThinBackend, WorkspaceInfo, WriteResult,
 } from './types';
 
 interface Pending {
@@ -55,6 +55,8 @@ export class WsBackend implements ThinBackend {
   private pending = new Map<number, Pending>();
   private termHandlers = new Map<number, (data: string, done?: () => void) => void>();
   private termExitHandlers = new Map<number, (code: number | null) => void>();
+  private termTmuxHandlers = new Map<number, (info: { id: string; name: string } | null, error?: string) => void>();
+  private terminalModeHandler: ((mode: TerminalMode, error: string | null) => void) | null = null;
   /** 터미널별 미ack 수신량 — CHAR_COUNT_ACK_SIZE 를 넘으면 termAck 로 비운다 */
   private termRecv = new Map<number, number>();
   /** 연결 세대 — 성공한 연결(onopen)마다 1 증가. 터미널의 생사 판별 기준 */
@@ -192,12 +194,20 @@ export class WsBackend implements ThinBackend {
         void this.handleRequest(msg.rid, String(msg.method ?? ''), msg.params);
         return;
       }
+      if (msg.event === 'termTmux') {
+        // 와이어 v17: 붙은 tmux 세션 (id·name) 또는 plain 대체 사유(error). 첫 출력보다 먼저 온다
+        const cb = this.termTmuxHandlers.get(msg.term);
+        if (typeof msg.id === 'string') cb?.({ id: msg.id, name: String(msg.name ?? msg.id) });
+        else cb?.(null, String(msg.error ?? 'tmux 실패'));
+        return;
+      }
       if (msg.event === 'termExit') {
         // WHY: 콜백을 정리보다 먼저 — dispose(사용자 kill)가 지운 뒤 도착한 termExit 는
         //      맵에 없어 조용히 끝난다 (자연 종료에만 발화하는 계약)
         const onExit = this.termExitHandlers.get(msg.term);
         this.termHandlers.delete(msg.term);
         this.termExitHandlers.delete(msg.term);
+        this.termTmuxHandlers.delete(msg.term);
         this.termRecv.delete(msg.term);
         this.termEpoch.delete(msg.term);
         this.termSent.delete(msg.term);
@@ -212,6 +222,9 @@ export class WsBackend implements ThinBackend {
       // 끊김 중 만든 터미널(현재 세대)은 큐 flush 로 새 세션에 살아 있으므로 제외
       if (msg.id === 0) {
         this.stageHandler?.(null); // attach 응답 = 접속 단계 완료
+        // terminal (와이어 v17) — 데몬의 터미널 방식. 구버전 데몬은 필드가 없다 (unsupported 취급 않음)
+        const t = msg.result?.terminal;
+        if (t && typeof t.mode === 'string') this.terminalModeHandler?.(t.mode, typeof t.error === 'string' ? t.error : null);
         if (this.isReconnect && msg.result?.resumed !== true) {
           const dead = [...this.termEpoch]
             .filter(([, epoch]) => epoch < this.connEpoch)
@@ -452,14 +465,32 @@ export class WsBackend implements ThinBackend {
     this.requestHandler = cb;
   }
 
-  createTerminal(cols: number, rows: number): TerminalSession {
+  createTerminal(cols: number, rows: number, attach?: string): TerminalSession {
     // WHY: 계약이 동기 반환이라 term id 는 클라이언트가 발급하고 생성은 fire-and-forget
     const term = this.nextTerm++;
     // 끊김 중 생성분은 다음 연결에서 데몬에 전달된다 — 그 세대로 기록해야
     // 세션 회수 재연결에서 산 터미널로 분류된다
     this.termEpoch.set(term, this.opened ? this.connEpoch : this.connEpoch + 1);
-    this.send({ method: 'createTerminal', params: { term, cols, rows } });
+    // attach 가 undefined 면 JSON.stringify 가 키를 떨군다 — 데몬은 새 세션으로 본다
+    this.send({ method: 'createTerminal', params: { term, cols, rows, attach } });
     return this.termHandle(term);
+  }
+
+  listTerminals(all?: boolean): Promise<TerminalInfo[]> {
+    return this.call('listTerminals', { all });
+  }
+  killTerminal(id: string): Promise<void> {
+    return this.call('killTerminal', { id });
+  }
+  renameTerminal(id: string, name: string): Promise<void> {
+    return this.call('renameTerminal', { id, name });
+  }
+  async applyTmuxConf(content: string): Promise<string> {
+    const r = await this.call<{ message?: string }>('tmuxConf', { content });
+    return r?.message ?? '';
+  }
+  onTerminalMode(cb: (mode: TerminalMode, error: string | null) => void): void {
+    this.terminalModeHandler = cb;
   }
 
   /** 로컬 핸들 — createTerminal·adoptTerminal 이 공유한다 (id 만 다르다) */
@@ -467,6 +498,7 @@ export class WsBackend implements ThinBackend {
     const forget = () => {
       this.termHandlers.delete(term);
       this.termExitHandlers.delete(term);
+      this.termTmuxHandlers.delete(term);
       this.termRecv.delete(term);
       this.termEpoch.delete(term);
       this.termSent.delete(term);
@@ -477,6 +509,7 @@ export class WsBackend implements ThinBackend {
       write: (data) => this.writeTerm(term, data),
       onData: (cb) => this.termHandlers.set(term, cb),
       onExit: (cb) => this.termExitHandlers.set(term, cb),
+      onTmux: (cb) => this.termTmuxHandlers.set(term, cb),
       resize: (c, r) => this.send({ method: 'termResize', params: { term, cols: c, rows: r } }),
       dispose: () => {
         this.send({ method: 'disposeTerminal', params: { term } });

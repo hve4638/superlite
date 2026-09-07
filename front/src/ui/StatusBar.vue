@@ -4,6 +4,7 @@ import { EDITOR_ZOOM_MAX, EDITOR_ZOOM_MIN, EDITOR_ZOOM_STEP, activeTab, base64By
 import { activeRepo } from '../model/scm';
 import { transfer } from '../model/transfer';
 import { connection, stageLabel, failureLabel } from '../model/watch';
+import { setTerminalZoom, terminalView } from '../model/terminal';
 
 // diff 탭도 path 를 가지므로 kind 무관하게 파일 정보를 표시한다 (VS Code 동일)
 const fileTab = computed(() => activeTab());
@@ -174,6 +175,21 @@ function fmtSize(bytes: number): string {
           </div>
         </div>
       </template>
+      <div v-else-if="fileTab?.kind === 'terminal'" ref="zoomItem" class="statusbar-item zoom" :class="{ open: zoomOpen }" title="Terminal Zoom" @click="toggleZoom">
+        <!-- 터미널 줌 — 편집기 줌과 별개의 값 (Ctrl+= / Ctrl+- / Ctrl+0 은 터미널 포커스 중 이쪽) -->
+        <span>{{ terminalView.zoom }}%</span>
+        <div v-if="zoomOpen" class="zoom-popover" :style="{ right: `${zoomRight}px` }" @click.stop>
+          <input
+            type="range"
+            :min="EDITOR_ZOOM_MIN"
+            :max="EDITOR_ZOOM_MAX"
+            :step="EDITOR_ZOOM_STEP"
+            :value="terminalView.zoom"
+            :style="{ '--fill': `${((terminalView.zoom - EDITOR_ZOOM_MIN) / (EDITOR_ZOOM_MAX - EDITOR_ZOOM_MIN)) * 100}%` }"
+            @input="setTerminalZoom(Number(($event.target as HTMLInputElement).value))"
+          />
+        </div>
+      </div>
       <div class="statusbar-item" title="No Notifications">
         <span class="codicon codicon-bell" />
       </div>
