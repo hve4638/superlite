@@ -41,6 +41,23 @@ self.MonacoEnvironment = {
 
 // WHY: colors 는 tokens.json(Dark Modern)의 실측값. CSS 변수는 monaco 테마에 못 쓰므로
 //      hex 로 풀어 쓴다 — tokens.css 와 이중화되지만 원본은 동일 spec 이다.
+//      액센트 계열만은 theme/accent.css 의 --sl-accent-* 를 읽어 채널(dev 보라)을 따라간다.
+/** CSS 변수를 실제 색으로 풀어 hex 로 — color-mix() 같은 값도 프로브 요소가 계산해 준다 */
+function cssColorHex(variable: string): string {
+  const probe = document.createElement('span');
+  probe.style.color = `var(${variable})`;
+  document.body.appendChild(probe);
+  const rgb = getComputedStyle(probe).color;
+  probe.remove();
+  // rgb(r, g, b) 또는 color-mix 결과인 color(srgb r g b) — 후자는 0..1 실수
+  const m = /^(rgba?|color)\((?:srgb )?([\d.]+),? ([\d.]+),? ([\d.]+)/.exec(rgb);
+  if (!m) return rgb;
+  const scale = m[1] === 'color' ? 255 : 1;
+  return '#' + m.slice(2, 5).map((c) => Math.round(Number(c) * scale).toString(16).padStart(2, '0')).join('');
+}
+const accentSoft = cssColorHex('--sl-accent-soft');
+const accentSelection = cssColorHex('--sl-accent-selection');
+
 monaco.editor.defineTheme('superlite-dark', {
   base: 'vs-dark',
   inherit: true,
@@ -50,7 +67,7 @@ monaco.editor.defineTheme('superlite-dark', {
     'editorLineNumber.foreground': '#6e7681',
     'editorLineNumber.activeForeground': '#cccccc',
     'editorCursor.foreground': '#aeafad',
-    'editor.selectionBackground': '#264f78',
+    'editor.selectionBackground': accentSelection,
     'editor.inactiveSelectionBackground': '#3a3d41',
     'editor.lineHighlightBorder': '#282828',
     'editorWhitespace.foreground': '#e3e4e229',
@@ -63,12 +80,12 @@ monaco.editor.defineTheme('superlite-dark', {
     'editorHoverWidget.border': '#cccccc33',
     'editorSuggestWidget.background': '#202020',
     'editorSuggestWidget.border': '#cccccc33',
-    'editorSuggestWidget.selectedBackground': '#04395e',
+    'editorSuggestWidget.selectedBackground': accentSoft,
     'editorGutter.background': '#1f1f1f',
     'scrollbarSlider.background': '#79797966',
     'scrollbarSlider.hoverBackground': '#646464b3',
     'scrollbarSlider.activeBackground': '#bfbfbf66',
-    'minimap.selectionHighlight': '#264f78',
+    'minimap.selectionHighlight': accentSelection,
     'minimapSlider.background': '#79797933',
     'minimapSlider.hoverBackground': '#64646459',
     'minimapSlider.activeBackground': '#bfbfbf33',

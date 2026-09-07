@@ -1,0 +1,79 @@
+/* 액센트(시그니처 색) 오버라이드 층 — tokens.css(생성 파일) 위에 얹는다. tokens.css 는 손대지
+   않고, 거기 흩어진 Dark Modern 액센트 계열 토큰만 여기서 --sl-accent-* 로 다시 선언한다.
+   색을 바꿀 때는 아래 :root 의 --sl-accent-* 만 건드린다. monaco.ts 테마도 같은 변수를 읽는다.
+
+   stable 값은 Dark Modern 실측 그대로. 파생 규칙(dev 블록의 color-mix 가 재현한다):
+     hover      = accent × 0.91                (button-hoverBackground)
+     soft       = accent 35% over #181818      (목록·퀵픽·제안 선택 배경)
+     selection  = accent 45% over #1f1f1f      (편집기·미니맵·터미널 선택)
+     link       = accent 70% + white 30%       (textLink)
+     highlight  = accent 82% + white 18%       (목록 검색 일치 글자) */
+:root {
+  --sl-accent: #0078d4;
+  --sl-accent-hover: #026ec1;
+  --sl-accent-soft: #04395e;
+  --sl-accent-selection: #264f78;
+  --sl-accent-link: #4daafc;
+  --sl-accent-highlight: #2aaaff;
+}
+
+/* dev 채널 — 빌드 시 SUPERLITE_CHANNEL=dev 면 vite.config.ts 가 <html data-channel="dev"> 를
+   박는다 (첫 페인트부터 보라). 파생색은 accent 하나에서 color-mix 로 만든다 */
+:root[data-channel='dev'] {
+  --sl-accent: #a371f7;
+  --sl-accent-hover: color-mix(in srgb, var(--sl-accent) 91%, black);
+  --sl-accent-soft: color-mix(in srgb, var(--sl-accent) 35%, #181818);
+  --sl-accent-selection: color-mix(in srgb, var(--sl-accent) 45%, #1f1f1f);
+  --sl-accent-link: color-mix(in srgb, var(--sl-accent) 70%, white);
+  --sl-accent-highlight: color-mix(in srgb, var(--sl-accent) 82%, white);
+}
+
+:root {
+  /* #0078d4 계열 */
+  --vscode-focusBorder: var(--sl-accent);
+  --vscode-button-background: var(--sl-accent);
+  --vscode-progressBar-background: var(--sl-accent);
+  --vscode-activityBarBadge-background: var(--sl-accent);
+  --vscode-activityBar-activeBorder: var(--sl-accent);
+  --vscode-tab-activeBorderTop: var(--sl-accent);
+  --vscode-panelTitle-activeBorder: var(--sl-accent);
+  --vscode-panelTitleBadge-background: var(--sl-accent);
+  --vscode-terminal-tab-activeBorder: var(--sl-accent);
+  --vscode-statusBar-focusBorder: var(--sl-accent);
+  --vscode-statusBarItem-focusBorder: var(--sl-accent);
+  --vscode-statusBarItem-remoteBackground: var(--sl-accent);
+  --vscode-extensionBadge-remoteBackground: var(--sl-accent);
+  --vscode-sash-hoverBorder: var(--sl-accent);
+  --vscode-menu-selectionBackground: var(--sl-accent);
+  --vscode-list-focusOutline: var(--sl-accent);
+  --vscode-editorGutter-modifiedBackground: var(--sl-accent);
+  --vscode-minimapGutter-modifiedBackground: var(--sl-accent);
+  --vscode-welcomePage-progress-foreground: var(--sl-accent);
+  /* 원본은 #2488db·#007acc — 액센트와 거의 같은 색이라 변수 하나로 합친다 */
+  --vscode-inputOption-activeBorder: var(--sl-accent);
+  --vscode-radio-activeBorder: var(--sl-accent);
+  --vscode-inputValidation-infoBorder: var(--sl-accent);
+
+  --vscode-button-hoverBackground: var(--sl-accent-hover);
+
+  /* #04395e 계열 */
+  --vscode-list-activeSelectionBackground: var(--sl-accent-soft);
+  --vscode-quickInputList-focusBackground: var(--sl-accent-soft);
+  --vscode-editorSuggestWidget-selectedBackground: var(--sl-accent-soft);
+  --vscode-editorActionList-focusBackground: var(--sl-accent-soft);
+  --vscode-banner-background: var(--sl-accent-soft);
+
+  /* #264f78 계열 */
+  --vscode-editor-selectionBackground: var(--sl-accent-selection);
+  --vscode-minimap-selectionHighlight: var(--sl-accent-selection);
+  --vscode-terminal-selectionBackground: var(--sl-accent-selection);
+
+  /* #4daafc 계열 */
+  --vscode-textLink-foreground: var(--sl-accent-link);
+  --vscode-textLink-activeForeground: var(--sl-accent-link);
+  --vscode-notificationLink-foreground: var(--sl-accent-link);
+
+  /* #2aaaff 계열 */
+  --vscode-list-highlightForeground: var(--sl-accent-highlight);
+  --vscode-list-focusHighlightForeground: var(--sl-accent-highlight);
+}
