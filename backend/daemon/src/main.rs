@@ -1,4 +1,9 @@
-//! superlite-daemon — 워크스페이스·터미널을 소유하는 단일 상주 프로세스 (v0, 로컬).
+//! superlite-daemon — 워크스페이스 데몬 한 바이너리의 두 모드 (ticket terminal-daemon-split,
+//! ws decision/process-topology.md 2026-09-07 개정):
+//!   - 파일 데몬 (인자 없음): fs·git·rg·watch·quickOpen. 유휴 3초 자진 종료 — 변동 계층.
+//!   - 터미널 데몬 termd (`--term`): PTY 소유·detach 버퍼·adopt·셸 심 frontRequest. 살아 있는
+//!     PTY 가 있는 한 앱·빌드 교체와 무관하게 산다 — 와이어를 따로 동결한 안정 계층
+//!     (common TERM_WIRE_VERSION). 두 소켓의 라우팅·합류는 relay 와 --pipe 헬퍼가 common::pair 로.
 //!
 //! 백엔드하고만 로컬 IPC(unix socket / Windows named pipe)로 통신한다 — 네트워크에 노출되지 않는다
 //! (_docs/decision/process-topology.md). 프레이밍은 개행 구분 JSON 한 줄:
@@ -6,12 +11,15 @@
 //! {"event":"termData","term","data"} 푸시. 연결마다 첫 요청은 attach(root) 여야 하고
 //! 이후 요청은 그 root 를 쓴다. 와이어 계약 확정은 보류 중 (_docs/decisions.md).
 //!
-//! 수명(tmux 방식): 백엔드가 접속 실패 시 이 바이너리를 spawn 한다. 연결 0 인 상태가
-//! grace(기본 3초) 지속되면 소켓을 지우고 스스로 종료한다.
+//! 수명(tmux 방식): 백엔드가 접속 실패 시 이 바이너리를 spawn 한다. 파일 데몬은 연결 0 인
+//! 상태가 grace(기본 3초) 지속되면 소켓을 지우고 스스로 종료한다. termd 는 연결 0 이고 살아
+//! 있는 터미널을 가진 세션도 0 일 때만 같은 grace 뒤 종료한다.
 //!
-//! 세션 지속: attach 의 session id(프론트 페이지 수명 단위)로 터미널이 연결보다 오래 산다.
-//! 끊김 중 터미널 출력은 세션 sink 에 버퍼링, 재접속 시 flush. detach 상태로 세션 grace
-//! (기본 300초)를 넘기면 회수한다. session id 없는 attach(체크 스크립트)는 익명 세션 —
+//! 세션 지속: attach 의 session id(프론트 페이지 수명 단위)로 세션 상태가 연결보다 오래 산다.
+//! termd: 끊김 중 터미널 출력은 세션 sink 에 버퍼링, 재접속 시 flush. detach 세션은 터미널이
+//! 하나라도 살아 있으면 회수하지 않는다 — 셸이 끝나거나 사용자가 닫을 때만 죽는다. 터미널이
+//! 없는 detach 세션은 reaper 가 바로 거둔다. 파일 데몬: 세션은 quickOpen 캐시뿐이라 detach 후
+//! 세션 grace(기본 300초)에 버린다. session id 없는 attach(체크 스크립트)는 익명 세션 —
 //! 연결 종료가 곧 터미널 정리다 (종전 동작).
 //!
 //! 파일 감시: attach 시 그 연결의 root 에 재귀 워처를 만들고, 이벤트를 75ms 집계·경로별
@@ -51,7 +59,30 @@ mod watch;
 
 use term::{Sink, SinkState, Terms};
 
-/// 연결보다 오래 사는 상태 한 벌 — attach 의 session id 가 키.
+/// 이 프로세스의 역할 — 한 바이너리, 두 소켓
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Files,
+    Term,
+}
+
+impl Mode {
+    fn sock(self) -> PathBuf {
+        match self {
+            Mode::Files => superlite_common::socket_path(),
+            Mode::Term => superlite_common::term_socket_path(),
+        }
+    }
+    fn name(self) -> &'static str {
+        match self {
+            Mode::Files => "superlite-daemon",
+            Mode::Term => "superlite-daemon --term",
+        }
+    }
+}
+
+/// 연결보다 오래 사는 상태 한 벌 — attach 의 session id 가 키. 파일 데몬은 root·quick 만 쓰고
+/// termd 는 terms·sink·pending 을 쓴다 (구조체 하나 — 모드는 디스패치에서 가른다)
 struct Session {
     /// attach 의 session id — PTY 환경변수(SUPERLITE_SESSION)로 요청자에게 알린다.
     /// 익명 세션은 None (요청자가 지목할 수 없다)
@@ -69,11 +100,17 @@ struct Session {
 
 type Sessions = Arc<Mutex<HashMap<String, Arc<Session>>>>;
 
-/// detach 후 grace 를 넘긴 세션 회수 — 터미널 kill 후 맵에서 제거.
-fn reap_sessions(sessions: &Sessions, grace: Duration) {
+/// detach 후 grace 를 넘긴 세션 회수. termd 는 살아 있는 터미널이 있는 세션을 절대 거두지
+/// 않는다 (terms 는 try_lock — sessions 락 아래에서 기다리지 않는다는 규칙. 못 잡으면 다음 틱)
+fn reap_sessions(sessions: &Sessions, grace: Duration, mode: Mode) {
     let mut dead = Vec::new();
     sessions.lock().unwrap().retain(|_, s| {
-        let expired = s.detached_at.lock().unwrap().is_some_and(|t| t.elapsed() >= grace);
+        let expired = s
+            .detached_at
+            .lock()
+            .unwrap()
+            .is_some_and(|t| t.elapsed() >= grace)
+            && (mode == Mode::Files || s.terms.try_lock().is_ok_and(|t| t.is_empty()));
         if expired {
             dead.push(s.clone());
         }
@@ -93,7 +130,11 @@ fn err<E: std::fmt::Display>(e: E) -> String {
 /// 와이어의 상대 경로는 '/' 구분이 계약이다 — Windows 가 산출한 경로의 '\' 를 정규화한다.
 /// unix 에선 '\' 가 파일명에 올 수 있는 문자라 치환하지 않는다.
 fn wire_rel(s: &str) -> String {
-    if cfg!(windows) { s.replace('\\', "/") } else { s.to_string() }
+    if cfg!(windows) {
+        s.replace('\\', "/")
+    } else {
+        s.to_string()
+    }
 }
 
 #[tokio::main]
@@ -113,7 +154,12 @@ async fn main() {
         clean::clean_main();
         return;
     }
-    let sock = superlite_common::socket_path();
+    let mode = if std::env::args().any(|a| a == "--term") {
+        Mode::Term
+    } else {
+        Mode::Files
+    };
+    let sock = mode.sock();
     // WHY: 단독 보장은 파일 락으로 — connect 검사→unlink→bind 순서는 원자적이지 않아
     //      동시 기동 시 산 데몬의 소켓 파일을 다른 데몬이 지우는 race 가 있다.
     //      락을 쥔 쪽만 소켓 파일을 만들고 지운다. 락은 프로세스 종료와 함께 풀린다.
@@ -135,11 +181,14 @@ async fn main() {
     {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("superlite-daemon: named pipe 생성 실패 {}: {e}", sock.display());
+            eprintln!(
+                "superlite-daemon: named pipe 생성 실패 {}: {e}",
+                sock.display()
+            );
             return;
         }
     };
-    eprintln!("superlite-daemon: {}", sock.display());
+    eprintln!("{}: {}", mode.name(), sock.display());
 
     let sessions: Sessions = Sessions::default();
     let conns = Arc::new(AtomicUsize::new(0));
@@ -148,8 +197,9 @@ async fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(3);
     // 연결 0 이 grace 만큼 지속되면 자진 종료 (백엔드 전멸 = 쓰는 사람 없음).
-    // 단 detach 세션이 남아 있으면 버틴다 — 세션 grace(재접속 약속)가 유휴 종료에
-    // 조용히 잘리지 않게. reaper 가 세션을 회수하고 나서야 유휴 카운트가 시작된다.
+    // termd 는 detach 세션이 남아 있으면 버틴다 — reaper 가 터미널 없는 세션만 거두므로
+    // 살아 있는 터미널이 하나라도 있으면 영원히 산다 (tmux 의 역할). 파일 데몬은 세션(quick
+    // 캐시)을 보지 않는다 — 프로세스 종료가 곧 캐시 정리다.
     // 소켓 파일이 사라져도 종료 — 아무도 접속할 수 없는 프로세스는 락만 쥔 좀비다
     // (unix 만 — named pipe 는 프로세스와 수명을 같이한다).
     // ponytail: 종료 직전 새 접속이 오는 race 는 백엔드의 접속 실패 → spawn 재시도가 흡수.
@@ -162,39 +212,43 @@ async fn main() {
             loop {
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 if cfg!(unix) && !sock.exists() {
-                    log_line("superlite-daemon: 소켓 파일 사라짐 — 종료");
+                    log_line(&format!("{}: 소켓 파일 사라짐 — 종료", mode.name()));
                     std::process::exit(2);
                 }
                 // try_lock: 감시는 누구도 기다리지 않는다 — 다른 태스크가 세션 맵을 영원히 쥐면
                 // 여기서 멈춰 소켓 확인까지 못 하는 좀비가 된다. 못 잡으면 이번 초는 '조용하지
                 // 않음'으로 (유휴 카운트만 늦어진다)
                 let quiet = conns.load(Ordering::SeqCst) == 0
-                    && sessions.try_lock().is_ok_and(|s| s.is_empty());
+                    && (mode == Mode::Files || sessions.try_lock().is_ok_and(|s| s.is_empty()));
                 idle = if quiet { idle + 1 } else { 0 };
                 if idle >= grace {
                     // 파일 정리는 unix 소켓만 — named pipe 는 프로세스 종료와 함께 사라진다
                     if cfg!(unix) {
                         let _ = std::fs::remove_file(&sock);
                     }
-                    log_line(&format!("superlite-daemon: 유휴 {grace}s — 종료"));
+                    log_line(&format!("{}: 유휴 {grace}s — 종료", mode.name()));
                     std::process::exit(0);
                 }
             }
         })
     };
 
-    // 세션 reaper — detach 된 세션의 터미널을 세션 grace 뒤 회수.
-    // 데몬 자체가 유휴 종료하면 그때 함께 죽는다 (백엔드 제어 연결이 있는 한 안 죽는다)
+    // 세션 reaper — 파일 데몬은 detach 된 세션(quick 캐시)을 세션 grace 뒤 버린다.
+    // termd 는 터미널이 없는 detach 세션만 즉시 거둔다 (grace 0) — 터미널이 있는 세션은
+    // 셸이 끝나 terms 가 비어야 거둬지고, 그래야 유휴 종료 조건이 참이 된다
     {
         let sessions = sessions.clone();
-        let session_grace: u64 = std::env::var("SUPERLITE_SESSION_GRACE_SECS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(300);
+        let session_grace: u64 = match mode {
+            Mode::Term => 0,
+            Mode::Files => std::env::var("SUPERLITE_SESSION_GRACE_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(300),
+        };
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(5)).await;
-                reap_sessions(&sessions, Duration::from_secs(session_grace));
+                reap_sessions(&sessions, Duration::from_secs(session_grace), mode);
             }
         });
     }
@@ -241,7 +295,7 @@ async fn main() {
                     // 감소는 drop guard 로 — handle_conn 이 panic 하면 이 뒤 코드는 실행되지 않아
                     // 카운터가 새고, 유휴 종료(연결 0 판정)가 영구히 막힌다
                     let _count = ConnCount(conns);
-                    handle_conn(stream, sessions).await;
+                    handle_conn(stream, sessions, mode).await;
                 });
             }
         });
@@ -264,43 +318,59 @@ fn log_line(s: &str) {
 }
 
 /// ssh 헬퍼 모드 — 백엔드가 `ssh host superlite-daemon --pipe` 로 원격(=이 머신)에
-/// 이 프로세스를 띄운다 (ws docs/decision/remote-ssh.md). 이 머신의 데몬 소켓에 접속
-/// (부재 시 자기 자신을 데몬으로 spawn)해 stdin/stdout 과 양방향 중계만 한다 — 내용
-/// 해석 없음. 로컬 relay 의 daemon_conn+spawn 대응물이고, "헬퍼가 곧 원격의 데몬"
-/// 대칭의 접점이다 (relay 는 별개 크레이트 + common 은 tokio 무의존이라 소량 중복 수용).
+/// 이 프로세스를 띄운다 (ws docs/decision/remote-ssh.md). 이 머신의 두 데몬 소켓(파일·termd)에
+/// 접속(부재 시 자기 자신을 각 모드로 spawn)해 stdin/stdout 과 중계한다 — 로컬 relay 의
+/// daemon_conn+spawn 대응물이고, "헬퍼가 곧 원격의 데몬" 대칭의 접점이다. 두 소켓의 분기·합류는
+/// common::pair (relay 와 같은 규칙) — stdin 한 줄을 메서드명으로 골라 한쪽에 쓰고, 두 소켓의
+/// 프레임을 stdout 으로 합류한다. 첫 줄은 attach 여야 하며 그 id 의 응답이 하나로 접힌다.
 ///
 /// ssh 가 죽으면(네트워크 단절·창 닫기) stdin EOF → 종료. 데몬 쪽 연결 drop 이 세션을
-/// detach 로 돌리고, 세션 grace 안의 재접속(새 헬퍼)이 터미널을 이어받는다.
+/// detach 로 돌리고, 재접속(새 헬퍼)이 터미널을 이어받는다.
 async fn pipe_main() {
-    let sock = superlite_common::socket_path();
-    let mut stream = None;
-    for i in 0..50 {
-        #[cfg(unix)]
-        let conn = tokio::net::UnixStream::connect(&sock).await;
-        #[cfg(windows)]
-        let conn = tokio::net::windows::named_pipe::ClientOptions::new().open(sock.as_os_str());
-        if let Ok(s) = conn {
-            stream = Some(s);
-            break;
-        }
-        if i == 0 {
-            spawn_self_daemon();
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    let Some(stream) = stream else {
-        eprintln!("superlite-daemon --pipe: 데몬 기동 실패 (5초): {}", sock.display());
-        std::process::exit(1);
+    use superlite_common::pair;
+    let files = pipe_connect(Mode::Files).await;
+    let term = pipe_connect(Mode::Term).await;
+    let (files_r, files_w) = tokio::io::split(files);
+    let (term_r, term_w) = tokio::io::split(term);
+    let mut up = pair::PairWriter {
+        files: files_w,
+        term: term_w,
     };
-    let (mut sock_r, mut sock_w) = tokio::io::split(stream);
-    let (mut in_r, mut out_w) = (tokio::io::stdin(), tokio::io::stdout());
+    let mut stdin = BufReader::new(tokio::io::stdin()).lines();
+    // 첫 줄 = attach — 그 id 로 합류기의 응답 접기를 맞춘다
+    let first = match stdin.next_line().await {
+        Ok(Some(l)) => l,
+        _ => std::process::exit(0),
+    };
+    let attach_id = serde_json::from_str::<Value>(&first).unwrap_or_default()["id"].clone();
+    let mut down = pair::spawn_merger(files_r, term_r, attach_id);
+    if up.send_line(&first).await.is_err() {
+        std::process::exit(1);
+    }
+    let mut out_w = tokio::io::stdout();
     // 어느 방향이든 끝나면(EOF·에러) 즉시 프로세스 종료로 나머지를 정리한다.
     // WHY: return 으로 런타임을 내리면 stdin 을 읽는 블로킹 스레드가 끝나길 기다린다 —
     //      데몬이 먼저 끊은 경우(attach 실패) ssh 가 stdin 을 닫을 때까지 살아남고, relay 는
     //      이 프로세스의 종료(EOF)를 기다려 서로 교착했다 (실측 2026-09-03)
-    tokio::select! {
-        _ = tokio::io::copy(&mut in_r, &mut sock_w) => {}
-        _ = tokio::io::copy(&mut sock_r, &mut out_w) => {}
+    loop {
+        tokio::select! {
+            l = stdin.next_line() => match l {
+                Ok(Some(l)) => {
+                    if up.send_line(&l).await.is_err() {
+                        break;
+                    }
+                }
+                _ => break,
+            },
+            f = down.recv() => match f {
+                Some(f) => {
+                    if pair::write_frame(&mut out_w, &f).await.is_err() {
+                        break;
+                    }
+                }
+                None => break,
+            },
+        }
     }
     // tokio Stdout 의 쓰기는 블로킹 스레드에서 끝난다 — flush 없이 exit 하면 데몬의 마지막
     // 응답(attach 실패 사유)이 유실된다 (실측)
@@ -308,10 +378,44 @@ async fn pipe_main() {
     std::process::exit(0);
 }
 
-/// 데몬 본체 spawn (헬퍼 → 자기 자신을 인자 없이) — relay 의 spawn_daemon 과 같은 정책
-fn spawn_self_daemon() {
-    let Ok(bin) = std::env::current_exe() else { return };
+#[cfg(unix)]
+type PipeStream = tokio::net::UnixStream;
+#[cfg(windows)]
+type PipeStream = tokio::net::windows::named_pipe::NamedPipeClient;
+
+/// 한 모드의 데몬 소켓 접속 — 부재 시 자기 자신을 그 모드로 spawn 하고 5초까지 재시도
+async fn pipe_connect(mode: Mode) -> PipeStream {
+    let sock = mode.sock();
+    for i in 0..50 {
+        #[cfg(unix)]
+        let conn = tokio::net::UnixStream::connect(&sock).await;
+        #[cfg(windows)]
+        let conn = tokio::net::windows::named_pipe::ClientOptions::new().open(sock.as_os_str());
+        if let Ok(s) = conn {
+            return s;
+        }
+        if i == 0 {
+            spawn_self_daemon(mode);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    eprintln!(
+        "superlite-daemon --pipe: {} 기동 실패 (5초): {}",
+        mode.name(),
+        sock.display()
+    );
+    std::process::exit(1);
+}
+
+/// 데몬 본체 spawn (헬퍼 → 자기 자신을 그 모드로) — relay 의 spawn_daemon 과 같은 정책
+fn spawn_self_daemon(mode: Mode) {
+    let Ok(bin) = std::env::current_exe() else {
+        return;
+    };
     let mut cmd = std::process::Command::new(bin);
+    if mode == Mode::Term {
+        cmd.arg("--term");
+    }
     // 이 프로세스의 stdout 은 ssh 채널(와이어)이다 — 상속되면 데몬 로그가 프로토콜을
     // 오염시킨다 (데몬은 stderr 로만 쓰지만 fail-safe).
     // WHY: stderr 도 상속하지 않는다 — 데몬은 이 헬퍼(ssh 세션)보다 오래 산다. ssh 가 끊긴
@@ -321,7 +425,8 @@ fn spawn_self_daemon() {
     //      로그는 캐시 밑 파일로 — 실패 시 null
     cmd.stdout(std::process::Stdio::null());
     cmd.stderr(
-        superlite_common::daemon_log_file().map_or_else(std::process::Stdio::null, std::process::Stdio::from),
+        superlite_common::daemon_log_file()
+            .map_or_else(std::process::Stdio::null, std::process::Stdio::from),
     );
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
@@ -342,7 +447,10 @@ fn acquire_lock(sock: &Path) -> Option<std::fs::File> {
     f.try_lock().ok()?;
     // 보유자 pid — `--clean` 이 좀비(락은 쥐고 소켓은 없음)를 지목하는 유일한 근거.
     // 락을 쥔 뒤에만 쓴다 (밀려난 후보가 산 데몬의 pid 를 덮지 않게). 실패해도 데몬은 뜬다
-    let _ = std::fs::write(superlite_common::pid_path(sock), std::process::id().to_string());
+    let _ = std::fs::write(
+        superlite_common::pid_path(sock),
+        std::process::id().to_string(),
+    );
     Some(f)
 }
 
@@ -441,7 +549,11 @@ impl Drop for ConnCleanup {
 /// 0x00 첫 바이트로 무모호하게 구분된다.
 /// attach 뒤에만 허용되는 요청의 root — attach 전이면 응답 있는 요청(id 비-null)에만 에러를
 /// 돌리고 None (알림은 조용히 버린다)
-fn session_root(cleanup: &ConnCleanup, tx: &UnboundedSender<String>, id: &serde_json::Value) -> Option<PathBuf> {
+fn session_root(
+    cleanup: &ConnCleanup,
+    tx: &UnboundedSender<String>,
+    id: &serde_json::Value,
+) -> Option<PathBuf> {
     match &cleanup.session {
         Some(s) => Some(s.root.clone()),
         None => {
@@ -468,6 +580,7 @@ fn payload_frame(header: &serde_json::Value, body: &[u8]) -> Vec<u8> {
 async fn handle_conn(
     stream: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static,
     sessions: Sessions,
+    mode: Mode,
 ) {
     let (read_half, mut write_half) = tokio::io::split(stream);
     // WHY: 응답·터미널 이벤트가 여러 태스크/스레드에서 나오므로 단일 writer 태스크로 직렬화.
@@ -502,7 +615,11 @@ async fn handle_conn(
         }
     });
 
-    let mut cleanup = ConnCleanup { session: None, named: false, tx: tx.clone() };
+    let mut cleanup = ConnCleanup {
+        session: None,
+        named: false,
+        tx: tx.clone(),
+    };
     let watcher_slot = watch::WatcherSlot::default();
     let mut lines = BufReader::new(read_half).lines();
     loop {
@@ -511,8 +628,20 @@ async fn handle_conn(
             Ok(Ok(Some(l))) => l,
             _ => break,
         };
-        let Ok(req) = serde_json::from_str::<Value>(&line) else { continue };
+        let Ok(req) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
         let method = req["method"].as_str().unwrap_or("").to_string();
+        // 모드 밖 메서드 — 파일 데몬에 온 터미널 메서드, termd 에 온 파일 메서드. 라우팅
+        // (common::pair)이 맞으면 오지 않는다. 응답 있는 요청에만 에러를 돌린다
+        let mine = matches!(method.as_str(), "attach" | "ping")
+            || (superlite_common::pair::is_term_method(&method) == (mode == Mode::Term));
+        if !mine {
+            if !req["id"].is_null() {
+                let _ = tx.send(json!({"id": req["id"], "error": format!("{}: 모르는 메서드 {method}", mode.name())}).to_string());
+            }
+            continue;
+        }
         match method.as_str() {
             "ping" => {} // 생존 신호 — read timeout 리셋이 목적의 전부, 응답 없음
             // 요청자(셸 심)의 프론트 요청 (와이어 v9) — attach 없이 허용. 대상 세션은
@@ -547,7 +676,8 @@ async fn handle_conn(
                 // WHY: 재-attach 를 허용하면 클라이언트가 root 를 갈아끼워 safe_join 의
                 //      루트 봉쇄를 통째로 우회한다 — 연결당 한 번만
                 if cleanup.session.is_some() {
-                    let _ = tx.send(json!({"id": req["id"], "error": "이미 attach 된 연결"}).to_string());
+                    let _ = tx
+                        .send(json!({"id": req["id"], "error": "이미 attach 된 연결"}).to_string());
                     continue;
                 }
                 // plain: verbatim 루트는 '/' 와이어 경로 join·자식 cwd 를 깨뜨린다 (common 참조)
@@ -565,7 +695,8 @@ async fn handle_conn(
                                     pair
                                 }
                                 Err(e) => {
-                                    let _ = tx.send(json!({"id": req["id"], "error": e}).to_string());
+                                    let _ =
+                                        tx.send(json!({"id": req["id"], "error": e}).to_string());
                                     break;
                                 }
                             },
@@ -581,7 +712,7 @@ async fn handle_conn(
                         // 워처는 연결 스코프 — 끊김 중 놓친 이벤트는 프론트가 재접속 시 전체 리프레시.
                         // watch:false (와이어 v7) 는 탐색 전용 attach — 원격 빈 세션이 폴더 열기
                         // 퀵인풋으로 이 머신을 탐색만 하는 동안 홈 전체에 재귀 워처를 걸지 않는다
-                        if req["params"]["watch"].as_bool() != Some(false) {
+                        if mode == Mode::Files && req["params"]["watch"].as_bool() != Some(false) {
                             watch::start_watcher(r, tx.clone(), watcher_slot.clone());
                         }
                         cleanup.session = Some(s);
@@ -591,7 +722,10 @@ async fn handle_conn(
                         );
                     }
                     Err(e) => {
-                        let _ = tx.send(json!({"id": req["id"], "error": format!("attach 실패: {e}")}).to_string());
+                        let _ = tx.send(
+                            json!({"id": req["id"], "error": format!("attach 실패: {e}")})
+                                .to_string(),
+                        );
                         break; // 루트 없는 연결은 쓸모없다 — 닫아서 실패를 드러낸다
                     }
                 }
@@ -599,7 +733,14 @@ async fn handle_conn(
             // 터미널 계열은 입력 순서 보장이 필요해 read 루프에서 즉시 처리 (전부 논블로킹)
             "createTerminal" | "termWrite" | "termResize" | "termAck" | "disposeTerminal" => {
                 let Some(s) = &cleanup.session else { continue };
-                term::handle_term(&method, &req["params"], &s.terms, &s.sink, &s.root, s.id.as_deref());
+                term::handle_term(
+                    &method,
+                    &req["params"],
+                    &s.terms,
+                    &s.sink,
+                    &s.root,
+                    s.id.as_deref(),
+                );
             }
             // 세션 간 터미널 이동 (와이어 v10) — 출처 세션은 맵에서 Arc 만 꺼내고 락을 놓은 뒤
             // 옮긴다 (sessions → terms 락 중첩을 만들지 않는다). 같은 root 사이에서만 —
@@ -607,11 +748,16 @@ async fn handle_conn(
             "adoptTerminal" => {
                 let Some(s) = &cleanup.session else {
                     // 응답 있는 요청 — 무응답이면 프론트 프로미스가 영구 대기한다
-                    let _ = tx.send(json!({"id": req["id"], "error": "attach 전 요청"}).to_string());
+                    let _ =
+                        tx.send(json!({"id": req["id"], "error": "attach 전 요청"}).to_string());
                     continue;
                 };
                 let p = &req["params"];
-                let out = match (p["from"].as_str(), p["fromTerm"].as_u64(), p["term"].as_u64()) {
+                let out = match (
+                    p["from"].as_str(),
+                    p["fromTerm"].as_u64(),
+                    p["term"].as_u64(),
+                ) {
                     (Some(from), Some(from_term), Some(term)) => {
                         let src = sessions.lock().unwrap().get(from).cloned();
                         match src {
@@ -634,14 +780,21 @@ async fn handle_conn(
             // 달라 일반 경로와 분리 라우팅
             "readFile" => {
                 let (id, params) = (req["id"].clone(), req["params"].clone());
-                let Some(root) = session_root(&cleanup, &tx, &id) else { continue };
+                let Some(root) = session_root(&cleanup, &tx, &id) else {
+                    continue;
+                };
                 let (tx, btx) = (tx.clone(), btx.clone());
                 tokio::spawn(async move {
                     match req::read_file(&params, &root).await {
                         Ok(req::ReadOut::Json(v)) => {
                             let _ = tx.send(json!({"id": id, "result": v}).to_string());
                         }
-                        Ok(req::ReadOut::Payload { mut meta, body, enc, typ }) => {
+                        Ok(req::ReadOut::Payload {
+                            mut meta,
+                            body,
+                            enc,
+                            typ,
+                        }) => {
                             meta["payload"] = json!({"enc": enc, "type": typ});
                             let header = json!({"id": id, "result": meta});
                             let _ = btx.send(payload_frame(&header, &body));
@@ -670,7 +823,9 @@ async fn handle_conn(
             }
             _ => {
                 let (id, params) = (req["id"].clone(), req["params"].clone());
-                let Some(root) = session_root(&cleanup, &tx, &id) else { continue };
+                let Some(root) = session_root(&cleanup, &tx, &id) else {
+                    continue;
+                };
                 let tx = tx.clone();
                 tokio::spawn(async move {
                     let out = match req::handle_req(&method, &params, &root).await {

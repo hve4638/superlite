@@ -20,8 +20,10 @@ async fn main() {
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::current_dir().unwrap());
     // plain: Windows verbatim 루트는 '/' 와이어 경로·자식 cwd 를 깨뜨린다 (common 참조)
-    let root =
-        superlite_common::plain(root.canonicalize().expect("워크스페이스 루트 경로가 존재해야 한다"));
+    let root = superlite_common::plain(
+        root.canonicalize()
+            .expect("워크스페이스 루트 경로가 존재해야 한다"),
+    );
     // 네트워크 노출 지점은 여기 하나 — 기본은 localhost. 개발 LAN 접근은 vite(8793)가 프록시.
     let addr = std::env::var("SUPERLITE_HTTP").unwrap_or_else(|_| "127.0.0.1:8795".into());
     // 빌드된 프론트가 있으면 서빙. 개발 중엔 vite 가 프론트를 서빙하고 /ws 만 여기로 프록시.
@@ -37,8 +39,19 @@ async fn main() {
         Err(_) => None,
     };
     let auth = if token.is_some() { "token" } else { "off" };
-    let listener = TcpListener::bind(&addr).await.expect("bind 실패 (SUPERLITE_HTTP 로 변경)");
+    let listener = TcpListener::bind(&addr)
+        .await
+        .expect("bind 실패 (SUPERLITE_HTTP 로 변경)");
     // dist 는 cwd 상대 기본값 — 다른 디렉터리에서 띄우면 404 만 나므로 경로를 같이 찍는다
-    eprintln!("superlite-backend: http://{addr} root={} dist={dist} auth={auth}", root.display());
-    superlite_backend::serve(listener, superlite_backend::SessionRoots::Fixed(root), token, Some(dist)).await;
+    eprintln!(
+        "superlite-backend: http://{addr} root={} dist={dist} auth={auth}",
+        root.display()
+    );
+    superlite_backend::serve(
+        listener,
+        superlite_backend::SessionRoots::Fixed(root),
+        token,
+        Some(dist),
+    )
+    .await;
 }

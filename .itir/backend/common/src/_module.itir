@@ -1,6 +1,8 @@
-role: 데몬·백엔드 공유 규약 — IPC 주소(unix socket / Windows named pipe)와 락 파일 경로, 빌드 정보(버전·커밋·빌드 시각·채널 — build.rs 가 굽는다, 세 바이너리가 같은 값). 릴리스 채널(release-channel): SUPERLITE_CHANNEL 로 구운 CHANNEL 과 이름 줄기 SLUG(superlite / superlite-<channel>)가 이름이 고정된 자원(IPC 폴더·파이프·캐시·relay 의 설정 폴더·원격 헬퍼 폴더)을 채널별로 갈라 dev·stable 설치본이 한 PC 에 공존한다
+role: 데몬·백엔드 공유 규약 — IPC 주소(unix socket / Windows named pipe — 파일 데몬·터미널 데몬 termd 각각)와 락 파일 경로, 두 데몬 소켓의 라우팅·합류(pair 모듈 — relay 와 원격 헬퍼 --pipe 공용, 그래서 tokio·serde_json 의존), 빌드 정보(버전·커밋·빌드 시각·채널 — build.rs 가 굽는다, 세 바이너리가 같은 값). 릴리스 채널(release-channel): SUPERLITE_CHANNEL 로 구운 CHANNEL 과 이름 줄기 SLUG(superlite / superlite-<channel>)가 이름이 고정된 자원(IPC 폴더·파이프·캐시·relay 의 설정 폴더·원격 헬퍼 폴더)을 채널별로 갈라 dev·stable 설치본이 한 PC 에 공존한다
 
 export val WIRE_VERSION
+// 터미널 데몬 와이어 버전 — 파일 데몬과 분리해 동결 (ticket terminal-daemon-split). termd 는 앱·빌드 교체 뒤에도 사는 안정 계층이라 새 빌드가 옛 termd 에 붙어야 한다. 메인 데몬 변경은 이 값을 건드리지 않는다
+export val TERM_WIRE_VERSION
 export val VERSION
 export val COMMIT
 export val BUILT_AT
@@ -11,6 +13,9 @@ export fn version_line(bin) -> String {
 }
 export fn socket_path() -> PathBuf {
   role: 데몬 IPC 주소 — unix 는 사용자 전용(0700) 런타임 디렉토리(<SLUG>-<user>) 밑 소켓, Windows 는 사용자별 named pipe 이름(<SLUG>-<user>-<wire>). 채널이 다르면 주소가 달라 dev 앱이 stable 데몬에 붙지 않는다. 두 프로세스가 같은 주소를 계산하는 것이 접속 규약. 주소에 와이어 버전(WIRE_VERSION)을 넣어 와이어가 다른 빌드의 백엔드가 구버전 상주 데몬에 조용히 붙지 않게 한다 — 데몬 메서드 추가·의미 변경 시 버전을 올린다 (v11: readFile 범위 읽기 offset + stat size). 같은 이름의 env 를 데몬이 PTY 에 주입해(와이어 v9) 셸 심이 socket_path() 만으로 제 데몬을 찾는다
+}
+export fn term_socket_path() -> PathBuf {
+  role: 터미널 데몬(termd) IPC 주소 — socket_path 와 같은 디렉터리·규칙, 이름만 term-<TERM_WIRE_VERSION> (Windows 파이프 <SLUG>-<user>-term-<N>). 우회 변수 SUPERLITE_TERM_SOCK (check 하니스 격리, termd 가 PTY 에 같은 이름으로 주입)
 }
 export fn lock_path(sock) -> PathBuf {
   role: 데몬 단독 보장용 락 파일 경로 — IPC 주소에서 파생해 SUPERLITE_SOCK 우회(격리 인스턴스)가 락에도 전파된다. Windows 의 pipe 이름은 파일 경로가 아니라 평탄화해 %TEMP% 밑에 둔다

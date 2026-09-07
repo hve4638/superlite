@@ -1,0 +1,30 @@
+role: 두 데몬(파일 데몬 + termd) 연결 한 쌍을 와이어 한 줄기로 보이게 하는 라우팅·합류 — 로컬 relay 와 원격 헬퍼(superlite-daemon --pipe)가 같은 규칙. 올라가는 방향은 메서드명으로 한쪽에만(attach·ping 은 양쪽 — 요청 하나는 소켓 하나로만 가므로 id 충돌 없음), 내려오는 방향은 프레임(JSON 줄 / 0x00 바이너리 payload) 단위 합류. "중계자는 내용을 해석하지 않는다" 원칙의 유일한 예외가 이 메서드명 분기다. attach 응답은 양쪽을 모아 하나만 내보낸다 (둘 다 성공이면 termd 것 — 터미널 resumed 가 실린다, 에러면 그 에러 즉시)
+
+export val PAYLOAD_MAX
+export class Frame {
+  role: 데몬 IPC 프레임 하나 — Line(JSON 줄) | Bin(payload 본문, 매직·길이 벗김)
+}
+export fn read_frame(r) -> Frame? {
+  role: 다음 프레임 — 첫 바이트 0x00 이면 4B BE 길이의 바이너리, 아니면 줄. 상한 초과·비 UTF-8 은 오염 에러. 순차 읽기 전용 (select 취소 불안전)
+}
+export fn write_frame(w, f) {
+  role: 프레임을 IPC 바이트로 (개행 / 0x00 + 길이 접두) — 헬퍼가 stdout 으로 합류할 때
+}
+export fn is_term_method(m) -> bool {
+  role: TERM_WIRE_VERSION 1 의 표면 — createTerminal·termWrite·termResize·termAck·disposeTerminal·adoptTerminal·frontRequest·requestReply (attach·ping 은 공통이라 제외). 데몬도 모드 밖 메서드 거부에 같은 표를 쓴다
+}
+export class Route {
+  role: 요청 목적지 — Files | Term | Both
+}
+export fn route(line) -> Route {
+  role: 메서드명으로 목적지 — attach·ping 은 Both, termd 메서드는 Term, 나머지(파싱 실패 포함)는 Files
+}
+export class PairWriter {
+  role: 두 데몬 쓰기 반쪽 — send_line 이 route 대로 나눠 쓴다
+}
+export class Merged {
+  role: 합류 스트림 수신 쪽 — recv 로 프레임, drop 이 읽기 태스크를 abort 해 소켓 읽기 반쪽을 놓는다 (split 소켓은 양쪽 반쪽이 다 drop 돼야 닫힌다 — 읽기 태스크가 살아 있으면 데몬이 EOF 를 못 봐 세션이 detach 로 안 넘어갔다)
+}
+export fn spawn_merger(files, term, attach_id) -> Merged {
+  role: 두 읽기 반쪽을 프레임 단위로 합류 — attach_id 응답을 하나로 접고, 어느 쪽이든 EOF·오염이면 스트림 종료. 채널 상한 없음 (배압은 termAck·요청 단위 계층 몫, 종전 relay 도 소켓→WS 버퍼 상한이 없었다)
+}

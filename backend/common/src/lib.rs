@@ -3,12 +3,23 @@
 
 use std::path::{Path, PathBuf};
 
-/// 데몬 IPC 주소 — unix 는 unix socket 경로, Windows 는 named pipe 이름.
+pub mod pair;
+
+/// 파일 데몬 IPC 주소 — unix 는 unix socket 경로, Windows 는 named pipe 이름.
 pub fn socket_path() -> PathBuf {
     if let Ok(p) = std::env::var("SUPERLITE_SOCK") {
         return PathBuf::from(p); // 테스트·개발용 우회 — 검증 없음
     }
-    ipc_path()
+    ipc_path(&format!("daemon-{WIRE_VERSION}"))
+}
+
+/// 터미널 데몬(termd, `superlite-daemon --term`) IPC 주소 — 파일 데몬과 같은 디렉터리·규칙,
+/// 이름만 term-<TERM_WIRE_VERSION>. 우회 변수는 SUPERLITE_TERM_SOCK (check 하니스 격리)
+pub fn term_socket_path() -> PathBuf {
+    if let Ok(p) = std::env::var("SUPERLITE_TERM_SOCK") {
+        return PathBuf::from(p);
+    }
+    ipc_path(&format!("term-{TERM_WIRE_VERSION}"))
 }
 
 /// 데몬 와이어 버전 — 데몬 메서드 추가·의미 변경 시 올린다. IPC 주소에 들어가므로 와이어가
@@ -51,7 +62,20 @@ pub fn socket_path() -> PathBuf {
 /// 14: writeFile 에 append(base64 청크 업로드의 후속 조각 — etag 검사 없이 끝에 덧붙인다).
 ///    탐색기 업로드(ticket explorer-download)가 큰 파일을 4MB 조각으로 나른다. 구버전 데몬은
 ///    append 를 무시하고 매 조각으로 파일을 덮어써 마지막 조각만 남는다.
-pub const WIRE_VERSION: u32 = 14;
+/// 15: 터미널 계열(createTerminal·termWrite·termResize·termAck·disposeTerminal·adoptTerminal·
+///    frontRequest·requestReply)이 파일 데몬 와이어에서 빠져 터미널 데몬(termd)으로 갔다
+///    (ticket terminal-daemon-split). 파일 데몬은 이 메서드들을 unknown 으로 응답한다.
+pub const WIRE_VERSION: u32 = 15;
+
+/// 터미널 데몬 와이어 버전 — 파일 데몬과 분리해 **동결**한다. termd 는 앱 종료·빌드 교체 뒤에도
+/// 살아남는 안정 계층이라(ws decision/process-topology.md 2026-09-07 개정), 새 빌드의 백엔드가
+/// 옛 termd 에 그대로 붙어야 터미널이 산다. 메인 데몬 변경은 이 값을 건드리지 않고, termd
+/// 메서드 추가·의미 변경에만 +1 한다.
+/// 1: attach(root, session) · ping · createTerminal · termWrite · termResize · termAck ·
+///    disposeTerminal · adoptTerminal · frontRequest · requestReply, 이벤트 termData · termExit ·
+///    termInputAck · request. PTY 에 SUPERLITE_SOCK(파일 데몬)·SUPERLITE_TERM_SOCK(termd)·
+///    SUPERLITE_SESSION 주입.
+pub const TERM_WIRE_VERSION: u32 = 1;
 
 /// 릴리스 버전 — 루트 Cargo.toml `[workspace.package] version` 하나에서 온다 (crate 4개가 상속).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -72,13 +96,17 @@ pub const SLUG: &str = env!("SUPERLITE_SLUG");
 /// 예: `superlite-daemon 0.1.0 (8700a11f2, built 2026-09-06T05:00:00Z, wire 13)`,
 /// dev 채널은 `superlite-daemon 0.1.0 dev (…)`
 pub fn version_line(bin: &str) -> String {
-    let ch = if CHANNEL.is_empty() { String::new() } else { format!(" {CHANNEL}") };
-    format!("{bin} {VERSION}{ch} ({COMMIT}, built {BUILT_AT}, wire {WIRE_VERSION})")
+    let ch = if CHANNEL.is_empty() {
+        String::new()
+    } else {
+        format!(" {CHANNEL}")
+    };
+    format!("{bin} {VERSION}{ch} ({COMMIT}, built {BUILT_AT}, wire {WIRE_VERSION}, term wire {TERM_WIRE_VERSION})")
 }
 
 /// 0700 전용 디렉터리를 만들어 그 안에 소켓을 둔다.
 #[cfg(unix)]
-fn ipc_path() -> PathBuf {
+fn ipc_path(name: &str) -> PathBuf {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
     let base = std::env::var("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
@@ -88,11 +116,17 @@ fn ipc_path() -> PathBuf {
     let mut b = std::fs::DirBuilder::new();
     b.mode(0o700);
     let _ = b.create(&dir); // 이미 있으면 무시 — 아래 권한 검사가 방어한다
-    // WHY: /tmp fallback 은 world-writable — 남이 선점했거나 열린 디렉터리면 소켓 하이재킹
-    //      (가짜 데몬에 파일·터미널 전부 노출)이 가능하다. 조용히 넘어가지 않고 죽는다.
-    let mode = std::fs::metadata(&dir).map(|m| m.permissions().mode()).unwrap_or(0);
-    assert!(mode & 0o077 == 0, "IPC 디렉터리 권한 이상 (0700 이어야 한다): {}", dir.display());
-    dir.join(format!("daemon-{WIRE_VERSION}.sock"))
+                            // WHY: /tmp fallback 은 world-writable — 남이 선점했거나 열린 디렉터리면 소켓 하이재킹
+                            //      (가짜 데몬에 파일·터미널 전부 노출)이 가능하다. 조용히 넘어가지 않고 죽는다.
+    let mode = std::fs::metadata(&dir)
+        .map(|m| m.permissions().mode())
+        .unwrap_or(0);
+    assert!(
+        mode & 0o077 == 0,
+        "IPC 디렉터리 권한 이상 (0700 이어야 한다): {}",
+        dir.display()
+    );
+    dir.join(format!("{name}.sock"))
 }
 
 /// named pipe 는 파일시스템 밖 네임스페이스 — 디렉터리·권한 준비가 없다.
@@ -101,9 +135,9 @@ fn ipc_path() -> PathBuf {
 ///           단일 사용자 PC 전제로 수용한다. 공유 머신 대응 시 relay 접속부에 서버 프로세스
 ///           SID 검증(GetNamedPipeServerProcessId)을 추가한다.
 #[cfg(windows)]
-fn ipc_path() -> PathBuf {
+fn ipc_path(name: &str) -> PathBuf {
     let user = std::env::var("USERNAME").unwrap_or_else(|_| "default".into());
-    PathBuf::from(format!(r"\\.\pipe\{SLUG}-{user}-{WIRE_VERSION}"))
+    PathBuf::from(format!(r"\\.\pipe\{SLUG}-{user}-{name}"))
 }
 
 /// 데몬 단독 보장용 락 파일 경로 — IPC 주소에서 파생해 SUPERLITE_SOCK 우회가 락에도
@@ -123,7 +157,11 @@ pub fn lock_path(sock: &Path) -> PathBuf {
 /// 락 파일 열기 — 데몬 기동(acquire_lock)과 `--clean` 의 보유자 탐지(try_lock)가 같은 규칙.
 /// truncate(false) 가 계약: 락을 쥐지 못한 쪽이 열기만으로 내용을 비우면 안 된다
 pub fn open_lock_file(path: &Path) -> std::io::Result<std::fs::File> {
-    std::fs::OpenOptions::new().write(true).create(true).truncate(false).open(path)
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
 }
 
 /// 이 머신의 superlite 캐시 디렉터리 `$HOME/.cache/<SLUG>` (stable 은 superlite) — 헬퍼
@@ -138,7 +176,11 @@ pub fn cache_dir() -> Option<PathBuf> {
 pub fn daemon_log_file() -> Option<std::fs::File> {
     let dir = cache_dir()?;
     std::fs::create_dir_all(&dir).ok()?;
-    std::fs::OpenOptions::new().append(true).create(true).open(dir.join("daemon.log")).ok()
+    std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(dir.join("daemon.log"))
+        .ok()
 }
 
 /// 락 보유 데몬의 pid 파일 — 락 파일과 나란히 (`daemon-<N>.pid`). 락을 쥔 쪽만 쓴다.

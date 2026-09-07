@@ -1,4 +1,4 @@
-// 수명 스모크 — 데몬 자동 기동(tmux 방식)과 유휴 자진 종료를 검증한다.
+// 수명 스모크 — 데몬 둘(파일·termd)의 자동 기동(tmux 방식)과 유휴 자진 종료를 검증한다.
 //   cargo build --workspace 후: node backend/relay/check-lifecycle.mjs
 // 개발 중 인스턴스와 부딪히지 않게 소켓·포트를 전용으로 띄운다.
 import assert from 'node:assert';
@@ -10,9 +10,11 @@ import { fileURLToPath } from 'node:url';
 
 const dir = mkdtempSync(join(tmpdir(), 'sl-check-'));
 const sock = join(dir, 'daemon.sock');
+const termSock = join(dir, 'term.sock');
 const env = {
   ...process.env,
   SUPERLITE_SOCK: sock, // 데몬은 백엔드의 자식 — env 를 물려받아 같은 소켓을 쓴다
+  SUPERLITE_TERM_SOCK: join(dir, 'term.sock'),
   SUPERLITE_HTTP: '127.0.0.1:18795',
   SUPERLITE_GRACE_SECS: '2',
 };
@@ -48,12 +50,15 @@ try {
   });
   assert.ok(resp.result.rootPath.length > 0, 'workspace via 중계');
   assert.ok(existsSync(sock), '데몬 소켓 존재');
+  assert.ok(existsSync(termSock), '터미널 데몬 소켓 존재');
   ws.close();
 
-  // 2) 백엔드가 죽으면(연결 0) 데몬이 grace(2초) 뒤 소켓을 지우고 자진 종료한다
+  // 2) 백엔드가 죽으면(연결 0) 두 데몬 모두 grace(2초) 뒤 소켓을 지우고 자진 종료한다
+  //    (termd 는 살아 있는 터미널이 없으므로 — 있을 때의 생존은 check-reconnect)
   backend.kill('SIGKILL');
   await sleep(6000);
   assert.ok(!existsSync(sock), '데몬 유휴 자진 종료 — 소켓이 남아 있다');
+  assert.ok(!existsSync(termSock), '터미널 데몬 유휴 자진 종료 — 소켓이 남아 있다');
   console.log('lifecycle check: OK');
 } finally {
   backend.kill('SIGKILL');

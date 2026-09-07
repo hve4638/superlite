@@ -1,8 +1,10 @@
 //! superlite-backend 중계 코어 — /ws ↔ 데몬 IPC(unix socket / named pipe) 중계.
 //!
-//! 유일한 네트워크 노출 지점 (_docs/decision/process-topology.md). 데몬을 tmux 방식으로
-//! 자동 기동하고(접속 실패 → spawn → 재시도), 프론트 WS 연결마다 데몬 IPC 연결을
-//! 1:1 로 열어 그대로 중계한다 — id 재매핑 없음. 각 데몬 연결에 30초 주기 ping(생존 신호).
+//! 유일한 네트워크 노출 지점 (_docs/decision/process-topology.md). 데몬 둘(파일 데몬 + 터미널
+//! 데몬 termd, ticket terminal-daemon-split)을 tmux 방식으로 자동 기동하고(접속 실패 → spawn →
+//! 재시도), 프론트 WS 연결마다 두 데몬 IPC 연결을 열어 common::pair 로 메서드명 분기·프레임
+//! 합류해 중계한다 — id 재매핑 없음 (요청 하나는 소켓 하나로만 간다). 원격은 헬퍼(--pipe)가
+//! 같은 분기를 하므로 ssh 채널 하나. 각 데몬 연결에 30초 주기 ping(생존 신호).
 //!
 //! bin(main.rs)은 env 를 해석해 dist 정적 서빙을 얹은 단독 웹서버로 뜨고,
 //! Tauri 앱(app/)은 front 를 자산으로 번들하므로 dist 없이 in-process 로 serve 를 부른다.
@@ -18,6 +20,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde_json::json;
+use superlite_common::pair::{self, Frame};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tower_http::services::ServeDir;
@@ -28,6 +31,28 @@ mod ssh;
 type DaemonStream = tokio::net::UnixStream;
 #[cfg(windows)]
 type DaemonStream = tokio::net::windows::named_pipe::NamedPipeClient;
+
+/// 로컬 데몬 종류 — 소켓·spawn 인자·제어 연결이 각각 한 벌
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Daemon {
+    Files,
+    Term,
+}
+
+impl Daemon {
+    fn sock(self) -> PathBuf {
+        match self {
+            Daemon::Files => superlite_common::socket_path(),
+            Daemon::Term => superlite_common::term_socket_path(),
+        }
+    }
+    fn name(self) -> &'static str {
+        match self {
+            Daemon::Files => "데몬",
+            Daemon::Term => "터미널 데몬",
+        }
+    }
+}
 
 /// 접속 대상 — 세션 root 문자열이 `ssh://` 스킴이면 원격이다. 레지스트리·지속 저장은
 /// PathBuf 를 불투명하게 나르고, 해석은 접속 직전 이 한 곳에서만 한다.
@@ -64,7 +89,9 @@ impl SessionRoots {
             SessionRoots::Registry(list) => {
                 let session = session?;
                 let list = list.lock().unwrap();
-                list.iter().find(|(id, _)| id == session).and_then(|(_, root)| root.clone())
+                list.iter()
+                    .find(|(id, _)| id == session)
+                    .and_then(|(_, root)| root.clone())
             }
         }
     }
@@ -80,9 +107,16 @@ struct App {
 }
 
 /// 서버 기동 단일 진입점 — 제어 연결을 spawn 하고 /ws(+옵션 dist) 라우터를 listener 위에 serve.
-pub async fn serve(listener: TcpListener, roots: SessionRoots, token: Option<String>, dist: Option<String>) {
+pub async fn serve(
+    listener: TcpListener,
+    roots: SessionRoots,
+    token: Option<String>,
+    dist: Option<String>,
+) {
     // 상주 제어 연결 — 데몬 기동 보장 + 백엔드 생존 신호. 이게 있는 한 데몬은 안 죽는다.
-    tokio::spawn(control_loop());
+    // 파일 데몬·termd 각각 한 벌
+    tokio::spawn(control_loop(Daemon::Files));
+    tokio::spawn(control_loop(Daemon::Term));
 
     let mut app = Router::new()
         .route("/ws", get(ws_handler))
@@ -93,7 +127,11 @@ pub async fn serve(listener: TcpListener, roots: SessionRoots, token: Option<Str
     if let Some(dist) = &dist {
         app = app.fallback_service(ServeDir::new(dist));
     }
-    let app = app.with_state(App { roots, token, spares: Arc::default() });
+    let app = app.with_state(App {
+        roots,
+        token,
+        spares: Arc::default(),
+    });
     axum::serve(listener, app).await.unwrap();
 }
 
@@ -102,8 +140,8 @@ pub async fn serve(listener: TcpListener, roots: SessionRoots, token: Option<Str
 /// 데몬 연결 확보. spawn 은 제어 루프에서만 — relay 까지 spawn 하면 백엔드 하나가
 /// 데몬을 두 번 띄우는 race 가 생긴다. 데몬 부재 시 제어 루프가 곧 재기동하므로
 /// relay 는 재시도만으로 충분하다.
-async fn daemon_conn(spawn: bool) -> Result<DaemonStream, String> {
-    let sock = superlite_common::socket_path();
+async fn daemon_conn(kind: Daemon, spawn: bool) -> Result<DaemonStream, String> {
+    let sock = kind.sock();
     for i in 0..50 {
         #[cfg(unix)]
         let conn = DaemonStream::connect(&sock).await;
@@ -114,11 +152,15 @@ async fn daemon_conn(spawn: bool) -> Result<DaemonStream, String> {
             return Ok(s);
         }
         if spawn && i == 0 {
-            spawn_daemon()?;
+            spawn_daemon(kind)?;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    Err(format!("데몬 기동 실패 (5초): {}", sock.display()))
+    Err(format!(
+        "{} 기동 실패 (5초): {}",
+        kind.name(),
+        sock.display()
+    ))
 }
 
 /// OS·아키텍처에 맞는 데몬 바이너리 — 로컬 spawn 과 원격 업로드(ssh 모듈)가 같은 규칙 하나를
@@ -144,7 +186,9 @@ pub(crate) fn daemon_bin_for(os: &str, arch: &str) -> Result<PathBuf, String> {
     } else {
         // 짧게 — 프론트에 close 사유(123B 한도)로 그대로 간다. 전체 경로는 로그에
         eprintln!("backend: 원격 데몬 바이너리 없음: {}", p.display());
-        Err(format!("원격 {os}/{arch} 용 데몬 바이너리 없음 (daemon/{name} 을 앱 옆에)"))
+        Err(format!(
+            "원격 {os}/{arch} 용 데몬 바이너리 없음 (daemon/{name} 을 앱 옆에)"
+        ))
     }
 }
 
@@ -153,9 +197,12 @@ pub(crate) fn daemon_bin_path() -> Result<PathBuf, String> {
     daemon_bin_for(std::env::consts::OS, std::env::consts::ARCH)
 }
 
-fn spawn_daemon() -> Result<(), String> {
+fn spawn_daemon(kind: Daemon) -> Result<(), String> {
     let bin = daemon_bin_path()?;
     let mut cmd = std::process::Command::new(&bin);
+    if kind == Daemon::Term {
+        cmd.arg("--term");
+    }
     // 프로세스 그룹 분리 — 백엔드 터미널의 Ctrl+C 가 데몬까지 죽이지 않게.
     // 로그는 상속 — 개발 중 백엔드 터미널에서 같이 보인다.
     #[cfg(unix)]
@@ -172,10 +219,13 @@ fn spawn_daemon() -> Result<(), String> {
         std::os::windows::process::CommandExt::creation_flags(&mut cmd, 0x0800_0000 | 0x0000_0200);
         cmd.stdout(std::process::Stdio::null());
         cmd.stderr(
-            superlite_common::daemon_log_file().map_or_else(std::process::Stdio::null, std::process::Stdio::from),
+            superlite_common::daemon_log_file()
+                .map_or_else(std::process::Stdio::null, std::process::Stdio::from),
         );
     }
-    let mut child = cmd.spawn().map_err(|e| format!("데몬 spawn 실패 {}: {e}", bin.display()))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("데몬 spawn 실패 {}: {e}", bin.display()))?;
     // 좀비 방지 — 이미 데몬이 있어 즉시 물러난 자식도 회수해야 한다
     std::thread::spawn(move || {
         let _ = child.wait();
@@ -184,13 +234,13 @@ fn spawn_daemon() -> Result<(), String> {
 }
 
 /// 백엔드 수명 내내 데몬에 제어 연결을 유지하며 30초마다 ping. 끊기면 재기동·재접속.
-async fn control_loop() {
+async fn control_loop(kind: Daemon) {
     let mut next = tokio::time::Instant::now();
     loop {
         // 접속 즉시 끊기는 병리 상황(종료 직전 데몬, 소켓 선점 등)에서 스핀 방지
         tokio::time::sleep_until(next).await;
         next = tokio::time::Instant::now() + Duration::from_secs(1);
-        let stream = match daemon_conn(true).await {
+        let stream = match daemon_conn(kind, true).await {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("backend: {e} — 5초 후 재시도");
@@ -230,7 +280,11 @@ fn token_eq(a: &str, b: &str) -> bool {
 }
 
 /// /ws 와 /ssh/* 가 공유하는 접속 인증 — 통과 = 워크스페이스(터미널 포함) 접근 권한
-fn authed(app: &App, query: &std::collections::HashMap<String, String>, headers: &HeaderMap) -> bool {
+fn authed(
+    app: &App,
+    query: &std::collections::HashMap<String, String>,
+    headers: &HeaderMap,
+) -> bool {
     if let Some(token) = &app.token {
         // 토큰 일치가 곧 인증 — 이때 Origin 검증은 생략한다. 임의 웹페이지는 랜덤 토큰을
         // 알 수 없어 CSRF 가 성립하지 않고, Tauri webview(tauri://·http://tauri.localhost)
@@ -242,9 +296,13 @@ fn authed(app: &App, query: &std::collections::HashMap<String, String>, headers:
         //      localhost 백엔드에 붙어 셸을 얻는다. 브라우저 요청은 Origin 호스트가 Host 와
         //      같아야 하고(같은 오리진·vite 프록시 모두 충족), 비브라우저(체크 스크립트)는
         //      Origin 이 없어 통과한다.
-        let host = headers.get("host").and_then(|v| v.to_str().ok()).unwrap_or("");
-        let origin_host =
-            origin.strip_prefix("http://").or_else(|| origin.strip_prefix("https://"));
+        let host = headers
+            .get("host")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        let origin_host = origin
+            .strip_prefix("http://")
+            .or_else(|| origin.strip_prefix("https://"));
         return origin_host == Some(host);
     }
     true
@@ -255,8 +313,10 @@ fn authed(app: &App, query: &std::collections::HashMap<String, String>, headers:
 /// 접근 통제는 authed(토큰 일치 / Origin=Host)가 이미 하므로 '*' 가 권한을 넓히지 않는다 —
 /// 토큰 없는 교차 오리진 요청은 어차피 403 이다. GET + 표준 헤더뿐이라 preflight 도 없다
 fn cors(mut resp: Response) -> Response {
-    resp.headers_mut()
-        .insert("access-control-allow-origin", axum::http::HeaderValue::from_static("*"));
+    resp.headers_mut().insert(
+        "access-control-allow-origin",
+        axum::http::HeaderValue::from_static("*"),
+    );
     resp
 }
 
@@ -315,7 +375,7 @@ async fn clean_handler(
 }
 
 /// GET /version — 이 백엔드 빌드의 버전·채널(빈 문자열 = stable)·커밋·빌드 시각·WIRE_VERSION·
-/// 로컬 데몬 경로 (JSON).
+/// TERM_WIRE_VERSION·로컬 데몬 경로 (JSON).
 /// 프론트의 About·시작 페이지가 쓴다. 데몬 와이어(/ws) 밖 relay 자체 응답이라 WIRE_VERSION 은
 /// 불변이고, 웹·앱이 같은 경로를 탄다 (ticket release-versioning). 데몬 경로는 배치 규칙
 /// (daemon_bin_for)의 결과 — 부재면 그 오류 문자열을 그대로 보인다
@@ -327,7 +387,9 @@ async fn version_handler(
     if !authed(&app, &query, &headers) {
         return cors(StatusCode::FORBIDDEN.into_response());
     }
-    let daemon = daemon_bin_path().map(|p| p.display().to_string()).unwrap_or_else(|e| e);
+    let daemon = daemon_bin_path()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|e| e);
     cors(
         Json(json!({
             "version": superlite_common::VERSION,
@@ -335,6 +397,7 @@ async fn version_handler(
             "commit": superlite_common::COMMIT,
             "builtAt": superlite_common::BUILT_AT,
             "wire": superlite_common::WIRE_VERSION,
+            "termWire": superlite_common::TERM_WIRE_VERSION,
             "daemonBin": daemon,
         }))
         .into_response(),
@@ -399,47 +462,39 @@ async fn ws_handler(
     ws.on_upgrade(move |sock| relay(sock, target, session, spares))
 }
 
-/// payload 프레임의 상한 — READ_MAX_BYTES(50MB)보다 넉넉한 방어선. 초과는 프레임
-/// 오염(동기화 깨짐)으로 보고 연결을 닫는다.
-const PAYLOAD_MAX: u32 = 64 * 1024 * 1024;
-
-/// 데몬 IPC 의 다음 프레임 — JSON 줄(Line) 또는 0x00 매직 + 4B BE 길이의 바이너리
-/// payload(Bin, 와이어 v6). 첫 바이트로 구분한다 (JSON 줄은 항상 '{').
-enum DaemonFrame {
-    Line(String),
-    Bin(Vec<u8>),
-}
-
 /// 데몬 쪽 스트림의 읽기/쓰기 반쪽 — 로컬은 IPC 소켓 split, 원격은 ssh child 의
-/// stdout/stdin. 프레이밍은 양쪽 동일하다 (원격 헬퍼 --pipe 는 생 바이트 중계)
+/// stdout/stdin. 프레이밍은 양쪽 동일하다 (원격 헬퍼 --pipe 가 두 데몬을 합류해 준다)
 type DaemonRead = Box<dyn AsyncRead + Send + Unpin>;
 type DaemonWrite = Box<dyn AsyncWrite + Send + Unpin>;
 
-/// 순차 읽기 전용 — select 안에서 쓰면 취소 시 부분 읽기가 유실돼 프레임 동기가 깨진다.
-/// (전용 태스크에서만 호출할 것)
-async fn read_frame(r: &mut BufReader<DaemonRead>) -> std::io::Result<Option<DaemonFrame>> {
-    use tokio::io::AsyncReadExt;
-    let mut first = [0u8; 1];
-    if r.read_exact(&mut first).await.is_err() {
-        return Ok(None); // EOF — 데몬 연결 종료
-    }
-    if first[0] == 0x00 {
-        let len = r.read_u32().await?;
-        if len > PAYLOAD_MAX {
-            return Err(std::io::Error::other("payload 길이 초과 — 프레임 오염"));
+/// 데몬 쪽 읽기 — 원격은 헬퍼가 합류한 스트림 하나(Single), 로컬은 두 소켓의 합류기(Pair,
+/// common::pair::spawn_merger). 오염·EOF 는 None
+enum LinkRead {
+    Single(BufReader<DaemonRead>),
+    Pair(pair::Merged),
+}
+
+impl LinkRead {
+    async fn next(&mut self) -> Option<Frame> {
+        match self {
+            LinkRead::Single(r) => pair::read_frame(r).await.ok().flatten(),
+            LinkRead::Pair(rx) => rx.recv().await,
         }
-        let mut buf = vec![0u8; len as usize];
-        r.read_exact(&mut buf).await?;
-        return Ok(Some(DaemonFrame::Bin(buf)));
     }
-    let mut line = vec![first[0]];
-    r.read_until(b'\n', &mut line).await?;
-    if line.last() == Some(&b'\n') {
-        line.pop();
-    }
-    match String::from_utf8(line) {
-        Ok(s) => Ok(Some(DaemonFrame::Line(s))),
-        Err(_) => Err(std::io::Error::other("비 UTF-8 줄 — 프레임 오염")),
+}
+
+/// 데몬 쪽 쓰기 — 원격은 헬퍼 stdin 하나, 로컬은 메서드명 분기(common::pair::PairWriter)
+enum LinkWrite {
+    Single(DaemonWrite),
+    Pair(pair::PairWriter<DaemonWrite>),
+}
+
+impl LinkWrite {
+    async fn send_line(&mut self, line: &str) -> std::io::Result<()> {
+        match self {
+            LinkWrite::Single(w) => write_line(w, line).await,
+            LinkWrite::Pair(p) => p.send_line(line).await,
+        }
     }
 }
 
@@ -460,7 +515,10 @@ async fn close_with(
     while reason.len() > 120 {
         reason.pop();
     }
-    let close = Message::Close(Some(axum::extract::ws::CloseFrame { code, reason: reason.into() }));
+    let close = Message::Close(Some(axum::extract::ws::CloseFrame {
+        code,
+        reason: reason.into(),
+    }));
     let _ = tx.send(close).await;
     let _ = tokio::time::timeout(Duration::from_secs(2), async {
         while let Some(Ok(m)) = rx.next().await {
@@ -475,8 +533,8 @@ async fn close_with(
 /// 프론트 Text 프레임 하나를 데몬에 한 줄로. 생 개행이 든 프레임은 데몬 쪽에서 N개 요청으로
 /// 쪼개진다(1:1 불변식 파괴 — JSON.stringify 출력엔 있을 수 없다) — 프로토콜 위반으로 보고
 /// false (연결 종료). 쓰기 실패도 false
-async fn forward_client_line(w: &mut DaemonWrite, line: &str) -> bool {
-    !line.contains('\n') && write_line(w, line).await.is_ok()
+async fn forward_client_line(w: &mut LinkWrite, line: &str) -> bool {
+    !line.contains('\n') && w.send_line(line).await.is_ok()
 }
 
 /// 원격 접속 결과 중 attach 이후에도 relay() 가 쓰는 것. `_child`·`_enter` 는 수명 앵커 —
@@ -525,7 +583,11 @@ async fn connect_remote(
                 tokio::spawn(async move {
                     let info = ssh::probe_remote(&host, &opts, Some(&stage_tx)).await?;
                     let bin = ssh::ensure_remote_bin(&host, &opts, &info, Some(&stage_tx)).await?;
-                    Ok::<_, String>((ssh::pipe_conn(&host, &opts, &bin, Some(&stage_tx))?, info, bin))
+                    Ok::<_, String>((
+                        ssh::pipe_conn(&host, &opts, &bin, Some(&stage_tx))?,
+                        info,
+                        bin,
+                    ))
                 })
             };
             loop {
@@ -581,36 +643,66 @@ async fn connect_remote(
             }
         }
     });
-    let conn = RemoteConn { _child: child, _enter: enter, host, browse_only, stderr_last, early };
+    let conn = RemoteConn {
+        _child: child,
+        _enter: enter,
+        host,
+        browse_only,
+        stderr_last,
+        early,
+    };
     Some((Box::new(r), Box::new(w), root, conn))
 }
 
-/// 프론트 WS ↔ 데몬 1:1 중계 (로컬은 IPC 소켓, 원격은 ssh exec 채널의 stdio — 어느 쪽이든
-/// 내용은 불투명). 어느 쪽이 끊겨도 둘 다 정리 — 데몬 쪽 연결 drop 이 그 연결의 터미널을
-/// 정리한다 (원격은 detach 전환 — 원격 데몬의 세션 grace 가 재접속을 기다린다).
+/// 프론트 WS ↔ 데몬 중계 (로컬은 파일 데몬·termd 두 IPC 소켓을 common::pair 로 분기·합류,
+/// 원격은 헬퍼가 같은 일을 한 ssh exec 채널의 stdio 하나 — 메서드명 분기 외 내용은 불투명).
+/// 어느 쪽이 끊겨도 둘 다 정리 — 데몬 쪽 연결 drop 이 그 연결의 세션을 detach 로 돌리고,
+/// termd 는 터미널이 살아 있는 한 세션을 지킨다.
 /// 방향별 전용 태스크 — 바이너리 프레임 읽기(read_frame)는 다중 await 라 select 취소에
 /// 안전하지 않아, 종전의 단일 select 루프 구조를 쓸 수 없다.
 async fn relay(ws: WebSocket, target: Target, session: Option<String>, spares: Arc<ssh::Spares>) {
     use futures_util::{SinkExt, StreamExt};
     let (mut ws_tx, mut ws_rx) = ws.split();
-    let (read_half, mut write_half, root_str, mut remote): (
-        DaemonRead,
-        DaemonWrite,
+    let (mut reader, mut write_half, root_str, mut remote): (
+        LinkRead,
+        LinkWrite,
         String,
         Option<RemoteConn>,
     ) = match target {
         Target::Local(root) => {
-            let Ok(stream) = daemon_conn(false).await else {
-                return; // ws 는 drop 으로 닫힌다 — 프론트 onclose 가 진행 중 요청을 실패 처리
-            };
-            let (r, w) = tokio::io::split(stream);
-            (Box::new(r), Box::new(w), root.to_string_lossy().into_owned(), None)
-        }
-        Target::Remote { host, path } => {
-            let Some((r, w, root, conn)) = connect_remote(&mut ws_tx, &mut ws_rx, host, path, &spares).await else {
+            // ws 는 drop 으로 닫힌다 — 프론트 onclose 가 진행 중 요청을 실패 처리
+            let Ok(files) = daemon_conn(Daemon::Files, false).await else {
                 return;
             };
-            (r, w, root, Some(conn))
+            let Ok(term) = daemon_conn(Daemon::Term, false).await else {
+                return;
+            };
+            let (fr, fw) = tokio::io::split(files);
+            let (tr, tw) = tokio::io::split(term);
+            // attach 는 id 0 으로 양쪽에 간다 — 합류기가 그 응답을 하나로 접는다
+            let rx = pair::spawn_merger::<DaemonRead>(Box::new(fr), Box::new(tr), json!(0));
+            (
+                LinkRead::Pair(rx),
+                LinkWrite::Pair(pair::PairWriter {
+                    files: Box::new(fw),
+                    term: Box::new(tw),
+                }),
+                root.to_string_lossy().into_owned(),
+                None,
+            )
+        }
+        Target::Remote { host, path } => {
+            let Some((r, w, root, conn)) =
+                connect_remote(&mut ws_tx, &mut ws_rx, host, path, &spares).await
+            else {
+                return;
+            };
+            (
+                LinkRead::Single(BufReader::new(r)),
+                LinkWrite::Single(w),
+                root,
+                Some(conn),
+            )
         }
     };
     // 첫 줄은 attach. 응답(id 0)이 프론트로 중계돼도 무시된다 — 프론트 id 는 1부터.
@@ -621,10 +713,14 @@ async fn relay(ws: WebSocket, target: Target, session: Option<String>, spares: A
     if remote.as_ref().is_some_and(|r| r.browse_only) {
         attach["params"]["watch"] = json!(false);
     }
-    if write_line(&mut write_half, &attach.to_string()).await.is_err() {
+    if write_half.send_line(&attach.to_string()).await.is_err() {
         return;
     }
-    for l in remote.as_mut().map(|r| std::mem::take(&mut r.early)).unwrap_or_default() {
+    for l in remote
+        .as_mut()
+        .map(|r| std::mem::take(&mut r.early))
+        .unwrap_or_default()
+    {
         if !forward_client_line(&mut write_half, &l).await {
             return;
         }
@@ -637,9 +733,8 @@ async fn relay(ws: WebSocket, target: Target, session: Option<String>, spares: A
     // 기다리는 동안의 프론트 요청은 그대로 데몬에 흘리고(프론트는 attach 응답을 기다리지
     // 않고 첫 요청을 보낸다), 프론트가 끊으면(탭 닫기·페이지 이탈) 그대로 접는다 — ssh child
     // 는 drop 으로 죽는다. read_frame 취소는 어차피 이 연결을 버리므로 무해
-    let mut reader = BufReader::new(read_half);
     let frame = tokio::select! {
-        f = read_frame(&mut reader) => f,
+        f = reader.next() => f,
         _ = async {
             while let Some(Ok(m)) = ws_rx.next().await {
                 match m {
@@ -655,7 +750,7 @@ async fn relay(ws: WebSocket, target: Target, session: Option<String>, spares: A
         } => return,
     };
     let first = match frame {
-        Ok(Some(DaemonFrame::Line(l))) => {
+        Some(Frame::Line(l)) => {
             let v: serde_json::Value = serde_json::from_str(&l).unwrap_or_default();
             if let Some(e) = v["error"].as_str() {
                 eprintln!("backend: attach 실패 ({root_str}): {e}");
@@ -673,8 +768,15 @@ async fn relay(ws: WebSocket, target: Target, session: Option<String>, spares: A
         _ => {
             // 헬퍼 stderr 의 마지막 줄이 사유 — 아직 안 왔을 수 있으니 잠깐 기다린다
             tokio::time::sleep(Duration::from_millis(200)).await;
-            let last = remote.as_ref().map(|r| r.stderr_last.lock().unwrap().clone()).unwrap_or_default();
-            let reason = if last.is_empty() { "데몬이 attach 전에 연결을 끊음".to_string() } else { last };
+            let last = remote
+                .as_ref()
+                .map(|r| r.stderr_last.lock().unwrap().clone())
+                .unwrap_or_default();
+            let reason = if last.is_empty() {
+                "데몬이 attach 전에 연결을 끊음".to_string()
+            } else {
+                last
+            };
             eprintln!("backend: attach 전 끊김 ({root_str}): {reason}");
             close_with(&mut ws_tx, &mut ws_rx, 4502, &reason).await;
             return;
@@ -687,18 +789,18 @@ async fn relay(ws: WebSocket, target: Target, session: Option<String>, spares: A
             return;
         }
         loop {
-            match read_frame(&mut reader).await {
-                Ok(Some(DaemonFrame::Line(l))) => {
+            match reader.next().await {
+                Some(Frame::Line(l)) => {
                     if ws_tx.send(Message::Text(l.into())).await.is_err() {
                         break;
                     }
                 }
-                Ok(Some(DaemonFrame::Bin(b))) => {
+                Some(Frame::Bin(b)) => {
                     if ws_tx.send(Message::Binary(b.into())).await.is_err() {
                         break;
                     }
                 }
-                _ => break,
+                None => break,
             }
         }
     });
@@ -719,7 +821,7 @@ async fn relay(ws: WebSocket, target: Target, session: Option<String>, spares: A
                     Some(Ok(_)) => {} // 프론트발 binary/ping/pong 프레임은 프로토콜에 없다
                 },
                 _ = ping.tick() => {
-                    if write_line(&mut write_half, r#"{"method":"ping"}"#).await.is_err() {
+                    if write_half.send_line(r#"{"method":"ping"}"#).await.is_err() {
                         break;
                     }
                 }

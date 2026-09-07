@@ -58,7 +58,9 @@ pub(crate) fn request(
 /// 프론트의 requestReply → 요청자에게 응답 회신. error 가 있으면 에러, 없으면 result
 pub(crate) fn reply(pending: &Pending, p: &Value) {
     let Some(rid) = p["rid"].as_u64() else { return };
-    let Some((tx, id)) = lock(pending).remove(&rid) else { return };
+    let Some((tx, id)) = lock(pending).remove(&rid) else {
+        return;
+    };
     let out = match p.get("error") {
         Some(e) if !e.is_null() => json!({"id": id, "error": e}),
         _ => json!({"id": id, "result": p["result"]}),

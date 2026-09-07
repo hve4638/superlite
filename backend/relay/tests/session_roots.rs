@@ -17,18 +17,30 @@ fn upgrade_req(port: u16, query: &str) -> String {
 
 /// /ws 업그레이드 요청을 보내고 HTTP 상태 줄을 돌려받는다
 async fn ws_status(port: u16, query: &str) -> String {
-    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
-    s.write_all(upgrade_req(port, query).as_bytes()).await.unwrap();
+    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    s.write_all(upgrade_req(port, query).as_bytes())
+        .await
+        .unwrap();
     let mut buf = [0u8; 64];
     let n = s.read(&mut buf).await.unwrap();
-    String::from_utf8_lossy(&buf[..n]).lines().next().unwrap_or_default().to_string()
+    String::from_utf8_lossy(&buf[..n])
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_string()
 }
 
 /// upgrade 뒤 서버가 보내는 첫 WS close 프레임의 code — 관문 거부(4403) 검증용.
 /// 서버는 close 전송 후 연결을 닫으므로 EOF 까지 읽으면 헤더+프레임이 전부 모인다.
 async fn ws_close_code(port: u16, query: &str) -> Option<u16> {
-    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
-    s.write_all(upgrade_req(port, query).as_bytes()).await.unwrap();
+    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    s.write_all(upgrade_req(port, query).as_bytes())
+        .await
+        .unwrap();
     let mut buf = Vec::new();
     let mut tmp = [0u8; 512];
     loop {
@@ -40,8 +52,7 @@ async fn ws_close_code(port: u16, query: &str) -> Option<u16> {
     let body = buf.windows(4).position(|w| w == b"\r\n\r\n")? + 4;
     let frame = &buf[body..];
     // 0x88 = FIN + close opcode, payload 앞 2바이트가 code (서버 프레임은 마스크 없음)
-    (frame.len() >= 4 && frame[0] == 0x88)
-        .then(|| u16::from_be_bytes([frame[2], frame[3]]))
+    (frame.len() >= 4 && frame[0] == 0x88).then(|| u16::from_be_bytes([frame[2], frame[3]]))
 }
 
 async fn spawn_serve(roots: superlite_backend::SessionRoots) -> u16 {
@@ -49,7 +60,12 @@ async fn spawn_serve(roots: superlite_backend::SessionRoots) -> u16 {
     std::env::set_var("SUPERLITE_SOCK", std::env::temp_dir().join("slt-none.sock"));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    tokio::spawn(superlite_backend::serve(listener, roots, Some("t0k".into()), None));
+    tokio::spawn(superlite_backend::serve(
+        listener,
+        roots,
+        Some("t0k".into()),
+        None,
+    ));
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     port
 }
@@ -79,5 +95,7 @@ async fn fixed_accepts_any_session() {
 
     // 종전 동작 — 세션 유무·값과 무관하게 수용
     assert!(ws_status(port, "?tkn=t0k").await.contains("101"));
-    assert!(ws_status(port, "?tkn=t0k&session=whatever").await.contains("101"));
+    assert!(ws_status(port, "?tkn=t0k&session=whatever")
+        .await
+        .contains("101"));
 }

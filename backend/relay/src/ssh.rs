@@ -43,7 +43,9 @@ fn host_ok(host: &str) -> bool {
 /// 쓴다 (ssh -o 는 config 와 같은 "Key Value" 표기를 받는다). Host 블록 밖(전역) 옵션은
 /// ssh 가 config 에서 직접 읽으므로 스냅샷 대상이 아니다.
 pub fn config_blocks() -> Vec<(String, Vec<String>)> {
-    let Some(home) = home_dir() else { return Vec::new() };
+    let Some(home) = home_dir() else {
+        return Vec::new();
+    };
     let Ok(text) = std::fs::read_to_string(home.join(".ssh").join("config")) else {
         return Vec::new();
     };
@@ -122,7 +124,10 @@ pub struct Panes {
 
 impl Default for Panes {
     fn default() -> Self {
-        Panes { favorite: true, all: true }
+        Panes {
+            favorite: true,
+            all: true,
+        }
     }
 }
 
@@ -178,7 +183,14 @@ fn load_state() -> RemoteState {
     // 사용자가 접고 펼친 대로만 (2026-09-07 개정: 종전의 "즐겨찾기가 비면 항상 강제" 는 헤더 클릭이
     // 되돌아가고 즐겨찾기 추가 순간 상태가 뒤바뀌는 버그였다). 다음 save 에 굳는다
     if st.panes.is_none() {
-        st.panes = Some(if st.favorites.is_empty() { Panes { favorite: false, all: true } } else { Panes::default() });
+        st.panes = Some(if st.favorites.is_empty() {
+            Panes {
+                favorite: false,
+                all: true,
+            }
+        } else {
+            Panes::default()
+        });
     }
     st
 }
@@ -209,10 +221,15 @@ pub fn host_list() -> HostList {
         .favorites
         .iter()
         .map(|f| {
-            let cur = blocks.iter().find(|(h, _)| *h == f.host).map(|(_, o)| o.as_slice());
+            let cur = blocks
+                .iter()
+                .find(|(h, _)| *h == f.host)
+                .map(|(_, o)| o.as_slice());
             let key = block_key(cur);
             let drift = match &f.options {
-                Some(opts) => key != block_key(Some(opts)) && f.ack.as_deref() != Some(key.as_str()),
+                Some(opts) => {
+                    key != block_key(Some(opts)) && f.ack.as_deref() != Some(key.as_str())
+                }
                 None => false,
             };
             HostEntry {
@@ -235,7 +252,13 @@ pub fn host_list() -> HostList {
         })
         .collect();
     let panes = st.panes.unwrap_or_default();
-    HostList { favorites, all, panes, collapsed: st.collapsed, recent: st.recent }
+    HostList {
+        favorites,
+        all,
+        panes,
+        collapsed: st.collapsed,
+        recent: st.recent,
+    }
 }
 
 /// 상태 변경 한 번 — op: fav·unfav·pin·unpin·ack·refresh·forget·pane·expand. 성공 시 갱신된 목록.
@@ -243,14 +266,20 @@ pub fn host_list() -> HostList {
 /// ack = 현재 config 상태를 인정(경고만 끈다), refresh = 저장본을 현재 config 로 교체.
 /// forget 은 최근 폴더 한 줄 제거(q.path), pane 은 접힘 상태(q.host = favorite|all, q.open = 0|1),
 /// expand 는 호스트 행의 최근 폴더 펼침(q.open = 0|1 — 0 이면 collapsed 에 기록).
-pub fn update_state(op: &str, q: &std::collections::HashMap<String, String>) -> Result<HostList, String> {
+pub fn update_state(
+    op: &str,
+    q: &std::collections::HashMap<String, String>,
+) -> Result<HostList, String> {
     let host = q.get("host").map(String::as_str).unwrap_or("");
     if host.is_empty() || !host_ok(host) {
         return Err("잘못된 host".into());
     }
     let mut st = load_state();
     let cur = || {
-        config_blocks().into_iter().find(|(h, _)| h == host).map(|(_, o)| o)
+        config_blocks()
+            .into_iter()
+            .find(|(h, _)| h == host)
+            .map(|(_, o)| o)
     };
     fn fav_of<'a>(st: &'a mut RemoteState, host: &str) -> Option<&'a mut Favorite> {
         st.favorites.iter_mut().find(|f| f.host == host)
@@ -258,7 +287,11 @@ pub fn update_state(op: &str, q: &std::collections::HashMap<String, String>) -> 
     match op {
         "fav" => {
             if !st.favorites.iter().any(|f| f.host == host) {
-                st.favorites.push(Favorite { host: host.to_string(), options: None, ack: None });
+                st.favorites.push(Favorite {
+                    host: host.to_string(),
+                    options: None,
+                    ack: None,
+                });
             }
         }
         "unfav" => st.favorites.retain(|f| f.host != host),
@@ -277,7 +310,9 @@ pub fn update_state(op: &str, q: &std::collections::HashMap<String, String>) -> 
         }
         "ack" | "refresh" => {
             let block = cur();
-            let f = fav_of(&mut st, host).filter(|f| f.options.is_some()).ok_or("고정되지 않은 host")?;
+            let f = fav_of(&mut st, host)
+                .filter(|f| f.options.is_some())
+                .ok_or("고정되지 않은 host")?;
             if op == "ack" {
                 f.ack = Some(block_key(block.as_deref()));
             } else {
@@ -354,7 +389,8 @@ fn ssh_cmd(host: &str, opts: &[String]) -> Command {
         let dir = superlite_common::socket_path();
         let dir = dir.parent().unwrap_or(std::path::Path::new("/tmp"));
         c.arg("-o").arg("ControlMaster=auto");
-        c.arg("-o").arg(format!("ControlPath={}/ssh-%C", dir.display()));
+        c.arg("-o")
+            .arg(format!("ControlPath={}/ssh-%C", dir.display()));
         c.arg("-o").arg("ControlPersist=60");
     }
     for line in opts {
@@ -365,7 +401,9 @@ fn ssh_cmd(host: &str, opts: &[String]) -> Command {
     // 새 콘솔 창을 만들어 접속마다 빈 창이 깜빡인다. stdio 는 전부 파이프라 콘솔이 필요 없다
     #[cfg(windows)]
     c.creation_flags(0x0800_0000);
-    c.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    c.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     c
 }
 
@@ -373,14 +411,27 @@ fn ssh_cmd(host: &str, opts: &[String]) -> Command {
 /// 사라져도 고정 시점 설정으로 접속한다 (사용자 결정: 고정 = 저장본으로 접속). 고정 안 한
 /// 호스트는 빈 목록. 접속 한 번에 remote.json 을 한 번만 읽도록 호출자가 넘긴다
 pub fn ssh_opts(host: &str) -> Vec<String> {
-    load_state().favorites.into_iter().find(|f| f.host == host).and_then(|f| f.options).unwrap_or_default()
+    load_state()
+        .favorites
+        .into_iter()
+        .find(|f| f.host == host)
+        .and_then(|f| f.options)
+        .unwrap_or_default()
 }
 
 /// 원격 명령 1회 실행 — stdin 을 다 써넣고 닫은 뒤 종료를 기다린다.
 /// write 실패는 무시한다: 원격이 stdin 을 안 읽고 죽는 경로인데, 그때는 어차피
 /// status 가 실패라 에러가 그쪽에서 드러난다.
-async fn run_ssh(host: &str, opts: &[String], cmd: &str, stdin_data: &[u8]) -> Result<std::process::Output, String> {
-    let mut child = ssh_cmd(host, opts).arg(cmd).spawn().map_err(|e| format!("ssh 실행 실패: {e}"))?;
+async fn run_ssh(
+    host: &str,
+    opts: &[String],
+    cmd: &str,
+    stdin_data: &[u8],
+) -> Result<std::process::Output, String> {
+    let mut child = ssh_cmd(host, opts)
+        .arg(cmd)
+        .spawn()
+        .map_err(|e| format!("ssh 실행 실패: {e}"))?;
     let mut si = child.stdin.take().unwrap();
     let _ = si.write_all(stdin_data).await;
     let _ = si.shutdown().await;
@@ -419,13 +470,23 @@ fn stage(tx: Option<&StageTx>, s: &'static str, bytes: Option<u64>) {
     }
 }
 
-pub async fn probe_remote(host: &str, opts: &[String], tx: Option<&StageTx>) -> Result<RemoteInfo, String> {
+pub async fn probe_remote(
+    host: &str,
+    opts: &[String],
+    tx: Option<&StageTx>,
+) -> Result<RemoteInfo, String> {
     if !host_ok(host) {
         return Err("잘못된 host".into());
     }
     stage(tx, "ssh", None);
-    let out = run_ssh(host, opts, r#"printf '%s
-' "$HOME" "$(uname -s)" "$(uname -m)""#, b"").await?;
+    let out = run_ssh(
+        host,
+        opts,
+        r#"printf '%s
+' "$HOME" "$(uname -s)" "$(uname -m)""#,
+        b"",
+    )
+    .await?;
     if !out.status.success() {
         return Err(ssh_err(&out));
     }
@@ -453,7 +514,10 @@ pub async fn probe_remote(host: &str, opts: &[String], tx: Option<&StageTx>) -> 
 /// `ssh://host/~/sub` 로 적는다. attach 직전 원격 $HOME(probe_remote)으로 치환한다.
 /// '~' 가 아니면 그대로.
 pub fn expand_home(home: &str, path: &str) -> String {
-    match path.strip_prefix("/~").filter(|r| r.is_empty() || r.starts_with('/')) {
+    match path
+        .strip_prefix("/~")
+        .filter(|r| r.is_empty() || r.starts_with('/'))
+    {
         Some(rest) => format!("{home}{rest}"),
         None => path.to_string(),
     }
@@ -480,7 +544,11 @@ pub async fn ensure_remote_bin(
     let bin = remote_daemon_bin(info)?;
     let data = std::fs::read(&bin)
         .map_err(|e| format!("데몬 바이너리 읽기 실패 {}: {e}", bin.display()))?;
-    let dir = format!("$HOME/.cache/{}/bin/{:016x}", superlite_common::SLUG, fnv64(&data));
+    let dir = format!(
+        "$HOME/.cache/{}/bin/{:016x}",
+        superlite_common::SLUG,
+        fnv64(&data)
+    );
     let target = format!("{dir}/superlite-daemon");
     stage(tx, "helper", None);
     // 존재 검사와 업로드를 나눈다 — 한 번에 하면 이미 있을 때도 stdin 으로 바이너리를 다
@@ -500,7 +568,10 @@ pub async fn ensure_remote_bin(
         if !out.status.success() {
             return Err(format!("헬퍼 업로드 실패: {}", ssh_err(&out)));
         }
-        eprintln!("backend: ssh {host} — 헬퍼 업로드 완료 ({} bytes)", data.len());
+        eprintln!(
+            "backend: ssh {host} — 헬퍼 업로드 완료 ({} bytes)",
+            data.len()
+        );
     }
     Ok(target)
 }
@@ -511,7 +582,12 @@ pub async fn ensure_remote_bin(
 /// EOF 로 물러나고 원격 데몬은 세션을 detach 로 돌린다 (재접속 약속은 원격 데몬의 세션
 /// grace 가 지킨다). attach 를 보내기 전까지는 어느 경로·세션에도 묶이지 않는다 — Spares 가
 /// 미리 만들어 두는 근거.
-pub fn pipe_conn(host: &str, opts: &[String], bin: &str, tx: Option<&StageTx>) -> Result<Child, String> {
+pub fn pipe_conn(
+    host: &str,
+    opts: &[String],
+    bin: &str,
+    tx: Option<&StageTx>,
+) -> Result<Child, String> {
     if !host_ok(host) {
         return Err("잘못된 host".into());
     }
@@ -584,7 +660,11 @@ impl Held {
             }
             let _ = back.send(si);
         });
-        Held { spare: Spare { child, info, bin }, stop, stdin }
+        Held {
+            spare: Spare { child, info, bin },
+            stop,
+            stdin,
+        }
     }
 }
 
@@ -597,7 +677,9 @@ pub struct Enter {
 impl Drop for Enter {
     fn drop(&mut self) {
         let mut map = self.spares.0.lock().unwrap();
-        let Some(st) = map.get_mut(&self.host) else { return };
+        let Some(st) = map.get_mut(&self.host) else {
+            return;
+        };
         st.active -= 1;
         if st.active > 0 {
             return;
@@ -619,7 +701,10 @@ impl Drop for Enter {
 }
 
 fn spare_secs() -> std::time::Duration {
-    let secs = std::env::var("SUPERLITE_SPARE_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(300);
+    let secs = std::env::var("SUPERLITE_SPARE_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(300);
     std::time::Duration::from_secs(secs)
 }
 
@@ -630,13 +715,20 @@ impl Spares {
         let st = map.entry(host.to_string()).or_default();
         st.active += 1;
         st.idle_since = None;
-        Enter { spares: self.clone(), host: host.to_string() }
+        Enter {
+            spares: self.clone(),
+            host: host.to_string(),
+        }
     }
 
     /// 예비 소비 — ssh 가 이미 죽었으면(네트워크 단절·원격 데몬 종료) None: 호출자는 기존
     /// 접속 경로로 간다. ping 태스크를 멈추고 stdin 을 child 에 되돌려 온전한 child 로 넘긴다
     pub async fn take(&self, host: &str) -> Option<Spare> {
-        let Held { mut spare, stop, stdin } = self.0.lock().unwrap().get_mut(host)?.spare.take()?;
+        let Held {
+            mut spare,
+            stop,
+            stdin,
+        } = self.0.lock().unwrap().get_mut(host)?.spare.take()?;
         if !matches!(spare.child.try_wait(), Ok(None)) {
             return None;
         }

@@ -20,6 +20,7 @@ mkdirSync(wsRoot);
 const env = {
   ...process.env,
   SUPERLITE_SOCK: join(dir, 'daemon.sock'),
+  SUPERLITE_TERM_SOCK: join(dir, 'term.sock'),
   SUPERLITE_HTTP: '127.0.0.1:18792',
   SUPERLITE_GRACE_SECS: '5',
   SHELL: '/bin/bash', // 개발자 셸(배너가 긴 zsh 등)에 좌우되지 않게 고정
