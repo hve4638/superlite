@@ -23,8 +23,8 @@
 //! 시작은 항상 빈 세션(시작 페이지)이다 — 마지막 워크스페이스 자동 복원은 하지 않는다
 //! (2026-09-02 사용자 결정, ticket app-empty-session). 명시 argv 로 준 폴더만 연다.
 //! 대신 state.json(app_data_dir, version 2 — decision/state-persistence.md)에 최근 연 폴더
-//! MRU 와 세션 묶음(한 창에 함께 열려 있던 root 집합) 이력을 남기고, 시작 페이지가 그 목록을
-//! 보여 사용자가 명시적으로 다시 연다 (ticket start-page-recents). 같은 파일에 앱 전체 줌
+//! MRU 와 사용자가 고정한 그룹(pinned, ticket start-page-redesign — 종전 세션 묶음 이력을 대체)을
+//! 남기고, 시작 페이지가 그 목록을 보여 사용자가 명시적으로 다시 연다 (ticket start-page-recents). 같은 파일에 앱 전체 줌
 //! 레벨(zoom)도 둔다 — 배율은 창별이 아니라 VS Code window.zoomLevel 처럼 앱 공통 (set_zoom).
 //!
 //! 실행: superlite [워크스페이스루트]  (인자 없으면 빈 세션으로 시작)
@@ -60,34 +60,45 @@ struct AppState {
     /// 마지막으로 포커스된 창 — 두 번째 실행(argv)·OS 드롭처럼 창을 지목하지 않는 열기의 대상
     focused: Mutex<String>,
     next_window: AtomicUsize,
-    /// 최근 폴더·세션 묶음 이력 — state.json 의 메모리 사본. 락 순서는 sessions → windows → persisted
+    /// 최근 폴더·고정 그룹 — state.json 의 메모리 사본. 락 순서는 sessions → windows → persisted
     persisted: Mutex<Persisted>,
     /// state.json 경로 — app_data_dir 를 못 만들면 None (저장 없이 동작)
     state_file: Option<PathBuf>,
 }
 
 /// 최근 연 폴더 MRU 상한 (시작 페이지 왼쪽 컬럼)
-const RECENTS_MAX: usize = 10;
-/// 세션 묶음 이력 상한 (시작 페이지 오른쪽 컬럼)
-const BUNDLES_MAX: usize = 5;
+const RECENTS_MAX: usize = 64;
 
 /// 줌 레벨 상한 — 배율 1.2^8 ≈ 4.3 / 1.2^-8 ≈ 0.23 (VS Code 는 무제한이지만 실수로 끝까지 가면 되돌리기 어렵다)
 const ZOOM_MAX: i32 = 8;
 
 /// 디스크에 남기는 상태 — 스키마·규칙은 docs/decision/state-persistence.md (version 2).
-/// recents 는 개별 root 의 MRU(앞이 최신), bundles 는 한 창에 함께 열려 있던 root 집합의
-/// 이력(앞이 최신, 원소 순서 = 탭 순서). 빈 세션(root 없음·경로 없는 ssh://host)은 둘 다 제외.
-/// zoom 은 앱 전체 웹뷰 줌 레벨(0 = 100%, 배율 1.2^zoom) — 필드 추가는 version 을 올리지 않는다
-/// (없으면 0, reader 는 모르는 필드를 무시)
+/// recents 는 개별 root 의 MRU(앞이 최신) — 고정된 root 는 들어오지 않는다. pinned 는 사용자가
+/// 시작 페이지에 고정한 그룹 목록(순서 = 표시 순서, 그룹의 roots 순서 = 열 때 탭 순서;
+/// 2026-09-07 start-page-redesign — 종전 bundles(세션 묶음 이력)를 대체, 옛 파일의 bundles 는
+/// 무시). 빈 세션(root 없음·경로 없는 ssh://host)은 제외. zoom 은 앱 전체 웹뷰 줌 레벨(0 = 100%,
+/// 배율 1.2^zoom) — 필드 추가는 version 을 올리지 않는다 (없으면 기본값, reader 는 모르는 필드를 무시)
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 struct Persisted {
     version: u32,
     #[serde(default)]
     recents: Vec<PathBuf>,
     #[serde(default)]
-    bundles: Vec<Vec<PathBuf>>,
+    pinned: Vec<PinGroup>,
     #[serde(default)]
     zoom: i32,
+}
+
+/// 고정 그룹 — root 하나여도 그룹이다. alias 는 사용자가 붙인 제목(없으면 front 가 첫 멤버 이름으로)
+#[derive(Clone, Default, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
+struct PinGroup {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    alias: Option<String>,
+    roots: Vec<PathBuf>,
+}
+
+fn is_pinned(pinned: &[PinGroup], root: &Path) -> bool {
+    pinned.iter().any(|g| g.roots.iter().any(|r| r == root))
 }
 
 /// 줌 레벨 전이 — in +1, out -1, reset 0, 그 외 무변경. ±ZOOM_MAX 로 클램프
@@ -114,9 +125,15 @@ struct RecentEntry {
 }
 
 #[derive(Clone, serde::Serialize)]
+struct PinGroupInfo {
+    alias: Option<String>,
+    roots: Vec<RecentEntry>,
+}
+
+#[derive(Clone, serde::Serialize)]
 struct RecentsInfo {
     recents: Vec<RecentEntry>,
-    bundles: Vec<Vec<RecentEntry>>,
+    pinned: Vec<PinGroupInfo>,
 }
 
 fn recent_entry(root: &Path) -> RecentEntry {
@@ -154,67 +171,17 @@ fn note_recent(recents: &mut Vec<PathBuf>, root: &Path) {
     recents.truncate(RECENTS_MAX);
 }
 
-fn is_subset(a: &[PathBuf], b: &[PathBuf]) -> bool {
-    a.iter().all(|x| b.contains(x))
-}
-
-/// 묶음 이력 갱신 — 한 창의 현재 root 집합(탭 순서)을 넣는다. 세션 하나는 묶음이 아니다
-/// (왼콽 MRU 몫). WHY: 탭을 하나씩 열고 닫는 과정의 중간 구성이 이력을 채우지 않게 — 새 집합이
-///      기존 묶음의 부분집합이면(탭을 닫는 중) 그 묶음을 앞으로 당기기만 하고, 새 집합이 기존
-///      묶음을 포함하면(탭을 더 여는 중) 그 부분집합 묶음들을 새 것으로 대체한다. 결과적으로
-///      한 작업 흐름의 최대 구성만 남는다
-fn note_bundle(bundles: &mut Vec<Vec<PathBuf>>, roots: Vec<PathBuf>) {
-    if roots.len() < 2 {
-        return;
-    }
-    if let Some(i) = bundles.iter().position(|b| is_subset(&roots, b)) {
-        let b = bundles.remove(i);
-        bundles.insert(0, b);
-        return;
-    }
-    bundles.retain(|b| !is_subset(b, &roots));
-    bundles.insert(0, roots);
-    bundles.truncate(BUNDLES_MAX);
-}
-
-/// 폴더 열기 진입점들이 부른다 — MRU 에 올리고 저장. 빈 세션 root 는 무시
+/// 폴더 열기 진입점들이 부른다 — MRU 에 올리고 저장. 빈 세션 root 와 고정된 root 는 무시
+/// (고정은 사용자가 정한 목록이라 MRU 와 섞지 않는다 — 2026-09-07 사용자 결정)
 fn remember_recent(state: &AppState, root: &Path) {
     if is_empty_root(Some(root)) {
         return;
     }
     let mut p = state.persisted.lock().unwrap();
-    note_recent(&mut p.recents, root);
-    save_state(state.state_file.as_deref(), &p);
-}
-
-/// 레지스트리 변경마다(emit_sessions) 창별 root 집합을 묶음 이력에 반영하고 저장한다.
-/// 종료 훅에 의존하지 않으므로 crash 에도 마지막 변경까지 남는다
-fn record_bundles(state: &AppState) {
-    let groups: Vec<Vec<PathBuf>> = {
-        let list = state.sessions.lock().unwrap();
-        let windows = state.windows.lock().unwrap();
-        let mut labels: Vec<&String> = Vec::new();
-        for (id, _) in list.iter() {
-            if let Some(w) = windows.get(id) {
-                if !labels.contains(&w) {
-                    labels.push(w);
-                }
-            }
-        }
-        labels
-            .into_iter()
-            .map(|w| {
-                list.iter()
-                    .filter(|(id, r)| owns(&windows, id, w) && !is_empty_root(r.as_deref()))
-                    .filter_map(|(_, r)| r.clone())
-                    .collect()
-            })
-            .collect()
-    };
-    let mut p = state.persisted.lock().unwrap();
-    for g in groups {
-        note_bundle(&mut p.bundles, g);
+    if is_pinned(&p.pinned, root) {
+        return;
     }
+    note_recent(&mut p.recents, root);
     save_state(state.state_file.as_deref(), &p);
 }
 
@@ -261,8 +228,6 @@ fn infos_for(state: &AppState, label: &str) -> Vec<SessionInfo> {
 
 /// 레지스트리 변경 방송 — 창마다 자기 몫의 목록을 보낸다. front 세션 관리자가 reconcile 한다
 fn emit_sessions(app: &tauri::AppHandle, state: &AppState) {
-    // 저장이 방송보다 앞 — front 가 반향을 받고 list_recents 를 부르면 이미 갱신돼 있다
-    record_bundles(state);
     for label in app.webview_windows().keys() {
         let infos = infos_for(state, label);
         // 세션 0 개인 창은 닫히는 중(close_if_empty) — 빈 목록을 보내면 front 가 활성 세션
@@ -276,7 +241,7 @@ fn emit_sessions(app: &tauri::AppHandle, state: &AppState) {
 
 /// 세션 0 개가 된 창은 닫는다 — 탭 닫기·분리·병합 모두 이 규칙을 탄다 (2026-09-05 개정,
 /// ticket convenience-features: 종전엔 빈 세션으로 남겼다). 마지막 창이면 Tauri 기본대로 앱이
-/// 종료된다 — 묶음 이력(state.json)은 레지스트리 변경마다 이미 저장돼 있어 종료 훅이 필요 없다.
+/// 종료된다 — state.json 은 변경마다 즉시 저장돼 있어 종료 훅이 필요 없다.
 /// 남은 정리(핸드오프·focused)는 Destroyed → drop_window. 호출자가 sessions·windows 락을 잡지
 /// 않은 상태여야 한다
 fn close_if_empty(app: &tauri::AppHandle, state: &AppState, label: &str) {
@@ -861,17 +826,21 @@ fn list_windows(app: tauri::AppHandle, state: tauri::State<AppState>) -> Vec<Win
         .collect()
 }
 
-/// 시작 페이지 목록 — 최근 폴더 MRU 와 세션 묶음 이력. 매 표시마다 부른다 (소실 여부는 그때 검사)
+/// 시작 페이지 목록 — 최근 폴더 MRU 와 고정 그룹. 매 표시마다 부른다 (소실 여부는 그때 검사)
 #[tauri::command]
 fn list_recents(state: tauri::State<AppState>) -> RecentsInfo {
     let p = state.persisted.lock().unwrap();
     RecentsInfo {
         recents: p.recents.iter().map(|r| recent_entry(r)).collect(),
-        bundles: p.bundles.iter().map(|b| b.iter().map(|r| recent_entry(r)).collect()).collect(),
+        pinned: p
+            .pinned
+            .iter()
+            .map(|g| PinGroupInfo { alias: g.alias.clone(), roots: g.roots.iter().map(|r| recent_entry(r)).collect() })
+            .collect(),
     }
 }
 
-/// 최근 폴더 목록에서 지우기 (시작 페이지 ×). 묶음 이력은 건드리지 않는다
+/// 최근 폴더 목록에서 지우기 (시작 페이지 ×). 고정 그룹은 건드리지 않는다
 #[tauri::command]
 fn forget_recent(state: tauri::State<AppState>, root: String) {
     let mut p = state.persisted.lock().unwrap();
@@ -879,23 +848,43 @@ fn forget_recent(state: tauri::State<AppState>, root: String) {
     save_state(state.state_file.as_deref(), &p);
 }
 
-/// 묶음 이력에서 지우기 (시작 페이지 ×) — 같은 집합인 묶음을 지운다
+/// 고정 그룹 목록 통째로 교체 — pin·unpin·순서·그룹 간 이동·별칭을 front 가 계산해 결과 목록을
+/// 보낸다 (op 를 늘리는 대신 단일 set — 검증은 normalize_pinned). 고정된 root 는 MRU 에서 뺀다
 #[tauri::command]
-fn forget_bundle(state: tauri::State<AppState>, roots: Vec<String>) {
-    let roots: Vec<PathBuf> = roots.into_iter().map(PathBuf::from).collect();
+fn set_pinned(state: tauri::State<AppState>, groups: Vec<PinGroup>) {
+    let groups = normalize_pinned(groups);
     let mut p = state.persisted.lock().unwrap();
-    p.bundles.retain(|b| !(b.len() == roots.len() && is_subset(b, &roots)));
+    p.recents.retain(|r| !is_pinned(&groups, r));
+    p.pinned = groups;
     save_state(state.state_file.as_deref(), &p);
 }
 
-/// 세션 묶음 열기 (시작 페이지 오른쪽 컬럼) — root 들을 세션 탭으로 한꺼번에 등록한다.
+/// 고정 그룹 정리(순수 함수) — 그룹 안 중복 root 는 앞의 것만, 빈 그룹은 버림, 빈 별칭은 None
+fn normalize_pinned(groups: Vec<PinGroup>) -> Vec<PinGroup> {
+    groups
+        .into_iter()
+        .map(|g| {
+            let mut roots: Vec<PathBuf> = Vec::new();
+            for r in g.roots {
+                if !roots.contains(&r) {
+                    roots.push(r);
+                }
+            }
+            let alias = g.alias.map(|a| a.trim().to_string()).filter(|a| !a.is_empty());
+            PinGroup { alias, roots }
+        })
+        .filter(|g| !g.roots.is_empty())
+        .collect()
+}
+
+/// 고정 그룹 열기 (시작 페이지 오른쪽 컬럼 제목 클릭) — root 들을 세션 탭으로 한꺼번에 등록한다.
 /// 이 창의 탭이 전부 빈 세션이면 그 빈 탭들을 치우고 이 창에 (시작 페이지에서 고르는 명시적
 /// 복원), 비어 있지 않은 탭이 있으면 무조건 새 창에 (사용자 결정 — 열려 있는 작업과 섞지 않는다).
 /// 이미 어느 창에든 열린 root 는 건너뛴다 (open_workspace 의 중복 금지와 같은 이유). 경로가
 /// 소실된 root 도 건너뛰고, 열 것이 하나도 없으면 에러로 알린다.
 /// WHY: async — 창을 만드는 커맨드는 메인 스레드에서 돌면 Windows 에서 교착한다 (build_window 참조)
 #[tauri::command]
-async fn open_bundle(app: tauri::AppHandle, window: tauri::WebviewWindow, roots: Vec<String>) -> Result<(), String> {
+async fn open_group(app: tauri::AppHandle, window: tauri::WebviewWindow, roots: Vec<String>) -> Result<(), String> {
     let state = app.state::<AppState>();
     let from = window.label().to_string();
     let parsed: Vec<PathBuf> = roots.iter().filter_map(|r| parse_root(r).ok()).collect();
@@ -914,7 +903,7 @@ async fn open_bundle(app: tauri::AppHandle, window: tauri::WebviewWindow, roots:
         let fresh: Vec<PathBuf> =
             parsed.into_iter().filter(|root| !list.iter().any(|(_, r)| r.as_ref() == Some(root))).collect();
         if fresh.is_empty() {
-            return Err("묶음의 폴더가 모두 이미 열려 있다".into());
+            return Err("그룹의 폴더가 모두 이미 열려 있다".into());
         }
         let label = if here_nonempty {
             new_window_label(&state)
@@ -1106,8 +1095,8 @@ fn main() {
             list_windows,
             list_recents,
             forget_recent,
-            forget_bundle,
-            open_bundle,
+            set_pinned,
+            open_group,
             set_zoom,
             pick_save_target,
             local_write,
@@ -1231,42 +1220,38 @@ mod tests {
     }
 
     #[test]
-    fn note_bundle_keeps_maximal_configuration() {
-        let mut b = Vec::new();
-        note_bundle(&mut b, paths(&["/a"])); // 하나는 묶음이 아니다
-        assert!(b.is_empty());
-        note_bundle(&mut b, paths(&["/a", "/b"]));
-        note_bundle(&mut b, paths(&["/a", "/b", "/c"])); // 확장 — 부분집합을 대체
-        assert_eq!(b, vec![paths(&["/a", "/b", "/c"])]);
-        note_bundle(&mut b, paths(&["/b", "/c"])); // 축소(닫는 중) — 새 항목 없이 앞으로
-        assert_eq!(b, vec![paths(&["/a", "/b", "/c"])]);
-        note_bundle(&mut b, paths(&["/x", "/y"]));
-        assert_eq!(b[0], paths(&["/x", "/y"]));
-        assert_eq!(b.len(), 2);
-        // 같은 집합 다른 순서 — 기존을 앞으로 당길 뿐
-        note_bundle(&mut b, paths(&["/c", "/a", "/b"]));
-        assert_eq!(b[0], paths(&["/a", "/b", "/c"]));
-        assert_eq!(b.len(), 2);
-        // 마지막 탭까지 닫아 창이 닫히는 경로(1 개 → 0 개) — 이력은 그대로 남는다. 종료 훅 없이
-        // 변경마다 저장하므로 마지막 창이 닫혀 앱이 종료돼도 이 상태가 state.json 에 있다
-        note_bundle(&mut b, paths(&["/a"]));
-        note_bundle(&mut b, Vec::new());
-        assert_eq!(b[0], paths(&["/a", "/b", "/c"]));
-        assert_eq!(b.len(), 2);
+    fn normalize_pinned_dedups_and_drops_empty() {
+        let g = normalize_pinned(vec![
+            PinGroup { alias: Some("  ".into()), roots: paths(&["/a", "/b", "/a"]) },
+            PinGroup { alias: None, roots: Vec::new() },
+            PinGroup { alias: Some(" x ".into()), roots: paths(&["/c"]) },
+        ]);
+        assert_eq!(g.len(), 2);
+        assert_eq!(g[0], PinGroup { alias: None, roots: paths(&["/a", "/b"]) });
+        assert_eq!(g[1], PinGroup { alias: Some("x".into()), roots: paths(&["/c"]) });
+        assert!(is_pinned(&g, Path::new("/c")));
+        assert!(!is_pinned(&g, Path::new("/z")));
     }
 
     #[test]
     fn state_roundtrip_and_version_gate() {
         let path = std::env::temp_dir().join(format!("superlite-test-{}.json", rand_hex()));
-        let p = Persisted { version: 2, recents: paths(&["/a"]), bundles: vec![paths(&["/a", "/b"])], zoom: 2 };
+        let p = Persisted {
+            version: 2,
+            recents: paths(&["/a"]),
+            pinned: vec![PinGroup { alias: Some("g".into()), roots: paths(&["/a", "/b"]) }],
+            zoom: 2,
+        };
         save_state(Some(&path), &p);
         let back = load_state(Some(&path));
         assert_eq!(back.recents, p.recents);
-        assert_eq!(back.bundles, p.bundles);
+        assert_eq!(back.pinned, p.pinned);
         assert_eq!(back.zoom, 2);
-        // zoom 필드가 없는 기존 version 2 파일은 0 (필드 추가가 version 을 올리지 않는다)
-        std::fs::write(&path, r#"{"version":2,"recents":["/a"],"bundles":[]}"#).unwrap();
+        // zoom·pinned 필드가 없는 기존 version 2 파일은 기본값, 옛 bundles 는 무시 (필드 추가가
+        // version 을 올리지 않는다)
+        std::fs::write(&path, r#"{"version":2,"recents":["/a"],"bundles":[["/a","/b"]]}"#).unwrap();
         assert_eq!(load_state(Some(&path)).zoom, 0);
+        assert!(load_state(Some(&path)).pinned.is_empty());
         std::fs::write(&path, r#"{"version":1,"workspaces":[{"root":"/a"}]}"#).unwrap();
         assert!(load_state(Some(&path)).recents.is_empty());
         let _ = std::fs::remove_file(&path);

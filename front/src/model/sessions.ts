@@ -53,6 +53,10 @@ export type Handoff =
  *  터미널 {window, session, root, id} */
 export const DND_SESSION = 'application/x-superlite-session';
 export const DND_EDITOR = 'application/x-superlite-editor';
+/** 워크스페이스 root 묶음 드래그 — 시작 페이지 Recent·Pinned 항목과 원격 탐색기의 경로 아이템이 출처,
+ *  시작 페이지 Pinned 가 목적지 (ticket start-page-redesign). 데이터는 JSON {roots: string[],
+ *  from?: {group, member?}} — from 은 Pinned 안에서 옮길 때만 (recents.PinSource) */
+export const DND_ROOTS = 'application/x-superlite-roots';
 
 export type SessionTab = { id: string; name: string; root: string | null };
 
@@ -133,7 +137,7 @@ export function isRemoteEmpty(root: string | null): boolean {
 }
 
 /** "이름 [host]" 표기 — 원격은 호스트가 정체성의 절반이라 함께 표시한다 ("proj [omc]"). 세션
- *  탭 이름·원격 빈 세션의 Welcome·시작 페이지 최근 목록이 같은 규칙을 쓴다. 로컬은 이름 그대로 */
+ *  탭 이름·원격 빈 세션의 Welcome 이 같은 규칙을 쓴다 (시작 페이지 최근 목록은 "이름 from host" 로 따로). 로컬은 이름 그대로 */
 export function withHost(name: string, root: string): string {
   const host = remoteHost(root);
   return host === null ? name : `${name} [${host}]`;

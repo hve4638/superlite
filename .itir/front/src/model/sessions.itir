@@ -16,6 +16,7 @@ export val sessions
 export val loading
 export val DND_SESSION
 export val DND_EDITOR
+export val DND_ROOTS
 
 export fn configureSessions(env) {
   role: 환경 주입 (host.ts 전용) — kind 와 탭별 백엔드 연결 생성기, 데몬 소켓 요청자 요청의 처리기(onRequest, 와이어 v9 — 세션 컨텍스트 생성 시 그 백엔드의 onRequest 를 이 처리기에 묶는다. 어떤 요청이 있는지는 조립 지점이 정한다)
@@ -48,7 +49,7 @@ export fn activeSessionEmpty() -> Bool {
   role: 활성 탭이 빈 세션인가 (root null 또는 원격 빈 세션 isRemoteEmpty) — 시작 페이지 표시(EditorArea)·탐색기 빈 상태·터미널 생성 차단·폴더 열기의 빈 탭 교체 판단이 공유하는 반응형 판별
 }
 export fn withHost(name, root) -> label {
-  role: "이름 [host]" 표기 규칙 한 곳 — 세션 탭 이름(워크스페이스 이름·웹 폴더 열기), 원격 빈 세션의 Welcome(TitleBar), 시작 페이지 최근 목록(recents.recentLabel)이 공유한다. 로컬은 이름 그대로
+  role: "이름 [host]" 표기 규칙 한 곳 — 세션 탭 이름(워크스페이스 이름·웹 폴더 열기), 원격 빈 세션의 Welcome(TitleBar)이 공유한다 (시작 페이지 최근 목록은 2026-09-07 부터 "이름 from host" 로 따로 표기). 로컬은 이름 그대로
 }
 export fn isRemoteEmpty(root) -> Bool {
   role: 경로 없는 원격 root(`ssh://host`) — 원격 빈 세션. 시작 페이지이되 연결은 있다(탐색 전용 attach): 폴더 열기 퀵인풋의 browseDir 가 그 호스트를 탐색하고, 폴더를 열면 제자리 교체. 탭 라벨은 "Welcome [host]"

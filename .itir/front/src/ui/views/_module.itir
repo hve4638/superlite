@@ -7,7 +7,7 @@ import { workbench, openContextMenu } from '../../model/workbench'
 import { errText, notify } from '../../model/notifications'
 import { connection } from '../../model/watch'
 import { remote, refreshHosts, connectHost, openRecent, setHostState, setPaneOpen, RemoteHost } from '../../model/remote'
-import { sessions, activeSessionEmpty, remoteHost, sessionRoot } from '../../model/sessions'
+import { sessions, activeSessionEmpty, remoteHost, sessionRoot, DND_ROOTS } from '../../model/sessions'
 import { downloadEntry, uploadDropped, DroppedEntry } from '../../model/transfer'
 // 타입 전용 (FileSearchResult) — 런타임 호출은 model 을 거친다
 import { FileSearchResult } from '../../backend/types'

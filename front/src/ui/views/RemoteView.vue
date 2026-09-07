@@ -4,7 +4,7 @@ import {
   remote, refreshHosts, connectHost, openRecent, setHostState, setHostExpanded, setPaneOpen, type RemoteHost,
 } from '../../model/remote';
 import { openContextMenu, type ContextMenuItem } from '../../model/workbench';
-import { sessions } from '../../model/sessions';
+import { DND_ROOTS, sessions } from '../../model/sessions';
 import Sash from '../widgets/Sash.vue';
 
 // 뷰를 보일 때마다 다시 읽는다 — 최근 폴더는 relay 가 attach 시 기록하므로 목록이 뒤처진다.
@@ -32,6 +32,11 @@ function resizeAll(dy: number) {
 // 있으면 함께 움직인다
 function recentOf(h: RemoteHost): string[] {
   return remote.recent[h.name] ?? [];
+}
+/** 경로 아이템을 시작 페이지 Pinned 로 끌어 넣기 (ticket start-page-redesign) — 이 목록에는 그대로 남는다 */
+function dragRecent(e: DragEvent, h: RemoteHost, p: string): void {
+  e.dataTransfer?.setData(DND_ROOTS, JSON.stringify({ roots: [`ssh://${h.name}${p}`] }));
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'copy';
 }
 function isExpanded(h: RemoteHost): boolean {
   return !remote.collapsed.includes(h.name);
@@ -170,8 +175,10 @@ function basename(path: string): string {
               class="row recent"
               :class="{ selected: selected === recentKey(pane, h, p) }"
               :title="p"
+              draggable="true"
               @click.stop="selected = recentKey(pane, h, p)"
               @contextmenu="onRecentContextMenu($event, h, p)"
+              @dragstart="dragRecent($event, h, p)"
             >
               <span class="codicon type-icon codicon-folder" />
               <span class="row-name">{{ basename(p) }}</span>
