@@ -3,10 +3,10 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { openQuickInput } from '../model/workbench';
 import { openFolder, retryActiveConnection } from '../model/host';
 import {
-  forgetRecent, groupTitle, openGroup, pinAsGroup, pinIntoGroup, recentName, recents, refreshRecents,
+  forgetRecent, groupTitle, openGroup, openGroups, pinAsGroup, pinIntoGroup, recentName, recents, refreshRecents,
   setGroupAlias, unpinGroup, unpinMember, type PinSource, type RecentEntry,
 } from '../model/recents';
-import { DND_ROOTS, isRemoteEmpty, remoteHost, sessions } from '../model/sessions';
+import { DND_ROOTS, isRemoteEmpty, remoteHost, sessions, sessionsKind } from '../model/sessions';
 import { connection, failureLabel, stageLabel } from '../model/watch';
 import { loadVersion, shortVersion } from '../model/version';
 
@@ -149,6 +149,46 @@ function memberClass(group: number, index: number, last: boolean): Record<string
   return { 'drop-before': on && o.at === index, 'drop-after': on && last && o.at === index + 1 };
 }
 
+// ---- 일괄 열기 선택 (ticket window-virtual-desktop) — Ctrl+클릭으로 그룹에 번호를 붙인다. 번호 = 가상
+// 데스크톱 순번(1부터)이자 여는 순서. 비어 있는 가장 작은 수를 받고, 다시 Ctrl+클릭하면 해제된다. 저장하지
+// 않는 페이지 한정 상태 — 앱 전용이고 웹은 Ctrl+클릭이 아무 동작도 하지 않는다 (열기로도 넘어가지 않음).
+
+const isApp = sessionsKind() === 'app';
+/** 그룹 인덱스 → 번호 */
+const picked = ref(new Map<number, number>());
+/** 배치 체크박스 — 켜져 있으면 n 번 그룹의 창을 n 번 가상 데스크톱으로 (Windows 외에서는 native 가 무시) */
+const perDesktop = ref(true);
+function pickNumber(group: number): number | undefined {
+  return picked.value.get(group);
+}
+function togglePick(group: number): void {
+  const m = new Map(picked.value);
+  if (m.has(group)) {
+    m.delete(group);
+  } else {
+    let n = 1;
+    while ([...m.values()].includes(n)) n += 1;
+    m.set(group, n);
+  }
+  picked.value = m;
+}
+/** Ctrl+클릭이면 여기서 소비한다 (앱: 번호 토글, 웹: 무동작). 아니면 false — 호출자가 제 동작을 한다 */
+function consumeCtrl(e: MouseEvent, group: number): boolean {
+  if (!e.ctrlKey) return false;
+  if (isApp) togglePick(group);
+  return true;
+}
+// 그룹 목록이 바뀌면(고정·해제·순서) 인덱스 기반 선택은 의미를 잃는다 — 지운다
+watch(() => recents.pinned.length, () => (picked.value = new Map()));
+function openPicked(): void {
+  const order = [...picked.value.entries()].sort((a, b) => a[1] - b[1]);
+  const groups = order
+    .map(([gi, n]) => ({ roots: recents.pinned[gi]?.roots.map((e) => e.root) ?? [], desktop: perDesktop.value ? n : null }))
+    .filter((g) => g.roots.length > 0);
+  picked.value = new Map();
+  if (groups.length > 0) openGroups(groups);
+}
+
 // ---- 별칭 인라인 편집 (제목 줄 ✎)
 
 const editing = ref<number | null>(null);
@@ -228,13 +268,15 @@ function cancelAlias(): void {
             v-for="(g, gi) in recents.pinned"
             :key="gi"
             class="recent-row group"
-            :class="[{ missing: g.roots.every((e) => e.missing) }, overClass(gi)]"
+            :class="[{ missing: g.roots.every((e) => e.missing), picked: pickNumber(gi) !== undefined }, overClass(gi)]"
             draggable="true"
+            @click="consumeCtrl($event, gi)"
             @dragstart="startDrag($event, g.roots.map((e) => e.root), { group: gi })"
             @dragend="endDrag()"
             @dragover="overGroup($event, gi)"
             @drop="dropOnGroup($event, gi)"
           >
+            <span v-if="pickNumber(gi) !== undefined" class="pick-badge">{{ pickNumber(gi) }}</span>
             <span class="recent-icon codicon codicon-multiple-windows" />
             <input
               v-if="editing === gi"
@@ -247,7 +289,12 @@ function cancelAlias(): void {
               @keydown.esc.prevent="cancelAlias()"
               @blur="commitAlias()"
             />
-            <span v-else class="recent-name group-title" title="Open all" @click="openGroup(g.roots.map((e) => e.root))">
+            <span
+              v-else
+              class="recent-name group-title"
+              title="Open all"
+              @click.stop="consumeCtrl($event, gi) || openGroup(g.roots.map((e) => e.root))"
+            >
               {{ groupTitle(g) }}
             </span>
             <span class="recent-actions">
@@ -261,7 +308,7 @@ function cancelAlias(): void {
               :class="[{ missing: e.missing }, memberClass(gi, mi, mi === g.roots.length - 1)]"
               :title="entryTitle(e)"
               draggable="true"
-              @click.stop="openFolder(e.root)"
+              @click.stop="consumeCtrl($event, gi) || openFolder(e.root)"
               @dragstart.stop="startDrag($event, [e.root], { group: gi, member: e.root })"
               @dragend.stop="endDrag()"
               @dragover="overMember($event, gi, mi)"
@@ -273,6 +320,11 @@ function cancelAlias(): void {
               <button class="recent-act codicon codicon-close" title="Remove from group" @click.stop="unpinMember(gi, e.root)" />
             </div>
           </div>
+        </div>
+        <!-- 일괄 열기 — 번호를 하나라도 붙였을 때만 (앱 전용: 웹은 Ctrl+클릭 선택이 없어 나타나지 않는다) -->
+        <div v-if="picked.size > 0" class="pick-actions">
+          <label class="pick-option"><input v-model="perDesktop" type="checkbox" /> Open each on its virtual desktop</label>
+          <button class="pick-open" @click="openPicked()">Open Selected</button>
         </div>
       </div>
     </div>
@@ -428,6 +480,58 @@ function cancelAlias(): void {
 .recent-row.group.drop-into {
   background: var(--vscode-list-dropBackground, rgba(83, 89, 93, 0.5));
   outline: 1px solid var(--vscode-focusBorder, #007fd4);
+}
+/* 일괄 열기 선택 — 액센트 굵은 테두리 + 오른쪽 위 번호 배지 */
+.recent-row.group.picked {
+  outline: 2px solid var(--sl-accent);
+  outline-offset: -2px;
+}
+/* 배지가 hover 액션(✎·×)을 덮지 않게 액션을 왼쪽으로 */
+.recent-row.group.picked .recent-actions {
+  margin-right: 22px;
+}
+.pick-badge {
+  position: absolute;
+  top: 0;
+  right: 0;
+  min-width: 18px;
+  padding: 0 5px;
+  line-height: 18px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--sl-accent);
+  color: var(--vscode-button-foreground, #ffffff);
+  border-bottom-left-radius: 4px;
+  pointer-events: none;
+}
+.pick-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 0 8px;
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+}
+.pick-option {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.pick-open {
+  padding: 3px 10px;
+  border: none;
+  border-radius: 2px;
+  background: var(--vscode-button-background, #0e639c);
+  color: var(--vscode-button-foreground, #ffffff);
+  font-size: 12px;
+  cursor: pointer;
+}
+.pick-open:hover {
+  background: var(--vscode-button-hoverBackground, #1177bb);
 }
 .recent-row.group.drop-before::before,
 .recent-row.group.drop-after::after {

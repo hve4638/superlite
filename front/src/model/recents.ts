@@ -15,7 +15,7 @@ import { tauri } from './tauri';
  *
  * 저장소는 환경별 (decision/state-persistence.md version 2):
  * - 앱: native 가 state.json 에 소유·갱신한다. 여기는 list_recents 사영과 forget_recent·set_pinned·
- *   open_group invoke 만.
+ *   open_group·open_groups invoke 만.
  * - 웹: 앱 데이터 디렉터리가 없으므로 front 가 같은 스키마를 localStorage 에 둔다 (세션 목록이
  *   front 소유인 것과 같은 이유). 웹은 검증 경로 — 이 환경에서 목록 동작을 볼 수 있어야 한다.
  * - mock: 없음 (목록 비어 있음).
@@ -212,6 +212,14 @@ export function openGroup(roots: string[]): void {
   // 이미 열린 root 는 건너뛴다 (앱 native 와 같은 규칙) — 첫 새 root 가 활성 빈 탭을 차지해 빈 탭이 남지 않게
   const open = new Set(sessions.list.map((t) => t.root));
   roots.filter((r) => !open.has(r)).forEach((r, i) => openFolder(r, i === 0 ? {} : { mode: 'new' }));
+}
+
+/** 일괄 열기 (시작 페이지 "Open Selected", ticket window-virtual-desktop) — 번호 순서의 그룹들을 native
+ *  open_groups 로 한꺼번에 연다 (그룹마다 open_group 의 창 배분 규칙, desktop 은 Windows 가상 데스크톱
+ *  순번 — null 이면 옮기지 않음). 앱 전용 — 웹은 선택 자체가 불가능해 호출되지 않는다 */
+export function openGroups(groups: { roots: string[]; desktop: number | null }[]): void {
+  if (sessionsKind() !== 'app') return;
+  void tauri?.core.invoke('open_groups', { groups }).catch((e) => notify('error', `그룹을 열 수 없습니다: ${String(e)}`));
 }
 
 /** 부팅 시 1회 (main.ts) — 웹은 세션 목록 추적을 건다. 앱은 native 가 기록하므로 할 일 없음 */

@@ -680,15 +680,21 @@ async fn detach_session(
         state.windows.lock().unwrap().insert(id.clone(), label.clone());
     }
     deliver_handoff(&app, &state, &label, handoff);
-    if let Err(e) = build_window(&app, &state, &label, Some((x, y))) {
-        // 롤백 — 생기지 않은 창 소속으로 세션이 사라지지 않게 되돌린다
-        {
-            let _list = state.sessions.lock().unwrap();
-            state.windows.lock().unwrap().insert(id.clone(), from.clone());
+    match build_window(&app, &state, &label, Some((x, y))) {
+        Err(e) => {
+            // 롤백 — 생기지 않은 창 소속으로 세션이 사라지지 않게 되돌린다
+            {
+                let _list = state.sessions.lock().unwrap();
+                state.windows.lock().unwrap().insert(id.clone(), from.clone());
+            }
+            state.handoffs.lock().unwrap().remove(&label);
+            emit_sessions(&app, &state);
+            return Err(format!("창 생성 실패: {e}"));
         }
-        state.handoffs.lock().unwrap().remove(&label);
-        emit_sessions(&app, &state);
-        return Err(format!("창 생성 실패: {e}"));
+        #[cfg(windows)]
+        Ok(w) => vdesk::follow(&app, &from, &w),
+        #[cfg(not(windows))]
+        Ok(_) => {}
     }
     emit_sessions(&app, &state);
     close_if_empty(&app, &state, &from);
@@ -751,6 +757,7 @@ async fn move_session_to_window(
 #[tauri::command]
 async fn detach_tabs(
     app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     root: String,
     x: f64,
     y: f64,
@@ -770,15 +777,24 @@ async fn detach_tabs(
     };
     obj.insert("toSession".into(), serde_json::Value::String(session.clone()));
     deliver_handoff(&app, &state, &label, handoff);
-    if let Err(e) = build_window(&app, &state, &label, Some((x, y))) {
-        // 롤백 — 생기지 않은 창의 세션·핸드오프를 지운다 (front 는 실패를 받아 탭을 되돌린다)
-        {
-            let mut list = state.sessions.lock().unwrap();
-            list.retain(|(sid, _)| sid != &session);
-            state.windows.lock().unwrap().remove(&session);
+    match build_window(&app, &state, &label, Some((x, y))) {
+        Err(e) => {
+            // 롤백 — 생기지 않은 창의 세션·핸드오프를 지운다 (front 는 실패를 받아 탭을 되돌린다)
+            {
+                let mut list = state.sessions.lock().unwrap();
+                list.retain(|(sid, _)| sid != &session);
+                state.windows.lock().unwrap().remove(&session);
+            }
+            state.handoffs.lock().unwrap().remove(&label);
+            return Err(format!("창 생성 실패: {e}"));
         }
-        state.handoffs.lock().unwrap().remove(&label);
-        return Err(format!("창 생성 실패: {e}"));
+        // 분리 창은 출처 창과 같은 가상 데스크톱으로
+        #[cfg(windows)]
+        Ok(w) => vdesk::follow(&app, window.label(), &w),
+        #[cfg(not(windows))]
+        Ok(_) => {
+            let _ = &window;
+        }
     }
     emit_sessions(&app, &state);
     Ok(())
@@ -886,13 +902,66 @@ fn normalize_pinned(groups: Vec<PinGroup>) -> Vec<PinGroup> {
 #[tauri::command]
 async fn open_group(app: tauri::AppHandle, window: tauri::WebviewWindow, roots: Vec<String>) -> Result<(), String> {
     let state = app.state::<AppState>();
+    open_group_in(&app, &state, window.label(), &roots)?;
+    emit_sessions(&app, &state);
+    Ok(())
+}
+
+/// 시작 페이지 "Open Selected" — 번호를 붙인 그룹들을 번호 순서로 한꺼번에 연다 (ticket
+/// window-virtual-desktop). 그룹마다 open_group_in 의 창 배분 규칙을 그대로 탄다: 첫 그룹이 이 창(전부
+/// 빈 탭일 때)을 재사용하면 그다음 그룹부터는 이 창이 비어 있지 않으므로 자연히 새 창이 된다.
+/// desktop 이 오면(체크박스 "Open each on its virtual desktop") Windows 에서 그 창을 그 순번의 가상
+/// 데스크톱으로 옮긴다 — 재사용한 이 창도 옮긴다. 사용자를 전환시키지는 않는다(창만 각자 자리로).
+/// 그룹 하나의 실패(전부 열려 있음·소실)는 로그만 남기고 다음으로 — 하나도 못 열었을 때만 Err
+#[tauri::command]
+async fn open_groups(app: tauri::AppHandle, window: tauri::WebviewWindow, groups: Vec<GroupSpec>) -> Result<(), String> {
+    let state = app.state::<AppState>();
     let from = window.label().to_string();
+    let mut opened = 0usize;
+    let mut last_err: Option<String> = None;
+    for g in &groups {
+        match open_group_in(&app, &state, &from, &g.roots) {
+            Ok(label) => {
+                opened += 1;
+                #[cfg(windows)]
+                if let Some(n) = g.desktop {
+                    if let Some(w) = app.get_webview_window(&label) {
+                        vdesk::place(&w, n);
+                    }
+                }
+                #[cfg(not(windows))]
+                let _ = (label, g.desktop);
+            }
+            Err(e) => {
+                eprintln!("superlite: 그룹 건너뜀 ({:?}): {e}", g.roots);
+                last_err = Some(e);
+            }
+        }
+    }
+    emit_sessions(&app, &state);
+    if opened == 0 {
+        return Err(last_err.unwrap_or_else(|| "열 그룹이 없다".into()));
+    }
+    Ok(())
+}
+
+/// open_groups 의 그룹 하나 — roots 와 목표 가상 데스크톱 순번(1부터, None 이면 옮기지 않음)
+#[derive(serde::Deserialize)]
+struct GroupSpec {
+    roots: Vec<String>,
+    desktop: Option<u32>,
+}
+
+/// 그룹 열기 본체 — open_group·open_groups 가 공유. 반환은 그룹이 열린 창 label (from 재사용 또는 새 창).
+/// 방송(emit_sessions)은 호출자가 한다 — open_groups 는 여러 그룹을 등록한 뒤 한 번만 방송한다
+fn open_group_in(app: &tauri::AppHandle, state: &AppState, from: &str, roots: &[String]) -> Result<String, String> {
+    let from = from.to_string();
     let parsed: Vec<PathBuf> = roots.iter().filter_map(|r| parse_root(r).ok()).collect();
     if parsed.is_empty() {
         return Err("열 수 있는 폴더가 없다".into());
     }
     for r in &parsed {
-        remember_recent(&state, r);
+        remember_recent(state, r);
     }
     let (label, added) = {
         let mut list = state.sessions.lock().unwrap();
@@ -906,7 +975,7 @@ async fn open_group(app: tauri::AppHandle, window: tauri::WebviewWindow, roots: 
             return Err("그룹의 폴더가 모두 이미 열려 있다".into());
         }
         let label = if here_nonempty {
-            new_window_label(&state)
+            new_window_label(state)
         } else {
             list.retain(|(id, _)| !owns(&windows, id, &from));
             windows.retain(|_, w| w != &from);
@@ -919,7 +988,7 @@ async fn open_group(app: tauri::AppHandle, window: tauri::WebviewWindow, roots: 
         (label, added)
     };
     if label != from {
-        if let Err(e) = build_window(&app, &state, &label, None) {
+        if let Err(e) = build_window(app, state, &label, None) {
             // 롤백 — 생기지 않은 창 소속으로 세션이 남지 않게
             let mut list = state.sessions.lock().unwrap();
             let mut windows = state.windows.lock().unwrap();
@@ -930,8 +999,111 @@ async fn open_group(app: tauri::AppHandle, window: tauri::WebviewWindow, roots: 
             return Err(format!("창 생성 실패: {e}"));
         }
     }
-    emit_sessions(&app, &state);
-    Ok(())
+    Ok(label)
+}
+
+/// 가상 데스크톱 배치 (Windows 전용, ticket window-virtual-desktop). 공개 COM IVirtualDesktopManager 만
+/// 쓴다 — 창의 데스크톱 조회(GetWindowDesktopId)와 이동(MoveWindowToDesktop). 데스크톱 열거·전환·생성은
+/// 비공개 인터페이스(빌드마다 IID 가 바뀜)라 쓰지 않고, 순번 → GUID 는 탐색기가 로그온마다 같은 값으로
+/// 데스크톱을 재생성하는 레지스트리 VirtualDesktopIDs(16바이트 GUID 나열)를 읽어 얻는다.
+/// WHY: COM 호출은 전용 스레드에서 — Chromium 도 UI 스레드의 중첩 메시지 루프를 피하려 별도 스레드로
+///      돌린다. 실패는 전부 로그만 (배치가 앱을 죽이면 안 된다)
+#[cfg(windows)]
+mod vdesk {
+    use windows::core::{w, GUID};
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED};
+    use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_BINARY};
+    use windows::Win32::UI::Shell::{IVirtualDesktopManager, VirtualDesktopManager};
+
+    /// 순번(1부터) → 데스크톱 GUID. 그 순번의 데스크톱이 없으면 None
+    fn desktop_id(n: u32) -> Option<GUID> {
+        let key = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\VirtualDesktops");
+        let val = w!("VirtualDesktopIDs");
+        let mut size: u32 = 0;
+        let mut buf: Vec<u8>;
+        unsafe {
+            if RegGetValueW(HKEY_CURRENT_USER, key, val, RRF_RT_REG_BINARY, None, None, Some(&mut size)).is_err() {
+                return None;
+            }
+            buf = vec![0u8; size as usize];
+            if RegGetValueW(
+                HKEY_CURRENT_USER,
+                key,
+                val,
+                RRF_RT_REG_BINARY,
+                None,
+                Some(buf.as_mut_ptr().cast()),
+                Some(&mut size),
+            )
+            .is_err()
+            {
+                return None;
+            }
+            buf.truncate(size as usize);
+        }
+        let i = (n.checked_sub(1)? as usize).checked_mul(16)?;
+        let b = buf.get(i..i + 16)?;
+        // 레지스트리는 GUID 를 메모리 배치 그대로(앞 세 필드 리틀엔디언) 둔다
+        Some(GUID::from_values(
+            u32::from_le_bytes([b[0], b[1], b[2], b[3]]),
+            u16::from_le_bytes([b[4], b[5]]),
+            u16::from_le_bytes([b[6], b[7]]),
+            b[8..16].try_into().ok()?,
+        ))
+    }
+
+    /// 전용 스레드에서 COM 을 열고 매니저로 f 를 실행. HWND 는 Send 가 아니라 호출자가 isize 로 넘긴다
+    fn with_manager<R: Send + 'static>(
+        f: impl FnOnce(&IVirtualDesktopManager) -> windows::core::Result<R> + Send + 'static,
+    ) -> Result<R, String> {
+        std::thread::spawn(move || unsafe {
+            let init = CoInitializeEx(None, COINIT_MULTITHREADED);
+            let r = CoCreateInstance::<_, IVirtualDesktopManager>(&VirtualDesktopManager, None, CLSCTX_ALL)
+                .and_then(|m| f(&m))
+                .map_err(|e| e.to_string());
+            if init.is_ok() {
+                CoUninitialize();
+            }
+            r
+        })
+        .join()
+        .map_err(|_| "COM 스레드 패닉".to_string())?
+    }
+
+    /// 창을 n 번(1부터) 가상 데스크톱으로 옮긴다. 그 순번의 데스크톱이 없으면 현재 데스크톱에 남기고 로그만
+    pub fn place(window: &tauri::WebviewWindow, n: u32) {
+        let Ok(hwnd) = window.hwnd() else { return };
+        let hwnd = hwnd.0 as isize;
+        let label = window.label().to_string();
+        let Some(id) = desktop_id(n) else {
+            eprintln!("superlite: 가상 데스크톱 {n} 없음 — {label} 은 현재 데스크톱에 남긴다");
+            return;
+        };
+        if let Err(e) = with_manager(move |m| unsafe { m.MoveWindowToDesktop(HWND(hwnd as *mut _), &id) }) {
+            eprintln!("superlite: 가상 데스크톱 {n} 이동 실패 ({label}): {e}");
+        }
+    }
+
+    /// 새 창을 출처 창과 같은 가상 데스크톱으로 — 분리 창(detach_session·detach_tabs)이 출처를 따라간다.
+    /// OS 기본도 "보고 있는 데스크톱에 생성" 이라 대개 이미 같지만 명시적으로 맞춘다. 출처가 어느
+    /// 데스크톱에도 없으면(GUID 0) 그대로 둔다
+    pub fn follow(app: &tauri::AppHandle, from: &str, window: &tauri::WebviewWindow) {
+        use tauri::Manager;
+        let Some(src) = app.get_webview_window(from).and_then(|w| w.hwnd().ok()) else { return };
+        let Ok(dst) = window.hwnd() else { return };
+        let (src, dst) = (src.0 as isize, dst.0 as isize);
+        let label = window.label().to_string();
+        if let Err(e) = with_manager(move |m| unsafe {
+            let id = m.GetWindowDesktopId(HWND(src as *mut _))?;
+            if id == GUID::zeroed() {
+                return Ok(());
+            }
+            m.MoveWindowToDesktop(HWND(dst as *mut _), &id)
+        }) {
+            eprintln!("superlite: 분리 창 데스크톱 맞추기 실패 ({label}): {e}");
+        }
+    }
 }
 
 /// OS 파일/폴더 드롭 수신 (Windows 전용). disable_drag_drop_handler 로 Tauri 의 파일 드롭
@@ -1097,6 +1269,7 @@ fn main() {
             forget_recent,
             set_pinned,
             open_group,
+            open_groups,
             set_zoom,
             pick_save_target,
             local_write,
