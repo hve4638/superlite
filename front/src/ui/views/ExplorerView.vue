@@ -5,7 +5,8 @@ import { activeTab, editors, openFile } from '../../model/editors';
 import { openFolder } from '../../model/host';
 import { createDir, createFile, deleteEntry, renameEntry, saveClipboardImage, undoFileOp } from '../../model/fileops';
 import { decorationFor } from '../../model/scm';
-import { activeSessionEmpty, remoteHost, sessionRoot, sessions } from '../../model/sessions';
+import { DND_FILE, activeSessionEmpty, multiWindow, remoteHost, sessionRoot, sessions } from '../../model/sessions';
+import { windowLabel } from '../../model/window';
 import { downloadEntry, uploadDropped, type DroppedEntry } from '../../model/transfer';
 import { connection } from '../../model/watch';
 import { openContextMenu, openQuickInput, workbench, type ContextMenuItem } from '../../model/workbench';
@@ -201,9 +202,14 @@ function onRowDblClick(node: TreeNode): void {
 // 파일·폴더 행을 에디터 영역으로 끌기 — 드롭 처리(열기/분할)는 에디터 쪽 드롭 존이 한다.
 // 폴더는 폴더 탭(yazi 식 탐색 화면)으로 열린다 (explorer-folder-tab)
 function onRowDragStart(e: DragEvent, node: TreeNode): void {
+  const kind = node.kind === 'directory' ? 'folder' : 'file';
   e.dataTransfer?.setData('text/plain', node.path);
+  // 다른 창의 편집기 영역이 같은 root 세션에서 열 수 있게 — 출처 창·root·경로 (cross-window-editor-drop)
+  if (multiWindow()) {
+    e.dataTransfer?.setData(DND_FILE, JSON.stringify({ window: windowLabel, root: sessionRoot(sessions.activeId), path: node.path, kind }));
+  }
   if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
-  startFileDrag(node.path, node.kind === 'directory' ? 'folder' : 'file');
+  startFileDrag(node.path, kind);
 }
 
 function onRowContextMenu(node: TreeNode, e: MouseEvent): void {

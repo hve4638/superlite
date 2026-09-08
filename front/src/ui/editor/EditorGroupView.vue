@@ -3,7 +3,8 @@ import { computed, ref } from 'vue';
 import type { Doc, EditorGroup, SplitSide } from '../../model/editors';
 import { addGroupBeside, editors, moveTabSplit, moveTabToGroup, openFile, openFileSplit, openFolderTab, openFolderTabSplit, openHex } from '../../model/editors';
 import { createTerminal } from '../../model/terminal';
-import { editorDrag, endEditorDrag } from './tabDnd';
+import { requestTabsMove } from '../../model/sessions';
+import { editorDrag, endEditorDrag, foreignDrag, isForeignDrag, readForeignDrop } from './tabDnd';
 import TabBar from './TabBar.vue';
 import MonacoHost from './MonacoHost.vue';
 import ImageView from './ImageView.vue';
@@ -43,10 +44,32 @@ function onBodyDragOver(e: DragEvent) {
   dropZone.value = zone;
 }
 
+// 다른 창에서 온 드롭 — 탭은 출처에 이동 요청(가장자리는 toSplit 으로 받는 쪽이 새 그룹을 만든다),
+// 경로는 한 창 안의 탐색기 드롭과 같은 경로로 연다 (ticket cross-window-editor-drop)
+function onForeignBodyDrop(e: DragEvent, zone: 'center' | SplitSide) {
+  const d = readForeignDrop(e);
+  if (!d) return;
+  if (d.kind === 'tab') {
+    requestTabsMove(d.window, { fromSession: d.session, editorTab: { groupId: d.groupId, tabId: d.tabId } }, {
+      toGroupId: props.group.id,
+      toSplit: zone === 'center' ? undefined : zone,
+    });
+  } else if (d.kind === 'folder') {
+    if (zone === 'center') openFolderTab(d.path, { groupId: props.group.id });
+    else openFolderTabSplit(d.path, props.group.id, zone);
+  } else {
+    if (zone === 'center') void openFile(d.path, { groupId: props.group.id });
+    else void openFileSplit(d.path, props.group.id, zone);
+  }
+}
+
 function onBodyDrop(e: DragEvent) {
   e.preventDefault();
   const zone = zoneAt(e);
-  if (editorDrag.kind === 'tab') {
+  if (editorDrag.kind === 'none') {
+    // 이 창의 드래그가 아니다 — 다른 창의 탭·탐색기 경로면 받고, 그 밖(OS 파일 등)은 종전처럼 삼킨다
+    if (isForeignDrag(e)) onForeignBodyDrop(e, zone);
+  } else if (editorDrag.kind === 'tab') {
     if (zone === 'center') moveTabToGroup(editorDrag.groupId, editorDrag.tabId, props.group.id);
     else moveTabSplit(editorDrag.groupId, editorDrag.tabId, props.group.id, zone);
   } else if (editorDrag.kind === 'file') {
@@ -164,9 +187,9 @@ const SHORTCUTS = [
           </template>
         </div>
       </div>
-      <!-- 드래그 중에만 존재 — monaco 가 드래그 이벤트를 삼키지 않게 본문을 덮는다 -->
+      <!-- 드래그 중에만 존재 — monaco 가 드래그 이벤트를 삼키지 않게 본문을 덮는다 (다른 창의 드래그도) -->
       <div
-        v-if="editorDrag.kind !== 'none'"
+        v-if="editorDrag.kind !== 'none' || foreignDrag.active"
         class="drop-layer"
         :class="dropZone"
         @dragover="onBodyDragOver"

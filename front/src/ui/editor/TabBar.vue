@@ -3,11 +3,10 @@ import { computed, onMounted, onUnmounted, ref } from 'vue';
 import type { EditorGroup, Tab } from '../../model/editors';
 import { closeEmptyGroup, closeTab, editors, isHtml, moveTabToGroup, openFile, openFolderTab, pinTab, reloadPreview, toggleGroupLock, toggleHtmlPreview, setActiveTab } from '../../model/editors';
 import { createTerminal, requestKillTerminal, terminals } from '../../model/terminal';
-import { notify } from '../../model/notifications';
 import { DND_EDITOR, detachEditorTab, multiWindow, requestTabsMove, sessionRoot, sessions } from '../../model/sessions';
 import { windowLabel } from '../../model/window';
 import { pointerOutside } from '../dndUtil';
-import { editorDrag, endEditorDrag, startTabDrag } from './tabDnd';
+import { editorDrag, endEditorDrag, isForeignDrag, readForeignDrop, startTabDrag } from './tabDnd';
 import FileIcon from '../widgets/FileIcon.vue';
 import ProgressBar from '../widgets/ProgressBar.vue';
 
@@ -102,25 +101,25 @@ function onDragEnd(e: DragEvent) {
     detachEditorTab(editorDrag.groupId, editorDrag.tabId, e.screenX - 100, e.screenY - 17);
   }
   dropIndex.value = null;
-  foreign.value = false;
+  foreign.value = 'none';
   endEditorDrag();
 }
 
 // 탭 드래그의 삽입 지점 (탭 인덱스 기준) — 삽입선 표시와 드롭 위치에 쓴다.
-// foreign = 다른 창에서 끌고 온 에디터 탭 (dragover 중엔 타입만 읽힌다)
+// foreign = 다른 창에서 끌고 온 에디터 탭·탐색기 경로 (dragover 중엔 타입만 읽힌다 — 탭이면 삽입선)
 const dropIndex = ref<number | null>(null);
-const foreign = ref(false);
+const foreign = ref<'none' | 'tab' | 'file'>('none');
 // 삽입선을 보이는 드래그 — 탭 이동과 타이틀바 새 탭 아이콘 (파일·폴더 드롭은 끝에 붙는다)
-const tabDragging = computed(() => editorDrag.kind === 'tab' || editorDrag.kind === 'new-folder' || editorDrag.kind === 'new-terminal' || foreign.value);
+const tabDragging = computed(() => editorDrag.kind === 'tab' || editorDrag.kind === 'new-folder' || editorDrag.kind === 'new-terminal' || foreign.value === 'tab');
 
-function isForeign(e: DragEvent): boolean {
-  return editorDrag.kind === 'none' && multiWindow() && (e.dataTransfer?.types.includes(DND_EDITOR) ?? false);
+function markForeign(e: DragEvent): void {
+  if (isForeignDrag(e)) foreign.value = e.dataTransfer?.types.includes(DND_EDITOR) ? 'tab' : 'file';
 }
 
 // 탭 위 드래그 — 좌/우 절반 기준으로 삽입 지점 결정 (VS Code 동일)
 function onTabDragOver(e: DragEvent, i: number) {
-  if (isForeign(e)) foreign.value = true;
-  if (editorDrag.kind === 'none' && !foreign.value) return;
+  markForeign(e);
+  if (editorDrag.kind === 'none' && foreign.value === 'none') return;
   e.preventDefault();
   e.stopPropagation();
   if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
@@ -132,17 +131,17 @@ function onTabDragOver(e: DragEvent, i: number) {
 
 // 탭 밖 빈 영역 — 끝에 삽입. 다른 그룹의 탭, 같은 그룹의 순서 변경, 탐색기 파일, 다른 창의 탭 모두 받는다
 function onTabsDragOver(e: DragEvent) {
-  if (isForeign(e)) foreign.value = true;
-  if (editorDrag.kind === 'none' && !foreign.value) return;
+  markForeign(e);
+  if (editorDrag.kind === 'none' && foreign.value === 'none') return;
   e.preventDefault();
   if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
   if (tabDragging.value) dropIndex.value = props.group.tabs.length;
 }
 
 function onTabsDrop(e: DragEvent) {
-  if (editorDrag.kind === 'none' && !foreign.value) return;
+  if (editorDrag.kind === 'none' && foreign.value === 'none') return;
   e.preventDefault();
-  if (foreign.value) {
+  if (foreign.value !== 'none') {
     onForeignDrop(e);
   } else if (editorDrag.kind === 'tab') {
     moveTabToGroup(editorDrag.groupId, editorDrag.tabId, props.group.id, dropIndex.value ?? undefined);
@@ -156,7 +155,7 @@ function onTabsDrop(e: DragEvent) {
     void openFile(editorDrag.path, { groupId: props.group.id });
   }
   dropIndex.value = null;
-  foreign.value = false;
+  foreign.value = 'none';
   endEditorDrag();
 }
 
@@ -164,24 +163,24 @@ function onTabsDrop(e: DragEvent) {
 function onTabsDragLeave(e: DragEvent) {
   if ((e.currentTarget as HTMLElement).contains(e.relatedTarget as Node | null)) return;
   dropIndex.value = null;
-  foreign.value = false;
+  foreign.value = 'none';
 }
 
-// 다른 창의 에디터 탭 병합 — 같은 root 의 세션에만 (와이어 경로가 root 상대). 상태는 출처
-// 창에 있으니 이동을 요청한다 (출처가 탭을 떼어 핸드오프를 보내온다)
+// 다른 창의 에디터 탭 병합·탐색기 경로 열기 — 같은 root 의 세션에만 (readForeignDrop 이 검사). 탭 상태는
+// 출처 창에 있으니 이동을 요청한다 (출처가 탭을 떼어 핸드오프를 보내온다), 경로는 여기서 연다
 function onForeignDrop(e: DragEvent) {
-  const raw = e.dataTransfer?.getData(DND_EDITOR);
-  if (!raw) return;
-  const d = JSON.parse(raw) as { window: string; session: string; root: string | null; groupId: number; tabId: string };
-  if (d.window === windowLabel) return;
-  if (d.root === null || d.root !== sessionRoot(sessions.activeId)) {
-    notify('warning', 'Editor tabs can only be moved between windows of the same folder');
-    return;
+  const d = readForeignDrop(e);
+  if (!d) return;
+  if (d.kind === 'tab') {
+    requestTabsMove(d.window, { fromSession: d.session, editorTab: { groupId: d.groupId, tabId: d.tabId } }, {
+      toGroupId: props.group.id,
+      toIndex: dropIndex.value ?? undefined,
+    });
+  } else if (d.kind === 'folder') {
+    openFolderTab(d.path, { groupId: props.group.id });
+  } else {
+    void openFile(d.path, { groupId: props.group.id });
   }
-  requestTabsMove(d.window, { fromSession: d.session, editorTab: { groupId: d.groupId, tabId: d.tabId } }, {
-    toGroupId: props.group.id,
-    toIndex: dropIndex.value ?? undefined,
-  });
 }
 </script>
 

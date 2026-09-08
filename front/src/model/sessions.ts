@@ -1,7 +1,7 @@
 import { effect, reactive } from '@vue/reactivity';
 import type { ThinBackend } from '../backend/types';
 import { activeCtx } from './ctx';
-import type { TabHandoff } from './editors';
+import type { SplitSide, TabHandoff } from './editors';
 import { notify } from './notifications';
 import { createSessionCtx, type SessionCtx, type SessionSnapshot } from './session';
 import type { TerminalInstance, TerminalSnapshot } from './terminal';
@@ -48,6 +48,8 @@ export type Handoff =
       toSession?: string;
       toGroupId?: number;
       toIndex?: number;
+      /** 있으면 toGroupId 의 그 방향에 새 그룹을 만들어 거기에 붙인다 (편집기 본문 가장자리 드롭) */
+      toSplit?: SplitSide;
       editors: TabHandoff[];
       terminals: TerminalSnapshot[];
     };
@@ -57,6 +59,9 @@ export type Handoff =
  *  터미널 {window, session, root, id} */
 export const DND_SESSION = 'application/x-superlite-session';
 export const DND_EDITOR = 'application/x-superlite-editor';
+/** 탐색기 파일·폴더 행 드래그 — 다른 창의 편집기 영역이 같은 root 세션에서 그 경로를 연다 (문서 핸드오프
+ *  없이 디스크에서, ticket cross-window-editor-drop). 데이터는 JSON {window, root, path, kind: 'file'|'folder'} */
+export const DND_FILE = 'application/x-superlite-file';
 /** 워크스페이스 root 묶음 드래그 — 시작 페이지 Recent·Pinned 항목과 원격 탐색기의 경로 아이템이 출처,
  *  시작 페이지 Pinned 가 목적지 (ticket start-page-redesign). 데이터는 JSON {roots: string[],
  *  from?: {group, member?}} — from 은 Pinned 안에서 옮길 때만 (recents.PinSource) */
@@ -718,14 +723,16 @@ interface TabsMoveRequest {
   toSession: string;
   toGroupId?: number;
   toIndex?: number;
+  toSplit?: SplitSide;
 }
 
-/** 대상 창의 탭바 드롭 — 출처 창에 요청 (터미널 탭 포함). root 일치 검사는 호출측(UI)이 드래그
- *  데이터의 root 로 미리 한다 */
+/** 대상 창의 탭바·편집기 본문 드롭 — 출처 창에 요청 (터미널 탭 포함). root 일치 검사는 호출측(UI)이
+ *  드래그 데이터의 root 로 미리 한다. toSplit 은 본문 가장자리 드롭 — 받는 쪽이 toGroupId 옆에 새 그룹을
+ *  만들어 붙인다 (요청 시점에 만들면 이동이 거절됐을 때 빈 그룹이 남는다) */
 export function requestTabsMove(
   fromWindow: string,
   pick: { fromSession: string; editorTab?: { groupId: number; tabId: string } },
-  to: { toGroupId?: number; toIndex?: number },
+  to: { toGroupId?: number; toIndex?: number; toSplit?: SplitSide },
 ): void {
   const payload: TabsMoveRequest = { ...pick, toWindow: windowLabel ?? '', toSession: sessions.activeId, ...to };
   void invoke('forward', { toWindow: fromWindow, event: 'tabs-move-request', payload });
@@ -739,6 +746,7 @@ function onTabsMoveRequest(p: TabsMoveRequest): void {
   handoff.toSession = p.toSession;
   handoff.toGroupId = p.toGroupId;
   handoff.toIndex = p.toIndex;
+  handoff.toSplit = p.toSplit;
   void invoke('forward', { toWindow: p.toWindow, event: 'tabs-handoff', payload: handoff }).then((ok) => {
     if (!ok) undoTabsHandoff(p.fromSession, handoff, p.editorTab?.groupId);
   });
@@ -796,8 +804,10 @@ function applyHandoff(h: Handoff): void {
       t.renamed = h.renamed;
     }
   } else {
-    for (const e of h.editors) ctx.editors.acceptTab(e, h.toGroupId, h.toIndex);
-    ctx.terminals.adoptTerminals(h.terminals, h.fromSession, { groupId: h.toGroupId, index: h.toIndex });
+    // 본문 가장자리 드롭 — 기준 그룹 옆에 새 그룹을 만들어 거기에 (기준 그룹이 사라졌으면 활성 그룹)
+    const groupId = h.toSplit && h.toGroupId !== undefined ? ctx.editors.addGroupBeside(h.toGroupId, h.toSplit) ?? undefined : h.toGroupId;
+    for (const e of h.editors) ctx.editors.acceptTab(e, groupId, h.toIndex);
+    ctx.terminals.adoptTerminals(h.terminals, h.fromSession, { groupId, index: h.toIndex });
   }
   activateSession(sid);
 }
