@@ -88,7 +88,7 @@ export fn pinTab(groupId, tabId) {
   role: preview 탭 고정 — 탭 더블클릭 (VS Code 동일)
 }
 export fn closeTab(groupId, tabId, force) {
-  role: 탭 닫기 — 빈 분할 그룹은 접고 이웃으로 포커스 (단, 다른 그룹이 잠겨 있으면(EditorGroup.locked) 빈 채 남긴다 — 잠금은 삭제로 인한 자동 병합 방지, 잠긴 그룹 자신이 비면 접힌다; editor-group-empty-lock 2026-09-08). 닫힌 탭은 복원 이력에 쌓인다 (터미널 탭 제외 — 대신 terminalCloser 훅으로 PTY 를 정리). dirty 문서의 마지막 참조 탭(같은 path 의 diff 탭 포함해 하나뿐)이면 곧장 닫지 않고 closeConfirm 을 세워 Save/Don't Save/Cancel 대화상자에 위임한다 (VS Code 동일 — 조용한 닫기는 버퍼가 몰래 살아남는 혼동을 낳는다). force 는 확인 생략 — confirm 처리부·삭제(closePathTabs)용
+  role: 탭 닫기 — 빈 분할 그룹은 접고 이웃으로 포커스 (단, 다른 그룹이 잠겨 있으면(EditorGroup.locked) 빈 채 남긴다 — 잠금은 삭제로 인한 자동 병합 방지, 잠긴 그룹 자신이 비면 접힌다; editor-group-empty-lock 2026-09-08). 닫힌 탭은 복원 이력에 쌓인다 (터미널 탭 제외 — 대신 terminalCloser 훅으로 PTY 를 정리). dirty 문서의 편집 표면(file·diff 탭)이 이 탭 말고 남지 않으면 — preview·hex 탭은 savedContent·디스크만 그리므로 참조로 세지 않고, 닫는 탭이 preview 여도 편집 표면이 없으면 확인한다 (editor-close-vim 2026-09-09) — 곧장 닫지 않고 closeConfirm 을 세워 Save/Don't Save/Cancel 대화상자에 위임한다 (VS Code 동일 — 조용한 닫기는 버퍼가 몰래 살아남는 혼동을 낳는다). force 는 확인 생략 — confirm 처리부·삭제(closePathTabs)용
 }
 export fn confirmCloseSave() {
   role: 닫기 확인 Save — 저장(saveDoc) 성공 시에만 닫는다. 실패·충돌은 탭 유지 (충돌은 saveConflict 토스트가 이어받는다)

@@ -86,10 +86,12 @@ function bind(client: NvimClient): void {
     const [lines, regtype] = args as [string[], string];
     // 줄 단위(V)는 nvim 이 끝에 빈 원소를 붙여 보낸다 — 그대로 join 하면 개행이 끝에 온다
     const text = lines.join('\n') + (regtype.startsWith('V') && lines[lines.length - 1] !== '' ? '\n' : '');
-    void navigator.clipboard.writeText(text).catch(() => {});
+    // yank 는 키 입력 직후의 rpcnotify 라 사용자 활성화 안 — execCommand 폴백이 비보안 컨텍스트에서도 된다
+    writeClipboard(text);
   });
   client.onRequest('sl_clip_get', async () => {
-    const text = await navigator.clipboard.readText().catch(() => '');
+    // 읽기에는 execCommand 폴백이 없다 — 비보안 컨텍스트(http://LAN)에서는 빈 문자열 (Ctrl+V 는 paste 이벤트로 받는다)
+    const text = (await navigator.clipboard?.readText().catch(() => '')) ?? '';
     const lines = text.split('\n');
     const linewise = lines.length > 1 && lines[lines.length - 1] === '';
     if (linewise) lines.pop();

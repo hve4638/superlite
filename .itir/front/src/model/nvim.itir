@@ -25,7 +25,7 @@ export fn inputText(text) {
   role: 조합 완료 텍스트(IME)·붙여넣기 → nvim_input
 }
 export fn runEx(cmd) {
-  role: :w :q :wq :x (+!) 류를 우리 저장(saveActive→refreshScm)·탭 닫기(closeTab, ! 는 force) 경로로 — nvim 은 acwrite 버퍼라 디스크를 안 쓰고, :q 는 마지막 창이라 nvim 자체가 끝나므로 nvim 에 넘기지 않는다
+  role: 가로채는 명령 w·write·q·quit·wq·x·xit·exit·wa·wall·qa·qall·wqa·xa (+!) 를 우리 저장(saveActive→refreshScm)·탭 닫기(closeTab, ! 는 force) 경로로 — 전체 대상 명령(wa·qa·wqa·xa)도 활성 탭 하나만: vim 은 그 편집기에만 작용하고 다른 탭을 저장·닫지 않는다 (사용자 결정 2026-09-09) — nvim 은 acwrite 버퍼라 디스크를 안 쓰고, :q 는 마지막 창이라 nvim 자체가 끝나므로 nvim 에 넘기지 않는다
 }
 export fn cmdlineKey(e) -> handled {
   role: 명령줄이 열린 동안의 키 — 가로채는 Enter 는 nvim 에 <Esc> 를 보내 명령줄을 닫고 runEx, 나머지는 nvim_input

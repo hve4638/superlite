@@ -228,6 +228,9 @@ export async function runEx(cmd: string): Promise<void> {
   if (!m) return;
   const name = m[1];
   const force = m[2] === '!';
+  // WHY: :wa·:qa·:wqa·:xa 도 활성 탭 하나만 — vim 은 오로지 그 편집기에만 작용하고 다른 탭을
+  //      저장하거나 닫지 않는다 (사용자 결정 2026-09-09, editor-close-vim). nvim 에 넘기면
+  //      acwrite 버퍼라 아무 일도 없거나 에러라 가로채기 목록에는 남긴다
   const write = /^(w|write|wq|x|xit|exit|wqa|xa|wa|wall)$/.test(name);
   const quit = /^(q|quit|wq|x|xit|exit|qa|qall|wqa|xa)$/.test(name);
   if (write) await saveActive().then(refreshScm);

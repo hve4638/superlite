@@ -851,12 +851,17 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
       const target = editors.groups.find((g) => g.id === groupId)?.tabs.find((t) => t.id === tabId);
       if (!target) return;
       const doc = editors.docs.get(target.path);
-      // 같은 문서를 보는 다른 탭(diff 포함)이 남으면 버퍼는 계속 보이는 중 — 확인 불요
-      const refs = editors.groups.reduce(
-        (n, g) => n + g.tabs.filter((t) => t.path === target.path).length,
+      // 같은 문서의 편집 표면(file·diff)이 다른 탭으로 남으면 버퍼는 계속 보이는 중 — 확인 불요.
+      // preview·hex 탭은 savedContent·디스크만 그려 참조로 세지 않는다 (세면 미저장 버퍼가
+      // 보이지 않은 채 살아남는다, review-front-model C2). 남는 편집 표면이 없으면 닫는 탭이
+      // preview 여도 확인한다 — 버퍼가 닿을 곳이 없어지는 것은 같다
+      const isEditor = (t: Tab) => t.kind === 'file' || t.kind === 'diff';
+      const editorRefs = editors.groups.reduce(
+        (n, g) => n + g.tabs.filter((t) => t.path === target.path && isEditor(t)).length,
         0,
       );
-      if (doc && doc.content !== doc.savedContent && refs === 1) {
+      const lastEditor = editorRefs === (isEditor(target) ? 1 : 0);
+      if (doc && doc.content !== doc.savedContent && lastEditor) {
         editors.closeConfirm = { groupId, tabId, path: target.path };
         return;
       }
