@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import type { EditorGroup, Tab } from '../../model/editors';
 import { closeEmptyGroup, closeTab, editors, isHtml, moveTabToGroup, openFile, openFolderTab, pinTab, reloadPreview, toggleGroupLock, toggleHtmlPreview, setActiveTab } from '../../model/editors';
 import { createTerminal, requestKillTerminal, terminals } from '../../model/terminal';
@@ -9,6 +9,7 @@ import { pointerOutside } from '../dndUtil';
 import { editorDrag, endEditorDrag, isForeignDrag, readForeignDrop, startTabDrag } from './tabDnd';
 import FileIcon from '../widgets/FileIcon.vue';
 import ProgressBar from '../widgets/ProgressBar.vue';
+import StripScroll from '../widgets/StripScroll.vue';
 
 const props = defineProps<{ group: EditorGroup }>();
 
@@ -22,6 +23,10 @@ const previewActive = computed(() => {
   const t = activeOf();
   return t && t.kind === 'preview' ? t : null;
 });
+
+// 탭이 넘치면 활성 탭이 보이도록 스크롤 (ticket tab-strip-overflow) — 렌더 뒤에
+const strip = ref<InstanceType<typeof StripScroll> | null>(null);
+watch(() => props.group.activeTabId, () => void nextTick(() => strip.value?.reveal('.tab.active')), { immediate: true });
 
 function iconName(tab: Tab): string {
   // diff 탭 이름은 "x (Working Tree)" 라서 아이콘은 실제 파일명으로 찾는다
@@ -186,7 +191,8 @@ function onForeignDrop(e: DragEvent) {
 
 <template>
   <div class="tabbar">
-    <div class="tabs" @dragover="onTabsDragOver" @dragleave="onTabsDragLeave($event)" @drop="onTabsDrop">
+    <!-- 탭 목록만 스크롤 영역 — 그룹 액션은 밖에 고정. 빈 영역 드롭(끝에 삽입)은 스트립 루트가 받는다 -->
+    <StripScroll ref="strip" class="tabs" @dragover="onTabsDragOver" @dragleave="onTabsDragLeave($event)" @drop="onTabsDrop">
       <div
         v-for="(tab, i) in group.tabs"
         :key="tab.id"
@@ -227,7 +233,7 @@ function onForeignDrop(e: DragEvent) {
           </span>
         </span>
       </div>
-    </div>
+    </StripScroll>
     <div class="group-actions">
       <span v-if="htmlActive" class="group-action" title="Open Preview (Ctrl+Shift+V)" @click="toggleHtmlPreview(group.id, htmlActive)">
         <span class="codicon codicon-open-preview" />
@@ -280,14 +286,7 @@ function onForeignDrop(e: DragEvent) {
   pointer-events: none;
 }
 .tabs {
-  display: flex;
   flex: 1;
-  min-width: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
-}
-.tabs::-webkit-scrollbar {
-  display: none;
 }
 .tab {
   position: relative;

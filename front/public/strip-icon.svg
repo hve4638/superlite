@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2FA3FF"/>
+      <stop offset="1" stop-color="#0B5FB0"/>
+    </linearGradient>
+    <linearGradient id="trail" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0"/>
+      <stop offset="0.6" stop-color="#FFFFFF" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.90"/>
+    </linearGradient>
+    <clipPath id="round"><rect width="512" height="512" rx="112"/></clipPath>
+  </defs>
+  <g clip-path="url(#round)">
+    <!-- 확정 2026-09-08 — yaw -48 pitch 36 roll 73 size 200 focal 900 -->
+    <rect x="12.3" y="177.8" width="293.1" height="210.0" rx="6" fill="url(#trail)"/>
+    <polygon points="386.5,133.9 100.3,225.8 263.2,222.2" fill="#DEEBF7" stroke="#DEEBF7" stroke-width="1" stroke-linejoin="round"/>
+    <polygon points="386.5,133.9 263.2,222.2 325.7,431.8" fill="#E7F0F9" stroke="#E7F0F9" stroke-width="1" stroke-linejoin="round"/>
+    <polygon points="100.3,225.8 325.7,431.8 263.2,222.2" fill="#BFD9F0" stroke="#BFD9F0" stroke-width="1" stroke-linejoin="round"/>
+  </g>
+</svg>

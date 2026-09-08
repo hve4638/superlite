@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import { openQuickInput, openContextMenu } from '../model/workbench';
 import { openFolderTab } from '../model/editors';
 import { createTerminal } from '../model/terminal';
 import { endEditorDrag, startNewTabDrag } from './editor/tabDnd';
+import StripScroll from './widgets/StripScroll.vue';
 import {
   inApp,
   appWindow,
@@ -144,6 +145,10 @@ function onStripDrop(e: DragEvent): void {
   endTabDrag();
 }
 
+// 스트립이 넘치면 활성 탭이 보이도록 스크롤 (ticket tab-strip-overflow) — 렌더 뒤에
+const strip = ref<InstanceType<typeof StripScroll> | null>(null);
+watch(() => sessions.activeId, () => void nextTick(() => strip.value?.reveal('.session-tab.active')), { immediate: true });
+
 /** 타이틀바 루트 — 세션 탭 분리 판정의 기준 영역 */
 const titlebarEl = ref<HTMLElement | null>(null);
 
@@ -232,6 +237,9 @@ function onNewTabDragStart(e: DragEvent, kind: 'new-folder' | 'new-terminal'): v
     <!-- 좌측정렬 워크스페이스 세션 탭 (decision/workspace-session-tabs.md, Windows Terminal 참조)
          — 탭 밖 여백은 드래그 영역. 웹에서도 그린다 (mock 만 제외) -->
     <div class="titlebar-tabs" data-tauri-drag-region>
+      <!-- 앱 아이콘 — 기능 없는 장식, 창 끌기 영역 (서브 창도 같은 자리). favicon 에서 파란 배경만 뺀
+           변형(잔상·정사면체) — 타이틀바 위에 배경 사각형이 있으면 버튼처럼 보인다 (2026-09-08 사용자 선택) -->
+      <img class="app-icon" src="/strip-icon.svg" alt="" draggable="false" data-tauri-drag-region />
       <div
         v-if="sessionsEnabled() && sessions.list.length"
         class="session-tabs"
@@ -239,51 +247,54 @@ function onNewTabDragStart(e: DragEvent, kind: 'new-folder' | 'new-terminal'): v
         @dragleave="onStripDragLeave($event)"
         @drop="onStripDrop"
       >
-        <div
-          v-for="(tab, i) in sessions.list"
-          :key="tab.id"
-          class="session-tab"
-          :class="{
-            active: tab.id === sessions.activeId,
-            'drop-before': dragging && dropIndex === i,
-            'drop-after': dragging && dropIndex === i + 1 && i === sessions.list.length - 1,
-          }"
-          :title="tab.root ?? undefined"
-          :draggable="renamingId !== tab.id && !subWindow"
-          @dragstart="onTabDragStart($event, tab)"
-          @dragend="onTabDragEnd($event)"
-          @dragover="onTabDragOver($event, i)"
-          @click="activateSession(tab.id)"
-          @contextmenu="onTabContextMenu($event, tab)"
-          @dblclick="subWindow || startRename(tab)"
-          @mousedown.middle.prevent="subWindow || closeSession(tab.id)"
-        >
-          <input
-            v-if="renamingId === tab.id"
-            v-model="renameValue"
-            class="session-rename"
-            @keydown.enter="commitRename()"
-            @keydown.esc="renamingId = null"
-            @blur="commitRename()"
-            @click.stop
-            @dblclick.stop
-            @mousedown.stop
-          />
-          <template v-else>
-            <!-- 빈 세션(이름 없음)의 표시 라벨 — 시작 페이지 탭임을 나타낸다 -->
-            <!-- 이름은 워크스페이스 정보가 오면 채워진다 — 그 전엔 빈 세션만 Welcome, 로드 중인 세션은 공백 -->
-            <span class="session-name">{{ labels.get(tab.id) ?? sessionLabel(tab) }}</span>
-          </template>
-          <!-- 로딩 스피너 — 초기 로드(ctx.init) 중, X 바로 왼쪽. 예비 파이프 접속은 상태바 단계가
-               안 보이므로 로드 완료의 유일한 시각 신호다 -->
-          <span v-if="loading.has(tab.id)" class="session-loading codicon codicon-loading codicon-modifier-spin" />
-          <!-- 서브 창은 전환만 — 닫기·+·이름·이동은 메인 창에서 (2026-09-08 사용자 결정) -->
-          <span
-            v-if="!subWindow"
-            class="session-close codicon codicon-close"
-            @click.stop="closeSession(tab.id)"
-          />
-        </div>
+        <!-- 탭 목록만 스크롤 영역 — +·v 는 밖에 고정 (넘쳐도 항상 보인다) -->
+        <StripScroll ref="strip" class="session-strip">
+          <div
+            v-for="(tab, i) in sessions.list"
+            :key="tab.id"
+            class="session-tab"
+            :class="{
+              active: tab.id === sessions.activeId,
+              'drop-before': dragging && dropIndex === i,
+              'drop-after': dragging && dropIndex === i + 1 && i === sessions.list.length - 1,
+            }"
+            :title="tab.root ?? undefined"
+            :draggable="renamingId !== tab.id && !subWindow"
+            @dragstart="onTabDragStart($event, tab)"
+            @dragend="onTabDragEnd($event)"
+            @dragover="onTabDragOver($event, i)"
+            @click="activateSession(tab.id)"
+            @contextmenu="onTabContextMenu($event, tab)"
+            @dblclick="subWindow || startRename(tab)"
+            @mousedown.middle.prevent="subWindow || closeSession(tab.id)"
+          >
+            <input
+              v-if="renamingId === tab.id"
+              v-model="renameValue"
+              class="session-rename"
+              @keydown.enter="commitRename()"
+              @keydown.esc="renamingId = null"
+              @blur="commitRename()"
+              @click.stop
+              @dblclick.stop
+              @mousedown.stop
+            />
+            <template v-else>
+              <!-- 빈 세션(이름 없음)의 표시 라벨 — 시작 페이지 탭임을 나타낸다 -->
+              <!-- 이름은 워크스페이스 정보가 오면 채워진다 — 그 전엔 빈 세션만 Welcome, 로드 중인 세션은 공백 -->
+              <span class="session-name">{{ labels.get(tab.id) ?? sessionLabel(tab) }}</span>
+            </template>
+            <!-- 로딩 스피너 — 초기 로드(ctx.init) 중, X 바로 왼쪽. 예비 파이프 접속은 상태바 단계가
+                 안 보이므로 로드 완료의 유일한 시각 신호다 -->
+            <span v-if="loading.has(tab.id)" class="session-loading codicon codicon-loading codicon-modifier-spin" />
+            <!-- 서브 창은 전환만 — 닫기·+·이름·이동은 메인 창에서 (2026-09-08 사용자 결정) -->
+            <span
+              v-if="!subWindow"
+              class="session-close codicon codicon-close"
+              @click.stop="closeSession(tab.id)"
+            />
+          </div>
+        </StripScroll>
         <!-- 탭 끝의 + = 빈 세션 탭 (시작 페이지에서 폴더 열기로 잇는다),
              옆의 v = 열기 방식 드롭다운 (Windows Terminal 구성) -->
         <span
@@ -360,16 +371,30 @@ function onNewTabDragStart(e: DragEvent, kind: 'new-folder' | 'new-terminal'): v
 }
 /* C 시안 (VS Code 에디터 탭 문법) 실험 적용 — 전체 높이 사각 탭, 활성 = 에디터
    배경 + 상단 2px 액센트 라인, 탭 경계는 1px border */
+.app-icon {
+  width: 18px;
+  height: 18px;
+  margin: 0 8px 0 10px;
+  flex-shrink: 0;
+  -webkit-user-drag: none;
+  user-select: none;
+}
 .session-tabs {
   display: flex;
   align-items: stretch;
   height: 100%;
   gap: 0;
+  min-width: 0;
   max-width: 100%;
-  overflow: hidden;
+}
+/* 탭 목록 스크롤 영역 — 공간이 남으면 내용 폭, 모자라면 줄어들며 스크롤. 페이드는 타이틀바 배경색 */
+.session-strip {
+  flex: 0 1 auto;
+  --strip-bg: var(--vscode-titleBar-activeBackground);
 }
 .session-tab {
   position: relative;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 10px; /* 이름이 길어 auto 마진이 0 이 돼도 이름-x 사이 최소 간격 */
