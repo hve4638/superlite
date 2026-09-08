@@ -31,4 +31,6 @@ windows-core = "0.61"
 # 가상 데스크톱 배치 (ticket window-virtual-desktop) — 공개 COM IVirtualDesktopManager(Win32_UI_Shell)와
 # 순번 → GUID 변환용 레지스트리 읽기(Win32_System_Registry). tauri 가 쓰는 것과 같은 0.61 계열이라
 # hwnd() 의 HWND 타입이 일치한다
-windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Registry", "Win32_UI_Shell"] }
+# 창 아이콘 (ticket app-icon-quality) — exe 리소스 ICO 를 LoadImageW 로 꺼내 WM_SETICON 큰·작은 둘 다 세팅
+# (Win32_UI_WindowsAndMessaging·Win32_System_LibraryLoader·Win32_UI_HiDpi)
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Registry", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_LibraryLoader", "Win32_UI_HiDpi"] }

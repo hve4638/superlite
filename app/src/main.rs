@@ -476,7 +476,49 @@ fn build_window(
     }
     #[cfg(windows)]
     attach_os_drop(app, &window);
+    #[cfg(windows)]
+    win_icon::apply(&window);
     Ok(window)
+}
+
+/// 창 아이콘 (Windows 전용, ticket app-icon-quality). tao 는 창 아이콘을 ICO 첫 항목(16px)의 RGBA 로
+/// CreateIcon 해 WM_SETICON 의 ICON_SMALL 에만 넣는다 — ICON_BIG 이 비어 작업 표시줄·Alt+Tab 이 16px 를
+/// 늘려 그렸다(흐림·저해상도). 여기서 exe 리소스 ICO(tauri-build 가 id 32512 로 박는다)를 창 DPI 의
+/// 작은·큰 크기로 LoadImageW 해 둘 다 덮어쓴다. 리소스에서 온 HICON 은 셸이 원본 모듈·리소스를 알아
+/// 필요한 크기를 다시 꺼내므로(GetIconInfoEx) 배율이 달라도 ICO 의 맞는 항목이 쓰인다.
+/// WHY: 창 생성 시점 DPI 로 한 번만 — 모니터 간 DPI 이동(WM_DPICHANGED)은 다루지 않는다 (ponytail).
+///      실패는 로그만 — tao 가 넣은 작은 아이콘이 남는다
+#[cfg(windows)]
+mod win_icon {
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        LoadImageW, SendMessageW, ICON_BIG, ICON_SMALL, IMAGE_ICON, LR_SHARED, SM_CXICON, SM_CXSMICON, WM_SETICON,
+    };
+
+    /// tauri-build(tauri-winres) 가 창 아이콘 ICO 를 넣는 리소스 id — IDI_APPLICATION 과 같은 32512
+    const ICON_RESOURCE: usize = 32512;
+
+    pub fn apply(window: &tauri::WebviewWindow) {
+        let Ok(hwnd) = window.hwnd() else { return };
+        let label = window.label();
+        unsafe {
+            let Ok(module) = GetModuleHandleW(PCWSTR::null()) else { return };
+            let dpi = GetDpiForWindow(hwnd);
+            for (kind, metric) in [(ICON_SMALL, SM_CXSMICON), (ICON_BIG, SM_CXICON)] {
+                let px = GetSystemMetricsForDpi(metric, dpi);
+                // LR_SHARED — 같은 리소스·크기는 시스템이 하나를 공유하고 해제도 맡는다
+                match LoadImageW(Some(module.into()), PCWSTR(ICON_RESOURCE as *const u16), IMAGE_ICON, px, px, LR_SHARED) {
+                    Ok(h) => {
+                        SendMessageW(hwnd, WM_SETICON, Some(WPARAM(kind as usize)), Some(LPARAM(h.0 as isize)));
+                    }
+                    Err(e) => eprintln!("superlite: 창 아이콘 로드 실패 ({label}, {px}px): {e}"),
+                }
+            }
+        }
+    }
 }
 
 /// 웹뷰 줌 — action 은 "in"·"out"·"reset". 배율은 창별이 아니라 앱 전체 공통(VS Code
