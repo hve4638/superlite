@@ -9,6 +9,7 @@ import { windowLabel } from '../../model/window';
 import { pointerOutside } from '../dndUtil';
 import { editorDrag, endEditorDrag, startTabDrag } from './tabDnd';
 import FileIcon from '../widgets/FileIcon.vue';
+import ProgressBar from '../widgets/ProgressBar.vue';
 
 const props = defineProps<{ group: EditorGroup }>();
 
@@ -208,6 +209,8 @@ function onForeignDrop(e: DragEvent) {
         @dblclick="pinTab(group.id, tab.id)"
         @mousedown.middle.prevent="onClose(tab, $event)"
       >
+        <!-- 워크스페이스 복원으로 문서를 읽는 중 — 탭 아래쪽 진행선 (탐색기 로딩과 같은 위젯) -->
+        <ProgressBar v-if="editors.loadingTabs.has(tab.id)" class="tab-progress" />
         <span v-if="tab.kind === 'terminal'" class="codicon codicon-terminal tab-icon" />
         <span v-else-if="tab.kind === 'folder'" class="codicon codicon-folder tab-icon" />
         <FileIcon v-else :name="iconName(tab)" />
@@ -298,6 +301,10 @@ function onForeignDrop(e: DragEvent) {
   background: var(--vscode-tab-inactiveBackground);
   color: var(--vscode-tab-inactiveForeground);
   cursor: pointer;
+}
+.tab :deep(.tab-progress) {
+  top: auto;
+  bottom: 0;
 }
 .tab.active {
   background: var(--vscode-tab-activeBackground);

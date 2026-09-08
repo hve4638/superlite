@@ -4,7 +4,7 @@ import { closeTab, editors, saveActive, splitGroup, toggleGroupLock, activeGroup
 import { createTerminal } from './terminal'
 import { refreshScm } from './scm'
 import { activeSessionEmpty, cycleSession, sessionsEnabled } from './sessions'
-import { inApp, zoomWindow } from './window'
+import { inApp, reloadWindow, zoomWindow } from './window'
 import { showAbout } from './version'
 import { toggleVimMode, vimAvailable } from './nvim'
 
@@ -23,5 +23,5 @@ export fn installKeybindings(target) {
   role: window keydown 에 chord 상태기 설치
 }
 export fn setupCommands() {
-  role: 내장 커맨드 전부 등록 (저장·분할·뷰 전환·터미널 등 — 터미널은 편집기 탭: Ctrl+` 는 누를 때마다 새 터미널 탭(createTerminal, activeSessionEmpty 가드). 하단 패널 토글(Ctrl+J)·Ctrl+Shift+` 는 없다). 활성 탭 경로를 hex 뷰어로 여는 'Hex Editor: Open Active File in Hex Editor', .html·프리뷰 활성 탭의 'HTML: Toggle Preview'(Ctrl+Shift+V, toggleHtmlPreview — 제자리 전환), 'View: Toggle Word Wrap'(Alt+Z, toggleWordWrap), 'Help: About'(version.showAbout — 버전·커밋·와이어·데몬 경로 다이얼로그). '폴더 열기' Ctrl+O 는 모든 환경에서 경로 입력 퀵인풋을 연다 (sessionsEnabled 에서 등록, mock 미등록). 앱(inApp)은 OS 다이얼로그를 Ctrl+Shift+O(host.openFolderDialog — 빈 탭 replace 판단 포함)로 병행 제공한다 — web-folder-open.md (Ctrl+O=경로 입력, Ctrl+Shift+O=OS 다이얼로그). 줌 키 배정(사용자 확정, VS Code 기본과 다름): 편집기 전용 줌 'View: Editor Font Zoom In/Out/Reset'(Ctrl+= · Ctrl+- · Ctrl+0, stepEditorZoom·setEditorZoom — 상태바 배율 항목과 같은 값)은 모든 환경, UI 포함 전역(웹뷰) 줌 'View: Zoom In/Out/Reset Zoom'(Ctrl+Shift+= · Ctrl+Shift+- · Ctrl+Shift+0, window.zoomWindow)은 앱 전용(skipShell — 터미널 포커스 중에도 동작) — 웹은 같은 키가 브라우저 줌이라 미등록 (ticket convenience-features). 'View: Toggle Vim Mode'(vim.toggle, 키 없음 — nvim.toggleVimMode) 는 vimAvailable 일 때만 (mock 은 relay 가 없다)
+  role: 내장 커맨드 전부 등록 (저장·분할·뷰 전환·터미널 등 — 터미널은 편집기 탭: Ctrl+` 는 누를 때마다 새 터미널 탭(createTerminal, activeSessionEmpty 가드). 하단 패널 토글(Ctrl+J)·Ctrl+Shift+` 는 없다). 활성 탭 경로를 hex 뷰어로 여는 'Hex Editor: Open Active File in Hex Editor', .html·프리뷰 활성 탭의 'HTML: Toggle Preview'(Ctrl+Shift+V, toggleHtmlPreview — 제자리 전환), 'View: Toggle Word Wrap'(Alt+Z, toggleWordWrap), 'Help: About'(version.showAbout — 버전·커밋·와이어·데몬 경로 다이얼로그). '폴더 열기' Ctrl+O 는 모든 환경에서 경로 입력 퀵인풋을 연다 (sessionsEnabled 에서 등록, mock 미등록). 앱(inApp)은 OS 다이얼로그를 Ctrl+Shift+O(host.openFolderDialog — 빈 탭 replace 판단 포함)로 병행 제공한다 — web-folder-open.md (Ctrl+O=경로 입력, Ctrl+Shift+O=OS 다이얼로그). 줌 키 배정(사용자 확정, VS Code 기본과 다름): 편집기 전용 줌 'View: Editor Font Zoom In/Out/Reset'(Ctrl+= · Ctrl+- · Ctrl+0, stepEditorZoom·setEditorZoom — 상태바 배율 항목과 같은 값)은 모든 환경, UI 포함 전역(웹뷰) 줌 'View: Zoom In/Out/Reset Zoom'(Ctrl+Shift+= · Ctrl+Shift+- · Ctrl+Shift+0, window.zoomWindow)은 앱 전용(skipShell — 터미널 포커스 중에도 동작) — 웹은 같은 키가 브라우저 줌이라 미등록 (ticket convenience-features). 'View: Toggle Vim Mode'(vim.toggle, 키 없음 — nvim.toggleVimMode) 는 vimAvailable 일 때만 (mock 은 relay 가 없다). 'Developer: Reload Window'(workbench.action.reloadWindow, 키 없음 — window.reloadWindow: 워크스페이스 상태 저장 뒤 웹뷰 새로고침, ticket workspace-state-restore)
 }

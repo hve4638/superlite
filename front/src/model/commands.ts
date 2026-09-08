@@ -4,7 +4,7 @@ import { closeTab, editors, reopenClosedEditor, saveActive, splitGroup, toggleGr
 import { createTerminal } from './terminal';
 import { refreshScm } from './scm';
 import { activeSessionEmpty, cycleSession, sessionsEnabled } from './sessions';
-import { inApp, zoomWindow } from './window';
+import { inApp, reloadWindow, zoomWindow } from './window';
 import { showAbout } from './version';
 import { toggleVimMode, vimAvailable } from './nvim';
 
@@ -139,6 +139,12 @@ export function setupCommands(): void {
     id: 'workbench.action.splitEditor',
     title: 'View: Split Editor',
     run: () => splitGroup(),
+  });
+
+  register({
+    id: 'workbench.action.reloadWindow',
+    title: 'Developer: Reload Window',
+    run: reloadWindow,
   });
 
   register({

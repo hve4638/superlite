@@ -142,7 +142,35 @@ struct Persisted {
     pinned: Vec<PinGroup>,
     #[serde(default)]
     zoom: i32,
+    /// 워크스페이스별 상태 (ticket workspace-state-restore) — root 마다 front 가 만든 스냅샷 JSON(탭·배치·
+    /// 펼침·커서·터미널 자리, 내용은 native 가 해석하지 않는다). 최근 저장 순(앞이 최신), 최대 WORKSPACES_MAX
+    #[serde(default)]
+    workspaces: Vec<WorkspaceEntry>,
 }
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct WorkspaceEntry {
+    root: PathBuf,
+    state: serde_json::Value,
+    /// 보조창(서브 창) 몫 — 창마다 하나, 서브 창이 set_workspace_sub_state 로 보낸다. 메인이 복원할 때
+    /// (get_workspace_state) 넘기면서 비운다 — 되살아난 서브 창이 새 label 로 다시 저장한다
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    subs: Vec<SubWorkspaceEntry>,
+}
+
+/// 서브 창 하나의 저장 — front 스냅샷 + 창 위치·크기(논리 px, 저장 시점에 native 가 읽는다)
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct SubWorkspaceEntry {
+    label: String,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    state: serde_json::Value,
+}
+
+/// 기억하는 워크스페이스 수 상한 — 넘으면 가장 오래 전에 저장한 것부터 버린다
+const WORKSPACES_MAX: usize = 64;
 
 /// 고정 그룹 — root 하나여도 그룹이다. alias 는 사용자가 붙인 제목(없으면 front 가 첫 멤버 이름으로)
 #[derive(Clone, Default, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
@@ -432,6 +460,7 @@ fn build_window(
     state: &AppState,
     label: &str,
     pos: Option<(f64, f64)>,
+    size: Option<(f64, f64)>,
 ) -> tauri::Result<tauri::WebviewWindow> {
     // 주입 스크립트는 프론트 코드 실행 전에 평가된다 (host.ts 가 값을 읽는다).
     // WHY: 숨김 기동(visible false → load 후 show)은 쓰지 않는다 — WebView2 가 숨김
@@ -446,7 +475,8 @@ fn build_window(
     let mut b = tauri::WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::App("index.html".into()))
         // 창 제목은 productName — 채널 overlay(tauri.dev.conf.json)가 "Superlite-Dev" 로 가른다
         .title(app.package_info().name.clone())
-        .inner_size(1200.0, 800.0)
+        // 크기는 기본 1200×800 — 보조창 복원(detach_tabs size)만 저장된 크기로
+        .inner_size(size.map_or(1200.0, |s| s.0), size.map_or(800.0, |s| s.1))
         // OS 창 헤더 없음 — 창 제어(닫기·최소화·최대화·드래그)는 front TitleBar 가 가진다
         .decorations(false)
         // WHY: Tauri 의 drag-drop 핸들러가 켜져 있으면 WebView2(Windows)가 HTML5 DnD
@@ -838,7 +868,7 @@ async fn detach_session(
         windows.insert(id.clone(), label.clone());
     }
     deliver_handoff(&app, &state, &label, handoff);
-    match build_window(&app, &state, &label, Some((x, y))) {
+    match build_window(&app, &state, &label, Some((x, y)), None) {
         Err(e) => {
             // 롤백 — 생기지 않은 창 소속으로 세션이 사라지지 않게 되돌린다
             {
@@ -927,6 +957,7 @@ async fn detach_tabs(
     root: String,
     x: f64,
     y: f64,
+    size: Option<(f64, f64)>,
     mut handoff: serde_json::Value,
 ) -> Result<(), String> {
     let root = parse_root(&root)?;
@@ -954,7 +985,7 @@ async fn detach_tabs(
     };
     obj.insert("toSession".into(), serde_json::Value::String(origin));
     deliver_handoff(&app, &state, &label, handoff);
-    match build_window(&app, &state, &label, Some((x, y))) {
+    match build_window(&app, &state, &label, Some((x, y)), size) {
         Err(e) => {
             // 롤백 — 생기지 않은 창의 세션·미러·핸드오프를 지운다 (front 는 실패를 받아 탭을 되돌린다)
             {
@@ -1107,6 +1138,188 @@ fn forget_recent(state: tauri::State<AppState>, root: String) {
     save_state(state.state_file.as_deref(), &p);
 }
 
+/// 워크스페이스 상태의 주인 세션인가 — 그 root 의 첫(가장 오래된) 세션만 저장·복원한다. 탭 분리
+/// (detach_tabs)로 생긴 같은 root 의 두 번째 세션은 대상이 아니다 (2026-09-08 사용자 결정 — 분리 창은
+/// 기억하지 않는다). 첫 세션이 닫히면 남은 세션이 주인이 된다. 반환은 그 root
+fn primary_root(state: &AppState, id: &str, label: &str) -> Result<PathBuf, String> {
+    owned_by(state, id, label)?;
+    let list = state.sessions.lock().unwrap();
+    let root = list
+        .iter()
+        .find(|(sid, _)| sid == id)
+        .and_then(|(_, r)| r.clone())
+        .filter(|r| !is_empty_root(Some(r)))
+        .ok_or_else(|| "빈 세션".to_string())?;
+    match list.iter().find(|(_, r)| r.as_ref() == Some(&root)) {
+        Some((sid, _)) if sid == id => Ok(root),
+        _ => Err("이 root 의 첫 세션이 아니다".into()),
+    }
+}
+
+/// 창 묶음 새로고침 (팔레트 Developer: Reload Window) — 호출 창이 속한 메인 창과 그 서브 창 전부를 네이티브
+/// reload 한다 (2026-09-08 사용자 결정: 한 창만이 아니라 묶음이 함께). 세션 레지스트리는 그대로라 같은 id 로
+/// 재-attach 하고, 메인은 자기 워크스페이스 몫·서브는 자기 서브 몫에서 탭·배치가 돌아온다 (get_workspace_state
+/// 는 살아 있는 서브가 있으면 subs 를 비우지 않는다). 서브를 먼저 — 메인이 먼저 다시 뜨며 서브를 정리하지 않게
+#[tauri::command]
+fn reload_window(app: tauri::AppHandle, window: tauri::WebviewWindow) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let (main, subs) = {
+        let groups = state.groups.lock().unwrap();
+        let main = groups.main_of(window.label()).to_string();
+        (main.clone(), groups.subs_of(&main))
+    };
+    for label in subs.iter().chain(std::iter::once(&main)) {
+        if let Some(w) = app.get_webview_window(label) {
+            w.reload().map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+/// 워크스페이스 상태 읽기 — 세션 초기 로드 뒤 front 가 한 번 부른다. 없음·주인 아님은 null.
+/// 응답은 {state, subs: [{x,y,w,h, ...스냅샷}]} — subs 는 넘기면서 비운다 (서브 창은 되살아나며 새 label
+/// 로 다시 저장하므로, 남겨 두면 다음 열기에 중복 창이 생긴다). 주인 아님은 서브 창 자신의 부팅 포함.
+/// async: 디스크 쓰기(set)와 같은 이유로 메인 스레드를 피한다 (get 은 짧지만 짝을 맞춘다)
+#[tauri::command]
+async fn get_workspace_state(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<Option<serde_json::Value>, String> {
+    // 주인이 아니면 오류가 아니라 없음 — front 는 조용히 복원을 건너뛴다
+    let Ok(root) = primary_root(&state, &id, window.label()) else {
+        return Ok(None);
+    };
+    // 살아 있는 서브 창이 있으면(메인 창 새로고침) 서브 몫은 그 창들의 것 — 넘기지도 비우지도 않는다
+    let live_subs = {
+        let groups = state.groups.lock().unwrap();
+        !groups.subs_of(groups.main_of(window.label())).is_empty()
+    };
+    let mut p = state.persisted.lock().unwrap();
+    let Some(w) = p.workspaces.iter_mut().find(|w| w.root == root) else {
+        return Ok(None);
+    };
+    let subs: Vec<serde_json::Value> = if live_subs { Vec::new() } else { std::mem::take(&mut w.subs) }
+        .into_iter()
+        .map(|s| {
+            let mut v = s.state;
+            if let Some(o) = v.as_object_mut() {
+                o.insert("x".into(), s.x.into());
+                o.insert("y".into(), s.y.into());
+                o.insert("w".into(), s.w.into());
+                o.insert("h".into(), s.h.into());
+            }
+            v
+        })
+        .collect();
+    let out = serde_json::json!({ "state": w.state.clone(), "subs": subs });
+    if !subs_was_empty(&out) {
+        save_state(state.state_file.as_deref(), &p);
+    }
+    Ok(Some(out))
+}
+
+fn subs_was_empty(out: &serde_json::Value) -> bool {
+    out.get("subs").and_then(|s| s.as_array()).is_none_or(|a| a.is_empty())
+}
+
+/// 워크스페이스 상태 저장 — front 가 변경 디바운스·닫기 시점에 통째로 보낸다 (root 는 세션 id 로 안다).
+/// async: 변경마다 state.json 을 쓰므로 메인(UI) 스레드에서 디스크를 기다리지 않는다
+#[tauri::command]
+async fn set_workspace_state(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    id: String,
+    snapshot: serde_json::Value,
+) -> Result<(), String> {
+    let root = primary_root(&state, &id, window.label())?;
+    let mut p = state.persisted.lock().unwrap();
+    // 서브 창 몫은 메인 저장과 무관하게 유지 — 앞으로 당기며 state 만 바꾼다
+    let subs = p.workspaces.iter().position(|w| w.root == root).map(|i| p.workspaces.remove(i).subs).unwrap_or_default();
+    p.workspaces.insert(0, WorkspaceEntry { root, state: snapshot, subs });
+    p.workspaces.truncate(WORKSPACES_MAX);
+    save_state(state.state_file.as_deref(), &p);
+    Ok(())
+}
+
+/// 서브 창이 자기 몫을 읽는다 (서브 창 새로고침 — 탭은 front 에만 있어 다시 그리려면 저장본이 필요하다).
+/// 창 label 로 찾는다 — 새로 만든 서브 창(새 label)은 없음(null)이고 핸드오프가 채운다. 비우지 않는다
+#[tauri::command]
+async fn get_workspace_sub_state(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<Option<serde_json::Value>, String> {
+    let label = window.label().to_string();
+    owned_by(&state, &id, &label)?;
+    let (main, origin) = {
+        let groups = state.groups.lock().unwrap();
+        let (Some(main), Some(origin)) = (groups.subs.get(&label).cloned(), groups.mirrors.get(&id).cloned()) else {
+            return Ok(None);
+        };
+        (main, origin)
+    };
+    let Ok(root) = primary_root(&state, &origin, &main) else {
+        return Ok(None);
+    };
+    let p = state.persisted.lock().unwrap();
+    Ok(p.workspaces
+        .iter()
+        .find(|w| w.root == root)
+        .and_then(|w| w.subs.iter().find(|s| s.label == label))
+        .map(|s| s.state.clone()))
+}
+
+/// 보조창(서브 창)의 워크스페이스 몫 저장 — 서브 창이 자기 미러 세션 id 로 부른다. native 가 창 위치·크기
+/// (논리 px)를 읽어 붙이고 그 root 의 subs 에 label 로 upsert 한다. snapshot null 은 잊기(서브 창 X·마지막 탭
+/// 이탈). 원본 세션이 주인(primary_root)이어야 한다
+#[tauri::command]
+async fn set_workspace_sub_state(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, AppState>,
+    id: String,
+    snapshot: Option<serde_json::Value>,
+) -> Result<(), String> {
+    let label = window.label().to_string();
+    owned_by(&state, &id, &label)?;
+    let (main, origin) = {
+        let groups = state.groups.lock().unwrap();
+        let Some(main) = groups.subs.get(&label).cloned() else {
+            return Err("서브 창이 아니다".into());
+        };
+        let Some(origin) = groups.mirrors.get(&id).cloned() else {
+            return Err("미러 세션이 아니다".into());
+        };
+        (main, origin)
+    };
+    let root = primary_root(&state, &origin, &main)?;
+    let geom = snapshot.as_ref().map(|_| {
+        let scale = window.scale_factor().unwrap_or(1.0);
+        let pos = window.outer_position().map(|p| p.to_logical::<f64>(scale)).unwrap_or(tauri::LogicalPosition::new(0.0, 0.0));
+        let size = window.inner_size().map(|s| s.to_logical::<f64>(scale)).unwrap_or(tauri::LogicalSize::new(1200.0, 800.0));
+        (pos.x, pos.y, size.width, size.height)
+    });
+    let mut p = state.persisted.lock().unwrap();
+    let i = match p.workspaces.iter().position(|w| w.root == root) {
+        Some(i) => i,
+        None => {
+            if snapshot.is_none() {
+                return Ok(());
+            }
+            p.workspaces.insert(0, WorkspaceEntry { root, state: serde_json::Value::Null, subs: Vec::new() });
+            p.workspaces.truncate(WORKSPACES_MAX);
+            0
+        }
+    };
+    let subs = &mut p.workspaces[i].subs;
+    subs.retain(|s| s.label != label);
+    if let (Some(st), Some((x, y, w, h))) = (snapshot, geom) {
+        subs.push(SubWorkspaceEntry { label, x, y, w, h, state: st });
+    }
+    save_state(state.state_file.as_deref(), &p);
+    Ok(())
+}
+
 /// 고정 그룹 목록 통째로 교체 — pin·unpin·순서·그룹 간 이동·별칭을 front 가 계산해 결과 목록을
 /// 보낸다 (op 를 늘리는 대신 단일 set — 검증은 normalize_pinned). 고정된 root 는 MRU 에서 뺀다
 #[tauri::command]
@@ -1231,7 +1444,7 @@ fn open_group_in(app: &tauri::AppHandle, state: &AppState, from: &str, roots: &[
         (label, added)
     };
     if label != from {
-        if let Err(e) = build_window(app, state, &label, None) {
+        if let Err(e) = build_window(app, state, &label, None, None) {
             // 롤백 — 생기지 않은 창 소속으로 세션이 남지 않게
             let mut list = state.sessions.lock().unwrap();
             let mut windows = state.windows.lock().unwrap();
@@ -1518,6 +1731,11 @@ fn main() {
             open_group,
             open_groups,
             set_zoom,
+            get_workspace_state,
+            set_workspace_state,
+            set_workspace_sub_state,
+            get_workspace_sub_state,
+            reload_window,
             pick_save_target,
             local_write,
             local_mkdir
@@ -1585,7 +1803,7 @@ fn main() {
                     push_session(&mut list, &mut windows, MAIN_WINDOW, None);
                 }
             }
-            build_window(app.handle(), &state, MAIN_WINDOW, None)?;
+            build_window(app.handle(), &state, MAIN_WINDOW, None, None)?;
             Ok(())
         })
         .run(tauri::generate_context!())

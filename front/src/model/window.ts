@@ -1,5 +1,7 @@
 import { reactive } from '@vue/reactivity';
 import { tauri } from './tauri';
+import { flushAllWorkspaces } from './workspaceState';
+import { notify } from './notifications';
 
 // Tauri 창 제어 (앱 전용) — withGlobalTauri 전역으로 현재 창을 다룬다.
 // 브라우저에서는 inApp=false 이고 TitleBar 가 창 제어 버튼 자체를 숨긴다.
@@ -44,8 +46,9 @@ export function toggleMaximizeWindow(): void {
   void current?.toggleMaximize();
 }
 
+/** 창 닫기 (타이틀바 ×) — 이 창의 워크스페이스 상태를 먼저 저장한다 (ticket workspace-state-restore) */
 export function closeWindow(): void {
-  void current?.close();
+  void flushAllWorkspaces().then(() => current?.close());
 }
 
 /** 창 파괴 — onCloseRequested 를 거치지 않는다. 서브 창이 탭을 메인에 되돌린 뒤 스스로 닫을 때 */
@@ -59,6 +62,26 @@ export function onWindowCloseRequested(handler: () => void): void {
   void current?.onCloseRequested((e) => {
     e.preventDefault();
     handler();
+  });
+}
+
+/** 창 새로고침 (팔레트 Developer: Reload Window) — 워크스페이스 상태를 먼저 저장하고 다시 연다. 앱은 native
+ *  reload_window 가 이 창이 속한 묶음(메인 + 서브 창 전부)을 함께 새로고침한다 — 세션이 native 에 남아 있어
+ *  같은 id 로 재-attach 하고, 탭·배치는 저장본에서 복원된다 (메인은 자기 몫, 서브 창은 자기 서브 몫 — 서브의
+ *  마지막 1초 이내 변경은 디바운스 저장 전이라 빠질 수 있다). 웹은 브라우저 새로고침과 같다 */
+export function reloadWindow(): void {
+  // 저장이 어떤 이유로든 끝나지 않아도 새로고침은 한다 (1.5초 상한). 앱은 native 의 webview reload —
+  // WebView2 에서 서브 창의 location.reload 가 먹지 않는 사례가 있어(2026-09-08 Windows) 네이티브 경로를 쓴다
+  const flushed = Promise.race([flushAllWorkspaces(), new Promise((r) => setTimeout(r, 1500))]);
+  void flushed.then(() => {
+    if (!tauri) {
+      location.reload();
+      return;
+    }
+    void tauri.core.invoke('reload_window').catch((e: unknown) => {
+      notify('error', `Reload failed: ${String(e)} — falling back to location.reload`);
+      location.reload();
+    });
   });
 }
 

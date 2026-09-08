@@ -11,6 +11,7 @@ import { installKeybindings, setupCommands } from './model/commands';
 import { initOsDrop } from './model/osdrop';
 import { initRecents } from './model/recents';
 import { hasAnyDirty, initSessions } from './model/sessions';
+import { flushAllWorkspaces } from './model/workspaceState';
 
 setupCommands();
 installKeybindings(window);
@@ -22,6 +23,8 @@ initRecents();
 //      탭이 닫히기 직전의 확인 대화상자가 마지막 안전망이다. 배경 세션 탭의 dirty 도 지킨다
 window.addEventListener('beforeunload', (e) => {
   if (hasAnyDirty()) e.preventDefault();
+  // 워크스페이스 상태 마지막 저장 — 웹(localStorage)은 동기로 끝나고, 앱은 닿는 데까지 (디바운스 보완)
+  void flushAllWorkspaces();
 });
 
 // WHY: 초기 로드(트리·git status)를 기다리지 않고 바로 마운트한다 — 큰 워크스페이스는

@@ -1,4 +1,6 @@
 import { tauri } from './tauri'
+import { flushAllWorkspaces } from './workspaceState'
+import { notify } from './notifications'
 role: Tauri 창 제어 (앱 전용) — withGlobalTauri 전역(__TAURI__)으로 현재 창의 최소화·최대화 토글·닫기·줌을 노출하고, resize 이벤트로 최대화 상태를 추적한다 (최대화/복원 아이콘 전환용). windowLabel 은 이 창의 Tauri label(native 주입 __SUPERLITE_WINDOW__) — 창 간 탭 이동에서 출처·대상 주소. 브라우저에서는 inApp=false·windowLabel null 이고 TitleBar 가 창 제어 버튼 자체를 숨긴다. ownerWindow 는 서브 창(에디터·터미널 탭 분리로 생긴 창)의 소속 메인 label(native 주입 __SUPERLITE_OWNER__), subWindow 는 그 유무 — 메인 창(첫 창·세션 탭 분리 창)·웹·mock 은 null (decision/workspace-session-tabs.md 2026-09-08 개정). bootActiveSession 은 부팅 시 묶음의 활성 세션(__SUPERLITE_ACTIVE__). destroyWindow 는 onCloseRequested 를 거치지 않는 파괴, onWindowCloseRequested 는 X·OS 닫기 요청을 막고 핸들러를 부른다 — 서브 창이 탭을 메인에 되돌린 뒤 닫는 경로
 
 export val inApp
@@ -22,6 +24,9 @@ export fn destroyWindow() {
 export fn onWindowCloseRequested(handler) {
   role: 닫기 요청(X·Alt+F4) 가로채기 — preventDefault 후 handler. 웹은 무동작
 }
+export fn reloadWindow() {
+  role: 창 새로고침 (팔레트 Developer: Reload Window, ticket workspace-state-restore) — 워크스페이스 상태를 저장(flushAllWorkspaces, 1.5초 상한)한 뒤 앱은 native reload_window(이 창이 속한 묶음 — 메인 + 서브 창 전부 — 를 네이티브 reload; 서브의 마지막 1초 이내 변경은 디바운스 전이라 빠질 수 있다), 웹은 location.reload. 앱은 세션이 native 에 남아 같은 id 로 재-attach 하고 탭·배치는 저장본에서 복원된다 (메인은 자기 몫, 서브 창은 자기 서브 몫 — get_workspace_sub_state). 웹은 브라우저 새로고침과 같다
+}
 export fn closeWindow() {
-  role: 창 닫기 — 이 창의 X. native 는 그 창의 세션만 정리하고 다른 창은 두며, 마지막 창이면 앱이 종료된다 (app/src/main 참조)
+  role: 창 닫기 — 이 창의 X. 먼저 이 창의 워크스페이스 상태를 저장한다(flushAllWorkspaces, ticket workspace-state-restore). native 는 그 창의 세션만 정리하고 다른 창은 두며, 마지막 창이면 앱이 종료된다 (app/src/main 참조)
 }

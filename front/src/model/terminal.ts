@@ -71,7 +71,7 @@ export function createTerminals(backend: ThinBackend, editorsM: ReturnType<typeo
 
   /** 사이드바 목록의 세션에 붙는다 — 이 창에 이미 열려 있으면 그 탭을 앞으로 (같은 세션을 두 탭으로
    *  보려면 새 탭 옵션 — 컨텍스트 메뉴). tmux 가 다중 attach 를 지원하므로 다른 창·PC 와 동시에 본다 */
-  function attachTerminal(info: TerminalInfo, opts: { newTab?: boolean } = {}): TerminalInstance | null {
+  function attachTerminal(info: TerminalInfo, opts: { newTab?: boolean; at?: TerminalTabAt } = {}): TerminalInstance | null {
     if (!opts.newTab) {
       const open = terminals.list.find((t) => t.tmux?.id === info.id);
       if (open) {
@@ -79,7 +79,7 @@ export function createTerminals(backend: ThinBackend, editorsM: ReturnType<typeo
         return open;
       }
     }
-    return register(backend.createTerminal(80, 24, info.id), info.name);
+    return register(backend.createTerminal(80, 24, info.id), info.name, undefined, opts.at);
   }
 
   /** 목록 등록 + 탭 열기 — 생성과 인수(adopt)가 공유한다 */

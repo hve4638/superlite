@@ -34,14 +34,29 @@ watch(() => [editorView.wordWrap, editorView.zoom], () => {
   diffEditor?.updateOptions(wrapOpt());
 });
 
+/** 편집기에 올라 있는 파일 모델의 path — file 스킴만 (삭제 파일 탭의 git-original 모델은 null) */
+function modelPath(ed: monaco.editor.ICodeEditor): string | null {
+  const uri = ed.getModel()?.uri;
+  return uri && uri.scheme === 'file' ? uri.path.slice(1) : null;
+}
+
+/** 커서·스크롤을 파일별 뷰 상태에 적는다 — 탭 전환·세션 전환·워크스페이스 저장이 여기서 읽는다 */
+function noteViewState(ed: monaco.editor.IStandaloneCodeEditor) {
+  const path = modelPath(ed);
+  if (path !== null) editors.viewStates.set(path, ed.saveViewState());
+}
+
 function ensureCodeEditor(): monaco.editor.IStandaloneCodeEditor {
   if (!codeEditor) {
     codeEditor = monaco.editor.create(codeHost.value!, { ...EDITOR_OPTIONS, ...wrapOpt(), model: null });
+    const ed = codeEditor;
     codeEditor.onDidChangeCursorPosition((e) => {
       if (editors.activeGroupId === props.group.id) {
         editors.cursor = { line: e.position.lineNumber, col: e.position.column };
       }
+      noteViewState(ed);
     });
+    codeEditor.onDidScrollChange(() => noteViewState(ed));
     // WHY: monaco 는 F1 을 자체 커맨드 팔레트에 바인딩한다 — 워크벤치 팔레트로 대체
     codeEditor.addCommand(monaco.KeyCode.F1, () => openQuickInput('commands'));
     unbindVim = bindVim(() => codeEditor);
@@ -108,7 +123,12 @@ async function sync() {
     const model = modelFor(tab.path);
     model.updateOptions({ tabSize: indentOf(tab.path) });
     ed.updateOptions({ readOnly: false }); // 삭제 파일 탭에서 돌아오는 경우
-    if (ed.getModel() !== model) ed.setModel(model);
+    if (ed.getModel() !== model) {
+      ed.setModel(model);
+      // 저장해 둔 커서·스크롤로 (ticket workspace-state-restore) — 없으면 monaco 기본(맨 위)
+      const vs = editors.viewStates.get(tab.path) as monaco.editor.ICodeEditorViewState | undefined;
+      if (vs) ed.restoreViewState(vs);
+    }
     consumeReveal(ed, tab.path);
     if (editors.activeGroupId === props.group.id) {
       const pos = ed.getPosition();

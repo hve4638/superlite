@@ -46,12 +46,13 @@ export function groupTitle(g: PinGroup): string {
 // ---- 웹 저장소 (native Persisted 와 같은 모양)
 
 type WebGroup = { alias?: string; roots: string[] };
-type WebState = { version: number; recents: string[]; pinned: WebGroup[] };
+/** workspaces 는 workspaceState.ts 가 같은 키 안에 두는 워크스페이스별 상태 — 여기서는 통과만 시킨다 */
+type WebState = { version: number; recents: string[]; pinned: WebGroup[]; workspaces?: unknown };
 
 function loadWeb(): WebState {
   try {
     const p = JSON.parse(localStorage.getItem(WEB_KEY) ?? '') as WebState;
-    if (p.version === 2) return { version: 2, recents: p.recents ?? [], pinned: p.pinned ?? [] };
+    if (p.version === 2) return { version: 2, recents: p.recents ?? [], pinned: p.pinned ?? [], workspaces: p.workspaces };
   } catch {
     // 없음·파싱 실패 — 빈 상태
   }

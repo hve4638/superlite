@@ -1,4 +1,4 @@
-import { reactive } from '@vue/reactivity';
+import { markRaw, reactive } from '@vue/reactivity';
 import type { FileContent, ThinBackend, Unopenable, WriteResult } from '../backend/types';
 import { ctx, viewOf } from './ctx';
 import { errText, notify } from './notifications';
@@ -353,7 +353,15 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
      *  800ms 지연 progress). 파일 탭은 readFile, hex 탭은 stat·청크 읽기가 대상. 창 이동
      *  스냅샷에는 싣지 않는다 (진행 중 요청은 창을 따라가지 않는다) */
     slowTabs: new Set<string>(),
+    /** 워크스페이스 상태 복원(hydrate)으로 문서를 읽는 중인 탭 id — 탭마다 진행선 (지연 없음, 탭 단위).
+     *  slowTabs 와 달리 복원 전용 — 사용자가 연 탭의 800ms 규칙은 그대로 */
+    loadingTabs: new Set<string>(),
+    /** 파일별 monaco 뷰 상태(커서·스크롤 — ICodeEditorViewState JSON) — path 키. MonacoHost 가 커서·스크롤
+     *  변화마다 적고 모델을 끼운 뒤 되돌린다. 워크스페이스 상태 저장에 실린다 (ticket workspace-state-restore).
+     *  markRaw — 반응형이면 커서 이동마다 저장 effect 가 깨어난다 */
+    viewStates: markRaw(new Map<string, unknown>()),
   });
+  const viewStates = editors.viewStates;
 
   /** 탭 id 별 진행 중 로드 수 — 마지막 로드가 끝나야 slowTabs 에서 내린다 (hex 청크는 겹친다) */
   const loadCount = new Map<string, number>();
@@ -985,7 +993,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
    *  창 이동 정리(takeTabForHandoff)가 같은 목록을 순회한다. 뷰 상태를 가진 뷰어가 늘면 여기에만
    *  추가한다. docs 는 restore 가 재할당하므로 매번 읽는다 */
   function pathMaps(): Map<string, unknown>[] {
-    return [editors.docs, editors.imageView, editors.hex, editors.folderView];
+    return [editors.docs, editors.imageView, editors.hex, editors.folderView, viewStates];
   }
 
   function remapPaths(from: string, to: string): void {
@@ -1223,6 +1231,43 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     for (const id of emptied) collapseIfEmpty(id);
   }
 
+  /** 워크스페이스 상태 복원의 문서 채우기 (ticket workspace-state-restore) — restore 로 세운 껍데기 탭
+   *  중 문서가 필요한 것(file·preview·삭제 아닌 diff)을 활성 탭부터 읽는다. 탭마다 loadingTabs 로 진행선을
+   *  올리고, 읽기 실패(사라진 파일 등)한 탭은 걷어낸다. 반환은 걷어낸 탭 이름 — 호출측이 알림 한 줄로 합친다.
+   *  hex·folder 탭은 뷰가 스스로 읽고, 이미 문서가 있는 경로는 건너뛴다 */
+  async function hydrate(): Promise<string[]> {
+    const order: { groupId: number; tab: Tab }[] = [];
+    const push = (g: EditorGroup, t: Tab) => {
+      if (t.kind !== 'file' && t.kind !== 'preview' && !(t.kind === 'diff' && !t.deleted)) return;
+      if (editors.docs.has(t.path)) return;
+      if (!order.some((o) => o.tab.path === t.path)) order.push({ groupId: g.id, tab: t });
+    };
+    const act = activeGroup();
+    for (const g of [act, ...editors.groups.filter((g) => g !== act)]) {
+      const a = g.tabs.find((t) => t.id === g.activeTabId);
+      if (a) push(g, a);
+    }
+    for (const g of editors.groups) for (const t of g.tabs) push(g, t);
+    const failed: string[] = [];
+    // 순차 읽기 — 활성 탭이 먼저 채워지고, 원격에서 탭 수만큼 동시 요청을 쏟지 않는다
+    for (const { tab } of order) {
+      const ids = editors.groups.flatMap((g) => g.tabs.filter((t) => t.path === tab.path).map((t) => t.id));
+      for (const id of ids) editors.loadingTabs.add(id);
+      try {
+        await ensureDoc(tab.path);
+      } catch {
+        failed.push(baseName(tab.path));
+        for (const g of [...editors.groups]) {
+          for (const t of [...g.tabs]) if (t.path === tab.path && takeTab(g.id, t.id)) collapseIfEmpty(g.id);
+        }
+        viewStates.delete(tab.path);
+      } finally {
+        for (const id of ids) editors.loadingTabs.delete(id);
+      }
+    }
+    return failed;
+  }
+
   /** 탭 하나를 다른 창으로 보내기 위해 뗀다 — 닫기 확인·최근 닫은 탭 이력을 거치지 않는다
    *  (닫는 게 아니라 옮기는 것). 같은 문서를 보는 마지막 탭이면 버퍼·monaco 모델도 여기서
    *  버린다 (다음 열기는 디스크에서). 빠진 그룹은 접는다 */
@@ -1283,7 +1328,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     reopenClosedEditor, moveTabToGroup, moveTabSplit,
     splitGroup, closeEmptyGroup, toggleGroupLock, updateContent, setOrphaned, remapPaths, closePathTabs,
     reloadDocFromDisk, hasDirtyDocs, saveActive, overwriteConflict, revertConflict, indentOf,
-    snapshot, restore, takeTabForHandoff, acceptTab,
+    snapshot, restore, hydrate, takeTabForHandoff, acceptTab,
     openTerminalTab, closeTerminalTabs, setTerminalCloser, renameTerminalTab, focusTerminalTab,
   };
 }

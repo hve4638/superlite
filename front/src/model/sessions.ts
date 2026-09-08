@@ -7,6 +7,7 @@ import { createSessionCtx, type SessionCtx, type SessionSnapshot } from './sessi
 import type { TerminalInstance, TerminalSnapshot } from './terminal';
 import { destroyWindow, onWindowCloseRequested, ownerWindow, subWindow, windowLabel } from './window';
 import { tauri } from './tauri';
+import { applyWorkspaceState, flushWorkspace, forgetWorkspace, restoreSubWorkspace, restoreWorkspace, trackWorkspace, untrackWorkspace, type WorkspaceState } from './workspaceState';
 
 /**
  * 워크스페이스 세션 탭 관리자 — 한 창(페이지) 안에서 세션 컨텍스트 여럿을 들고
@@ -38,6 +39,9 @@ import { tauri } from './tauri';
  *  데몬 adoptTerminal, toSession 은 detach_tabs 때 native 가 채운다) */
 export type Handoff =
   | { kind: 'session'; id: string; name: string; renamed?: boolean; state: SessionSnapshot }
+  /** 보조창 복원 (ticket workspace-state-restore) — 메인이 detach_tabs 로 서브 창을 다시 만들며 싣는 워크스페이스
+   *  스냅샷. toSession 은 native 가 채운다(원본 세션 id) — 서브는 그 미러에 applyWorkspaceState 로 적용한다 */
+  | { kind: 'restore'; fromSession: string; toSession?: string; state: WorkspaceState }
   | {
       kind: 'tabs';
       fromSession: string;
@@ -177,6 +181,24 @@ function addLocal(tab: SessionTab, backend?: ThinBackend): SessionCtx {
     if (t && ctx.workbench.workbench.workspaceName && !isRemoteEmpty(t.root))
       t.name = withHost(ctx.workbench.workbench.workspaceName, t.root ?? '');
     if (t && !t.root && ctx.workbench.workbench.rootPath) t.root = ctx.workbench.workbench.rootPath;
+    // 워크스페이스 상태 복원 → 추적 (ticket workspace-state-restore). 빈 세션·원격 빈 세션은 대상이 아니다.
+    // 서브 창은 복원하지 않고(메인이 'restore' 핸드오프로 채운다) 미러 세션만 자기 몫을 저장한다
+    const root = t?.root;
+    if (root && !isRemoteEmpty(root) && ctxs.get(tab.id) === ctx) {
+      if (subWindow) {
+        // 서브 창 새로고침이면 자기 몫(같은 label)이 남아 있다 — 그것으로 되살린 뒤 추적
+        const mirror = tab.mirror;
+        if (mirror) {
+          void restoreSubWorkspace(env.kind, mirror, ctx).finally(() => {
+            if (ctxs.get(tab.id) === ctx) trackWorkspace(env.kind, tab.id, root, ctx, mirror);
+          });
+        }
+      } else {
+        void restoreWorkspace(env.kind, tab.id, root, ctx).finally(() => {
+          if (ctxs.get(tab.id) === ctx) trackWorkspace(env.kind, tab.id, root, ctx);
+        });
+      }
+    }
   }, () => {
     // 초기 로드 실패(원격 ssh 접속 실패 등) — 사유는 connection.error 로 탐색기에 보인다
     loading.delete(tab.id);
@@ -197,6 +219,7 @@ function removeLocal(id: string): void {
   }
   ctxs.delete(id);
   loading.delete(id);
+  untrackWorkspace(id);
   if (idx !== -1) sessions.list.splice(idx, 1);
   (ctx.backend as { dispose?: () => void }).dispose?.();
 }
@@ -234,12 +257,21 @@ export function activateSession(id: string, sync = true): void {
  *  대체한다 (2026-09-05, ticket convenience-features). */
 export function closeSession(id: string): void {
   if (env.kind === 'app') {
-    // 서브 창들이 가진 이 세션의 탭을 먼저 거둬들인다 — 함께 닫힌다 (2026-09-08 개정).
+    // 워크스페이스 상태를 먼저 저장한다 (await — native 가 레지스트리에서 빼기 전에). 서브 창 탭을 거둬들이기
+    // 전이라 메인 몫만 실리고, 서브 창 몫은 각 서브가 저장해 둔 것이 남는다 — 다음 열기에 서브 창이 되살아난다.
+    // 그 뒤 서브 창들의 이 세션 탭을 거둬들인다 — 함께 닫힌다 (2026-09-08 개정).
     // native 가 레지스트리 제거·지속 저장 후 sessions-changed 로 알린다 (reconcile 이 정리).
     // 마지막 탭이면 native 가 이 창을 닫는다 (방송 없음 — 페이지가 통째로 사라진다)
-    void recallSessionTabs(id).then(() => tauri?.core.invoke('close_session', { id }));
+    void flushWorkspace(id)
+      .then(() => recallSessionTabs(id))
+      .then(() => tauri?.core.invoke('close_session', { id }));
     return;
   }
+  // 웹: 워크스페이스 상태를 먼저 저장한다 (동기)
+  void flushWorkspace(id).then(() => closeSessionNow(id));
+}
+
+function closeSessionNow(id: string): void {
   // 웹: 마지막 탭을 닫으면 빈 세션을 먼저 세워 활성으로 삼은 뒤 제거한다
   // (activeCtx 가 폐기된 컨텍스트를 가리키는 순간이 없게)
   if (sessions.list.length <= 1) {
@@ -465,6 +497,9 @@ export function initSessions(): void {
 /** 서브 창의 수명 — X·OS 닫기는 탭을 메인에 되돌린 뒤 닫고, 모든 세션의 작업 탭이 0 이 되면
  *  스스로 닫힌다 (세션 하나가 비는 것은 아무 일도 아니다). 부팅 직후 핸드오프가 오기 전의
  *  0 은 세지 않는다 (everHadTabs) */
+/** 서브 창이 탭을 내보내는 중(X·회수) — 탭 0 자동 파괴가 그 흐름을 가로채지 않게 */
+let subLeaving = false;
+
 function initSubWindow(): void {
   onWindowCloseRequested(() => void closeSubWindow());
   let everHadTabs = false;
@@ -474,14 +509,21 @@ function initSubWindow(): void {
       0,
     );
     if (total > 0) everHadTabs = true;
-    else if (everHadTabs) destroyWindow();
+    // 마지막 탭이 메인으로 돌아갔다 — 이 서브 창의 워크스페이스 저장을 지우고 닫는다
+    else if (everHadTabs && !subLeaving) void forgetSubWorkspaces().then(destroyWindow);
   });
 }
 
+function forgetSubWorkspaces(): Promise<unknown> {
+  return Promise.allSettled(sessions.list.filter((t) => t.mirror).map((t) => forgetWorkspace(t.id)));
+}
+
 /** 서브 창 X — 가진 탭을 전부 소속 메인 창의 해당 세션에 되돌린 뒤 창을 파괴한다. 메인이 이미
- *  없으면(forward 거절) 그대로 닫는다 */
+ *  없으면(forward 거절) 그대로 닫는다. 이 서브의 워크스페이스 저장은 지운다 (사용자가 닫은 창은 되살리지 않는다) */
 async function closeSubWindow(): Promise<void> {
   if (ownerWindow === null) return;
+  subLeaving = true;
+  await forgetSubWorkspaces();
   for (const t of sessions.list) {
     if (t.mirror) await returnSessionTabs(t.id, ownerWindow);
   }
@@ -502,8 +544,18 @@ async function returnSessionTabs(key: string, toWindow: string): Promise<void> {
 
 /** 서브 창이 받는 회수 요청 — 그 세션의 탭을 요청한 메인에 되돌리고 응답한다 (탭이 없어도 응답) */
 async function onSessionRecall(p: { id: string; token: string; toWindow: string }): Promise<void> {
+  // 저장은 남긴다(untrack) — 세션이 닫히는 것이라 다음 열기에 이 서브 창이 되살아나야 한다.
+  // 탭 0 자동 파괴를 미뤄 응답(session-recalled)이 먼저 나가게 한다 — 파괴가 앞서면 메인이 1.5초 타임아웃을 기다린다
+  subLeaving = true;
+  untrackWorkspace(p.id);
   await returnSessionTabs(p.id, p.toWindow);
-  void invoke('forward', { toWindow: p.toWindow, event: 'session-recalled', payload: { token: p.token } });
+  await invoke('forward', { toWindow: p.toWindow, event: 'session-recalled', payload: { token: p.token } });
+  subLeaving = false;
+  const total = sessions.list.reduce(
+    (n, t) => n + (ctxs.get(t.id)?.editors.editors.groups.reduce((m, g) => m + g.tabs.length, 0) ?? 0),
+    0,
+  );
+  if (total === 0) destroyWindow();
 }
 
 const recallWaiters = new Map<string, () => void>();
@@ -716,19 +768,27 @@ function handoffTarget(h: Handoff): string {
   return h.kind === 'session' ? h.id : h.toSession ?? sessions.activeId;
 }
 
+/** 서브 창의 자리표시 세션(미러 없음)에 온 핸드오프인가 — 미러를 만들어 달라고 하고 미뤄야 한다 */
+function needsMirror(h: Handoff, tab: SessionTab | undefined): boolean {
+  return subWindow && (h.kind === 'tabs' || h.kind === 'restore') && tab !== undefined && !tab.mirror;
+}
+
 /** 도착한 핸드오프를 세션에 적용 — 세션 통째면 그 세션(같은 id, 이미 재-attach 중)에 덮어쓰고,
  *  탭 일부면 toSession(없으면 활성)에 붙인다. 대상 컨텍스트가 아직 없으면 다음 reconcile 뒤로 미룬다 */
 function applyHandoff(h: Handoff): void {
   const sid = handoffTarget(h);
   const ctx = ctxs.get(sid);
   const tab = sessions.list.find((t) => t.id === sid);
-  if (!ctx || (subWindow && h.kind === 'tabs' && tab && !tab.mirror)) {
+  if (!ctx || needsMirror(h, tab)) {
     // 서브 창의 자리표시 세션에 탭이 왔다 — 미러를 만들어 달라고 하고, 컨텍스트가 교체되면(reconcile) 적용
-    if (subWindow && tab && !tab.mirror && h.kind === 'tabs') void invoke('ensure_mirror', { origin: sid });
+    if (needsMirror(h, tab)) void invoke('ensure_mirror', { origin: sid });
     pendingHandoffs.push(h);
     return;
   }
-  if (h.kind === 'session') {
+  if (h.kind === 'restore') {
+    // 보조창 복원 — 저장된 탭·배치를 이 미러 세션에 세우고 문서·터미널을 채운다
+    void applyWorkspaceState(ctx, h.state);
+  } else if (h.kind === 'session') {
     ctx.restore(h.state);
     const t = sessions.list.find((x) => x.id === h.id);
     if (t && h.name) {

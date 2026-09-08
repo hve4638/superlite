@@ -266,6 +266,21 @@ export function createFiles(backend: ThinBackend) {
     if (findNode(path)) files.selectedPath = path;
   }
 
+  /** 펼침 집합 복원 (ticket workspace-state-restore) — 얕은 것부터 차례로 자식을 읽어 펼친다. 트리에서
+   *  사라진 경로는 건너뛴다 (조상이 없으면 그 아래도 자연히 닿지 않는다) */
+  async function expandPaths(paths: string[]): Promise<void> {
+    for (const p of [...paths].sort((a, b) => a.split('/').length - b.split('/').length)) {
+      const node = findNode(p);
+      if (!node || node.kind !== 'directory') continue;
+      try {
+        await loadChildren(node);
+      } catch {
+        continue;
+      }
+      files.expanded.add(p);
+    }
+  }
+
   function visibleNodes(): TreeNode[] {
     const out: TreeNode[] = [];
     const walk = (nodes: TreeNode[]) => {
@@ -280,7 +295,7 @@ export function createFiles(backend: ThinBackend) {
 
   return {
     files, initFiles, toggleDir, refreshDir, loadedDirPaths, onDirLoaded,
-    quickOpen, invalidateQuickOpen, refreshTree, collapseAll, visibleNodes, revealPath,
+    quickOpen, invalidateQuickOpen, refreshTree, collapseAll, visibleNodes, revealPath, expandPaths,
     acquireDir, releaseDir,
   };
 }
