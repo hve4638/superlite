@@ -20,22 +20,24 @@
 # 순서 주의: front 를 고쳤으면 이 스크립트로 dist 부터 다시 — dist 재빌드 없이
 # cargo 만 돌리면 옛 프론트가 exe 에 박힌다.
 #
-#   ./build.sh                빌드 (stable 채널)
-#   ./build.sh --channel dev  dev 채널 빌드 — app/tauri.dev.conf.json 을 얹고(productName
-#                             "Superlite-Dev"·identifier·exe 이름) SUPERLITE_CHANNEL=dev 로
-#                             common 을 구워(소켓·파이프·캐시·설정 폴더 이름 접미) stable 설치본과
-#                             한 PC 에 공존한다 (ticket release-channel). 산출물은
-#                             Superlite-Dev_<ver>_x64-setup.exe
+#   ./build.sh                dev 채널 빌드 (기본, 2026-09-08 사용자 결정 — 평소 빌드는 전부 dev) —
+#                             app/tauri.dev.conf.json 을 얹고(productName "Superlite-Dev"·identifier·
+#                             exe 이름) SUPERLITE_CHANNEL=dev 로 common 을 구워(소켓·파이프·캐시·
+#                             설정 폴더 이름 접미) stable 설치본과 한 PC 에 공존한다 (ticket
+#                             release-channel). 산출물은 Superlite-Dev_<ver>_x64-setup.exe
+#   ./build.sh --stable       stable 채널 빌드 — 내부 배포용. 산출물은 Superlite_<ver>_x64-setup.exe
+#   ./build.sh --channel X    다른 채널 overlay(app/tauri.X.conf.json)
 #   ./build.sh --clean        자기 출력 폴더 정리만 하고 종료 — 워크트리에서는
 #                             build/<워크트리 폴더명>/ 삭제, main 에서는 안전을 위해 아무것도 안 함
 set -eu
 cd "$(dirname "$0")"
 
-channel=
+channel=dev
 clean=false
 while [ $# -gt 0 ]; do
     case "$1" in
         --clean) clean=true ;;
+        --stable) channel= ;;
         --channel) channel=$2; shift ;;
         *) echo "알 수 없는 인자: $1" >&2; exit 2 ;;
     esac
