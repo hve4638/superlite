@@ -1,3 +1,7 @@
 /target
 .vite/
 /app/gen/
+
+# main 체크아웃 전용 세션 지침·itir 보고서 산출물
+CLAUDE.cwd.md
+itir.html

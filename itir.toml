@@ -3,6 +3,7 @@ source_root = "."
 
 [target]
 languages = ["typescript", "rust", "vue"]
+exclude = ["target/", "front/vite.config.ts"]
 
 [boundary]
 assembly = ["front/src/model/host.ts"]
