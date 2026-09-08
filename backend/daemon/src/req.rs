@@ -168,7 +168,7 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
         })),
         "readDir" => {
             let rel = p["path"].as_str().unwrap_or("");
-            // 절대 경로(와이어 v15) — 폴더 탭이 워크스페이스 밖을 탐색한다. 허용 근거는 browseDir 과
+            // 절대 경로(와이어 v18) — 폴더 탭이 워크스페이스 밖을 탐색한다. 허용 근거는 browseDir 과
             // 같다 (인증 경계는 relay). 항목 path 도 절대('/' 구분)이고 repo 표식은 달지 않는다 —
             // git RPC 는 루트 상대라 밖의 저장소를 다룰 수 없다
             let abs = Path::new(rel).is_absolute();
@@ -192,7 +192,7 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
                 let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
                 let kind = if is_dir { "directory" } else { "file" };
                 let mut item = json!({"name": name, "path": path, "kind": kind});
-                // mtime(ms)·size(파일만) — 폴더 탭 자세히 보기 열 (와이어 v15). metadata 는 이미 읽었다
+                // mtime(ms)·size(파일만) — 폴더 탭 자세히 보기 열 (와이어 v18). metadata 는 이미 읽었다
                 if let Some(m) = &meta {
                     if let Ok(t) = m.modified() {
                         if let Ok(d) = t.duration_since(std::time::UNIX_EPOCH) {
@@ -710,13 +710,44 @@ async fn run_rg(root: &Path, args: &[&str]) -> Result<String, String> {
     }
 }
 
-async fn run(root: &Path, bin: &str, args: &[&str]) -> Result<String, String> {
-    let out = tokio::process::Command::new(bin)
+/// 원격 동기화 RPC — gitFetch/gitPull/gitPush (와이어 v18). 인증 순서는 git 그대로다 (VS Code 동일,
+/// ticket scm-subrepo-credential 2026-09-07 결정): 이 머신의 credential helper(Git for Windows 의
+/// GCM, osxkeychain 등)가 먼저 답하고, 그 뒤에 덧붙인 이 실행 파일의 helper 모드(main.rs
+/// credential_helper/credential_main)가 데몬 소켓의 frontRequest("credential") 로 프론트에 물어
+/// 클라이언트 저장 자격을 받는다. 성공 store·실패 erase 도 그 통로로 간다. 터미널 프롬프트는 끈다 —
+/// PTY 가 없어 멈추기만 한다. 익명 세션(id None)은 helper 가 세션을 지목 못 해 인증이 필요하면 실패.
+/// push 는 상류 없는 브랜치를 origin 에 같은 이름으로 올린다 (push.autoSetupRemote, git 2.37+ —
+/// 구버전은 모르는 키를 무시하고 종전 "no upstream" 에러). ssh 원격은 그 머신의 키·에이전트 몫
+pub(crate) async fn git_sync(method: &str, p: &Value, root: &Path, session: Option<&str>) -> Result<Value, String> {
+    let dir = git_dir(root, p)?;
+    let args: &[&str] = match method {
+        "gitFetch" => &["fetch"],
+        "gitPull" => &["pull"],
+        _ => &["-c", "push.autoSetupRemote=true", "push"],
+    };
+    let helper = crate::credential_helper().ok_or("실행 파일 경로 없음")?;
+    let mut cmd = tokio::process::Command::new("git");
+    cmd.args(["-c", &format!("credential.helper={helper}")])
         .args(args)
-        .current_dir(root)
-        .output()
-        .await
-        .map_err(err)?;
+        .current_dir(&dir)
+        .stdin(std::process::Stdio::null())
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("SUPERLITE_SOCK", superlite_common::socket_path().as_os_str());
+    if let Some(sid) = session {
+        cmd.env("SUPERLITE_SESSION", sid);
+    }
+    run_cmd(cmd).await?;
+    Ok(Value::Null)
+}
+
+async fn run(root: &Path, bin: &str, args: &[&str]) -> Result<String, String> {
+    let mut cmd = tokio::process::Command::new(bin);
+    cmd.args(args).current_dir(root);
+    run_cmd(cmd).await
+}
+
+async fn run_cmd(mut cmd: tokio::process::Command) -> Result<String, String> {
+    let out = cmd.output().await.map_err(err)?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {

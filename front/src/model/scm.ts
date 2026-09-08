@@ -32,6 +32,8 @@ export interface ScmRepo {
   commitMessage: string;
   /** 최근 커밋 목록 (Graph pane) — head 가 바뀔 때만 다시 받는다 */
   log: GitLogItem[];
+  /** 진행 중인 원격 동기화 — 'fetch'|'pull'|'push', 없으면 ''. ScmView 가 회전 아이콘·메뉴 비활성에 쓴다 */
+  syncing: string;
 }
 
 /** 세션별 SCM 모듈 — git 상태·커밋이 세션의 backend·editors 에 묶인다 */
@@ -103,7 +105,7 @@ export function createScm(backend: ThinBackend, editorsM: ReturnType<typeof crea
   function insertRepo(path: string): ScmRepo {
     const repo: ScmRepo = {
       path, name: path.slice(path.lastIndexOf('/') + 1), branch: '', head: '', dirty: false,
-      changes: [], commitMessage: '', log: [],
+      changes: [], commitMessage: '', log: [], syncing: '',
     };
     scm.repos.push(repo);
     scm.repos.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
@@ -271,6 +273,19 @@ export function createScm(backend: ThinBackend, editorsM: ReturnType<typeof crea
     return gitOp(`checkout '${branch}'`, () => backend.gitCheckout(repo.path, branch));
   }
 
+  /** 원격 동기화 (fetch/pull/push) — 한 저장소에 하나씩만 (진행 중이면 무시). 인증 프롬프트는 데몬의
+   *  askpass 요청이 gitauth 로 오고, 대화상자는 ScmView 가 띄운다. 성공은 알림 없이 상태 재조회만 */
+  async function sync(repo: ScmRepo, kind: 'fetch' | 'pull' | 'push'): Promise<void> {
+    if (repo.syncing) return;
+    repo.syncing = kind;
+    const op = kind === 'fetch' ? backend.gitFetch : kind === 'pull' ? backend.gitPull : backend.gitPush;
+    try {
+      await gitOp(kind, () => op.call(backend, repo.path));
+    } finally {
+      repo.syncing = '';
+    }
+  }
+
   /** path 의 git 데코레이션 (explorer 용). 디렉토리는 하위 변경 여부만 본다. */
   function decorationFor(path: string, isDir: boolean): { letter: string; color: string } | null {
     if (isDir) {
@@ -283,7 +298,7 @@ export function createScm(backend: ThinBackend, editorsM: ReturnType<typeof crea
 
   return {
     scm, refreshScm, rescanRepos, noteDirEntries, repoOf, relPath, activeRepo, selectRepo, openChange, openChangeFile, commit,
-    decorationFor, stage, unstage, requestDiscard, confirmDiscard, cancelDiscard, branches, checkout,
+    decorationFor, stage, unstage, requestDiscard, confirmDiscard, cancelDiscard, branches, checkout, sync,
   };
 }
 
@@ -320,3 +335,4 @@ export const confirmDiscard = (): Promise<void> => ctx().scm.confirmDiscard();
 export const cancelDiscard = (): void => ctx().scm.cancelDiscard();
 export const branches = (repo: ScmRepo): Promise<string[]> => ctx().scm.branches(repo);
 export const checkout = (repo: ScmRepo, branch: string): Promise<void> => ctx().scm.checkout(repo, branch);
+export const sync = (repo: ScmRepo, kind: 'fetch' | 'pull' | 'push'): Promise<void> => ctx().scm.sync(repo, kind);

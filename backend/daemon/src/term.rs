@@ -29,6 +29,29 @@ pub(crate) struct Term {
     /// tmux 는 SIGHUP·master 급종료가 그 pane(셸)까지 죽여서(실측 2026-09-07) detach-client 로 clean
     /// detach 하고, 서버가 그 detach 를 처리한 뒤에야 master 를 닫는다 (tmux::wait_client_gone)
     detach: Option<String>,
+    /// 이 pty 의 슬레이브 tty (unix) — plain 셸이면 셸의 tty 그 자체. askpass 요청자가 자기 tty 로
+    /// "지금 이 터미널을 보는 세션" 을 찾는 좌표 (owner_of)
+    tty: Option<String>,
+    /// tmux 방식이면 붙어 있는 tmux 세션 id — pane tty 로 세션 id 를 얻은 요청자와 대조한다
+    tmux_id: Option<String>,
+    /// 붙은 시각 — 같은 tmux 세션을 여러 세션이 볼 때 가장 늦게 붙은 쪽을 고르는 기준 (터미널 id 는
+    /// 프론트가 세션마다 매겨 세션 간 비교가 안 된다)
+    attached_at: std::time::Instant,
+}
+
+/// 요청자(credential helper·셸 심)의 좌표로 이 세션의 터미널을 찾는다 — tmux 세션 id 가 있으면 그것으로,
+/// 아니면 plain 셸의 tty 로. 같은 tmux 세션을 여러 탭이 보면 가장 늦게 붙은 것. 반환은 붙은 시각
+pub(crate) fn owner_of(terms: &Terms, tty: &str, tmux_id: Option<&str>) -> Option<std::time::Instant> {
+    terms
+        .lock()
+        .unwrap()
+        .values()
+        .filter(|t| match tmux_id {
+            Some(sid) => t.tmux_id.as_deref() == Some(sid),
+            None => t.tmux_id.is_none() && t.tty.as_deref() == Some(tty),
+        })
+        .map(|t| t.attached_at)
+        .max()
 }
 
 /// master pty 의 슬레이브 tty 경로 (detach-client -t 대상) — ptsname 은 정적 버퍼라 직렬화한다.
@@ -378,6 +401,17 @@ fn program(root: &Path, session: Option<&str>, attach: Option<&str>) -> Program 
     if let Some(sid) = session {
         env.push(("SUPERLITE_SESSION", sid.to_string()));
     }
+    // 터미널의 git 도 앱의 인증 대화상자를 쓴다 (VS Code git.terminalAuthentication 대응, 와이어 v18):
+    // GIT_CONFIG_* 환경(git 2.31+, -c 와 같은 최우선·추가 의미)으로 이 데몬 실행 파일을 credential
+    // helper 목록 '뒤에' 덧붙인다 — 그 머신의 helper 가 먼저, 비었을 때 우리 차례, 성공 store·실패
+    // erase 도 받는다 (main.rs credential_helper/credential_main). 요청자는 자기 tty 로 "지금 이 터미널을
+    // 보는 세션" 을 찾는다 — 세션 id 환경변수는 셸보다 먼저 죽는다 (새로고침·다른 클라이언트 이어받기).
+    // GIT_TERMINAL_PROMPT 는 두지 않는다 — 대화상자 취소는 터미널 프롬프트로 떨어진다
+    if let Some(helper) = crate::credential_helper() {
+        env.push(("GIT_CONFIG_COUNT", "1".into()));
+        env.push(("GIT_CONFIG_KEY_0", "credential.helper".into()));
+        env.push(("GIT_CONFIG_VALUE_0", helper));
+    }
     let mut fallback = None;
     if let crate::tmux::Mode::Tmux { bin } = crate::tmux::mode() {
         // tmux 세션 환경변수로 — 새 창·패널의 셸에 상속되고, 워크스페이스 역방향 조회 키가 된다
@@ -434,9 +468,11 @@ fn spawn_term(
     // tmux 클라이언트는 정리 시 detach-client -t <이 pty tty> 로 clean detach 한다 (kill_term).
     // tty 를 못 구하면 detach 없음 → SIGHUP 폴백 (그 경우 pane 이 죽지만 tty 부재는 드물다)
     #[cfg(unix)]
-    let detach = tmux.as_ref().and_then(|_| pty.master.as_raw_fd()).and_then(pts_name);
+    let tty = pty.master.as_raw_fd().and_then(pts_name);
     #[cfg(not(unix))]
-    let detach: Option<String> = None;
+    let tty: Option<String> = None;
+    let detach = tmux.as_ref().and_then(|_| tty.clone());
+    let tmux_id = tmux.as_ref().map(|(id, _)| id.clone());
     let child = pty.slave.spawn_command(cmd).map_err(err)?;
     // termTmux (와이어 v17): 프론트가 탭 제목·사이드바 대조·강제 종료 대상으로 쓰는 세션 id, 또는
     // tmux 실패로 plain 이 된 사유 (경고 배지). 첫 출력보다 먼저 나간다
@@ -484,7 +520,7 @@ fn spawn_term(
     terms
         .lock()
         .unwrap()
-        .insert(id, Term { input, master: pty.master, child, flow: flow.clone(), budget, route: route.clone(), detach });
+        .insert(id, Term { input, master: pty.master, child, flow: flow.clone(), budget, route: route.clone(), detach, tty, tmux_id, attached_at: std::time::Instant::now() });
     // WHY: portable-pty 의 reader 는 블로킹 — 전용 스레드에서 읽어 writer 채널로 넘긴다
     std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
@@ -582,7 +618,7 @@ mod tests {
         let (terms_a, sink_a): (Terms, Sink) = (Terms::default(), detached());
         let (terms_b, sink_b): (Terms, Sink) = (Terms::default(), detached());
         std::env::set_var("SHELL", "/bin/sh");
-        spawn_term(1, 80, 24, Path::new("/"), None, terms_a.clone(), sink_a.clone()).expect("pty");
+        spawn_term(1, 80, 24, Path::new("/"), None, None, terms_a.clone(), sink_a.clone()).expect("pty");
         // A 에 이미 있는 id 로는 못 붙인다 / 없는 출처는 실패
         assert!(adopt(&terms_a, 9, &terms_b, 7, &sink_b).is_err(), "없는 출처 터미널");
         adopt(&terms_a, 1, &terms_b, 7, &sink_b).expect("adopt");

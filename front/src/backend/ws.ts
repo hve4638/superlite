@@ -440,6 +440,15 @@ export class WsBackend implements ThinBackend {
   gitCheckout(repo: string, branch: string): Promise<void> {
     return this.call('gitCheckout', { repo, branch });
   }
+  gitFetch(repo: string): Promise<void> {
+    return this.call('gitFetch', { repo });
+  }
+  gitPull(repo: string): Promise<void> {
+    return this.call('gitPull', { repo });
+  }
+  gitPush(repo: string): Promise<void> {
+    return this.call('gitPush', { repo });
+  }
 
   onFsChanges(cb: (changes: FsChange[], overflow: boolean) => void): void {
     this.fsHandler = cb;

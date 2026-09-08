@@ -75,6 +75,15 @@ export class EmptyBackend implements ThinBackend {
   gitCheckout(): Promise<void> {
     return Promise.reject(new Error(NO_FOLDER));
   }
+  gitFetch(): Promise<void> {
+    return Promise.reject(new Error(NO_FOLDER));
+  }
+  gitPull(): Promise<void> {
+    return Promise.reject(new Error(NO_FOLDER));
+  }
+  gitPush(): Promise<void> {
+    return Promise.reject(new Error(NO_FOLDER));
+  }
   // 생성 진입로(패널 자동 생성·커맨드)는 activeSessionEmpty 가드가 막는다 —
   // 이 스텁은 경합 잔여 호출의 안전망 (콜백은 발화하지 않는다)
   createTerminal(): TerminalSession {

@@ -380,6 +380,17 @@ export class MockBackend implements ThinBackend {
     return delay(undefined);
   }
 
+  // ponytail: mock 에는 원격이 없다 — 동기화는 지연 후 no-op (askpass 통로도 없다)
+  gitFetch(_repo: string): Promise<void> {
+    return delay(undefined);
+  }
+  gitPull(_repo: string): Promise<void> {
+    return delay(undefined);
+  }
+  gitPush(_repo: string): Promise<void> {
+    return delay(undefined);
+  }
+
   createTerminal(cols: number, rows: number): TerminalSession {
     return new MockPty(cols, rows);
   }

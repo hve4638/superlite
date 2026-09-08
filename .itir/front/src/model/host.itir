@@ -6,6 +6,7 @@ import { ctx, viewOf } from './ctx'
 import { activateSession, activeSessionEmpty, bootSession, configureSessions, genSessionId, openWebFolder, remoteHost, rootOfBackend, activeSessionCtx, replaceAppSession, sessions, SessionTab } from './sessions'
 import { notify, errText } from './notifications'
 import { daemonClean } from './daemon'
+import { credential, CredentialRequest } from './gitauth'
 import { SessionCtx } from './session'
 
 import { tauri } from './tauri'
@@ -17,7 +18,7 @@ export val backend
 export val openRootDefault
 
 fn handleRequest(tab, ctx, method, params) {
-  role: 데몬 소켓 요청자(셸 심 `superlite …`)가 세션에 보낸 요청의 처리기 (와이어 v9) — 통로의 첫 핸들러 둘: notify(알림 표시)·open(경로 열기 — stat 성공이면 파일로 그 세션 편집기에, 아니면 browseDir 로 폴더 확인 후 openFolder). 요청이 온 세션 탭으로 전환한다 (VS Code 가 요청한 창을 앞으로 가져오는 의미 — OS 창 포커스는 없음). 이후 전용 명령은 여기에 method 를 더한다. 결과는 요청자에게 돌아가고 throw(경로 부재·미지 method)는 에러로 돌아간다
+  role: 데몬 소켓 요청자(셸 심 `superlite …`)가 세션에 보낸 요청의 처리기 (와이어 v9) — 통로의 첫 핸들러 둘: notify(알림 표시)·open(경로 열기 — stat 성공이면 파일로 그 세션 편집기에, 아니면 browseDir 로 폴더 확인 후 openFolder). 요청이 온 세션 탭으로 전환한다 (VS Code 가 요청한 창을 앞으로 가져오는 의미 — OS 창 포커스는 없음). credential(와이어 v18 — git credential helper 중계 get/store/erase, 데몬이 띄운 git 과 터미널 git 모두, gitauth.credential 이 답한다). 이후 전용 명령은 여기에 method 를 더한다. 결과는 요청자에게 돌아가고 throw(경로 부재·미지 method)는 에러로 돌아간다
 }
 fn requestPath(rootPath, abs) {
   role: 요청자의 절대 경로 → full('/' 구분 절대 경로 — 폴더 열기·browseDir 용)과 wire(파일 단건 RPC 용 — 루트 안이면 상대화, 밖이면 절대 경로 그대로, OS 드롭과 같은 규칙). 드라이브 경로(Windows)만 '\\' 정규화

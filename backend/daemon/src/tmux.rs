@@ -162,6 +162,16 @@ pub(crate) fn new_session(bin: &Path, root: &Path, env: &[(&str, String)]) -> Re
     Err(format!("세션 이름 소진: {last}"))
 }
 
+/// pane 의 tty 로 그 pane 이 속한 세션 id (askpass 요청자 좌표 해석 — 요청자는 tmux 안의 셸 자식이라
+/// 자기 tty 만 안다). 없거나 서버 부재면 None
+pub(crate) fn session_of_pane(bin: &Path, tty: &str) -> Option<String> {
+    let out = command(bin).ok()?.args(["list-panes", "-a", "-F", "#{pane_tty}\t#{session_id}"]).output().ok()?;
+    out_text(out).ok()?.lines().find_map(|l| {
+        let (t, sid) = l.split_once('\t')?;
+        (t == tty).then(|| sid.to_string())
+    })
+}
+
 /// 세션 이름 조회 (attach 시 프론트 탭 제목) — 실패면 id 그대로
 pub(crate) fn name_of(bin: &Path, id: &str) -> String {
     command(bin)

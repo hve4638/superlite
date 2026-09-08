@@ -1,0 +1,14 @@
+role: git 자격 저장소 (ticket scm-subrepo-credential, 2026-09-08 결정 — 앱·웹 모두 VS Code SecretStorage 수준) — 토큰은 relay 가 도는 사용자 머신의 OS 키체인(keyring: Windows 자격 증명 관리자·macOS Keychain·Linux Secret Service, service 는 <SLUG>-git 으로 채널 분리)에, 목록(호스트·사용자명·라벨)은 config_dir/git-credentials.json 에 (키체인은 열거 불가). 키체인이 없으면(헤드리스 linux) 토큰도 그 파일에 (unix 0600, insecure 표식 — 프론트가 안내, VS Code 도 같은 강등). 앱은 relay 내장·웹은 relay 접속이라 저장 경로가 하나이고 브라우저 저장소에는 토큰이 남지 않는다. 키체인 호출은 spawn_blocking. ponytail: 호스트별 하나
+
+fn list() -> Value {
+  role: 목록 응답 — keychain(사용 가능 여부 — probe 항목 조회가 NoEntry 면 있음)과 items(host·username·label?·insecure), 토큰 없음
+}
+fn get(host) -> Value? {
+  role: 호스트 하나의 username·secret·label? — 파일 강등분이면 파일에서, 아니면 키체인에서. 없으면 null
+}
+fn set(host, username, label?, secret) -> result {
+  role: 키체인에 먼저, 실패하면 파일에 secret 포함(insecure). 같은 호스트는 덮음. 반환은 insecure 여부
+}
+fn delete(host) {
+  role: 키체인 항목·파일 항목 둘 다 제거
+}

@@ -147,6 +147,14 @@ async fn main() {
         clean::clean_main();
         return;
     }
+    // --credential <get|store|erase>: git credential helper 모드 (와이어 v18) — git 이 credential.helper
+    // 설정(credential_helper 값)으로 이 실행 파일을 부른다. 데몬 본체가 아니다
+    {
+        let args: Vec<String> = std::env::args().collect();
+        if args.len() == 3 && args[1] == "--credential" {
+            std::process::exit(credential_main(&args[2]).await);
+        }
+    }
     let sock = superlite_common::socket_path();
     // WHY: 단독 보장은 파일 락으로 — connect 검사→unlink→bind 순서는 원자적이지 않아
     //      동시 기동 시 산 데몬의 소켓 파일을 다른 데몬이 지우는 race 가 있다.
@@ -340,6 +348,122 @@ async fn pipe_main() {
     // 응답(attach 실패 사유)이 유실된다 (실측)
     let _ = out_w.flush().await;
     std::process::exit(0);
+}
+
+/// git 이 이 데몬을 credential helper 로 부르는 설정값 — `!'<exe>' --credential` (셸 명령 형식 —
+/// git 은 helper 를 셸로 실행하고 action 을 뒤에 붙인다). 데몬이 띄우는 git 은 `-c credential.helper=`
+/// 로, 터미널 셸은 GIT_CONFIG_* 환경으로 받는다 — 둘 다 그 머신의 helper 목록 뒤에 '덧붙는다'
+/// (빈 값이 아니면 초기화가 아니라 추가): GCM·osxkeychain 이 먼저 답하고, 비었을 때만 우리 차례.
+/// 성공 시 store·실패 시 erase 도 모든 helper 에 오므로 잘못 저장한 자격이 다음 시도 전에 지워진다 —
+/// askpass 로는 받을 수 없던 신호 (2026-09-08 결정). 경로의 작은따옴표는 '\'' 로 이스케이프
+pub(crate) fn credential_helper() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    Some(format!("!'{}' --credential", exe.to_string_lossy().replace('\'', "'\\''")))
+}
+
+/// credential helper 모드 (와이어 v18) — stdin 의 git credential 규약(key=value 줄, 빈 줄로 끝)을 읽어
+/// frontRequest("credential", {action, protocol, host, username?, path?}) 로 프론트에 보낸다.
+/// get 은 답 {username, password} 를 같은 규약으로 stdout 에 내고(null 이면 무출력 — git 은 다음
+/// 수단으로), store·erase 는 통지만. 대상 세션은 tty(ctty_name — 터미널 셸의 git 이면 그 pane, 데몬이
+/// 띄운 git 이면 없음)와 SUPERLITE_SESSION 을 함께 실어 데몬(resolve_requester)이 고른다. 통로 실패는
+/// 무출력 exit 0 — helper 실패는 git 에 치명적이지 않고, 터미널이면 git 프롬프트로 떨어진다. 데몬을
+/// spawn 하지 않는다
+async fn credential_main(action: &str) -> i32 {
+    use std::io::Read as _;
+    let mut input = String::new();
+    let _ = std::io::stdin().read_to_string(&mut input);
+    let mut params = serde_json::Map::new();
+    params.insert("action".into(), json!(action));
+    for line in input.lines() {
+        if line.is_empty() {
+            break;
+        }
+        if let Some((k, v)) = line.split_once('=') {
+            if matches!(k, "protocol" | "host" | "username" | "path") {
+                params.insert(k.into(), json!(v));
+            }
+        }
+    }
+    let session = std::env::var("SUPERLITE_SESSION").ok();
+    let tty = ctty_name();
+    if session.is_none() && tty.is_none() {
+        eprintln!("superlite-daemon credential: 세션 좌표 없음 (SUPERLITE_SESSION·tty 둘 다 없음)");
+        return 0;
+    }
+    let sock = superlite_common::socket_path();
+    #[cfg(unix)]
+    let conn = tokio::net::UnixStream::connect(&sock).await;
+    #[cfg(windows)]
+    let conn = tokio::net::windows::named_pipe::ClientOptions::new().open(sock.as_os_str());
+    let stream = match conn {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("superlite-daemon credential: 데몬 접속 실패 {}: {e}", sock.display());
+            return 0;
+        }
+    };
+    let (read_half, mut write_half) = tokio::io::split(stream);
+    let req = json!({
+        "id": 1, "method": "frontRequest",
+        "params": {"session": session, "tty": tty, "method": "credential", "params": Value::Object(params)},
+    });
+    if write_half.write_all(format!("{req}\n").as_bytes()).await.is_err() {
+        return 0;
+    }
+    let mut lines = BufReader::new(read_half).lines();
+    let Ok(Some(line)) = lines.next_line().await else { return 0 };
+    let Ok(resp) = serde_json::from_str::<Value>(&line) else { return 0 };
+    if let Some(e) = resp["error"].as_str() {
+        eprintln!("superlite-daemon credential: {e}");
+        return 0;
+    }
+    if action == "get" {
+        if let (Some(u), Some(pw)) = (resp["result"]["username"].as_str(), resp["result"]["password"].as_str()) {
+            println!("username={u}\npassword={pw}");
+        }
+    }
+    0
+}
+
+/// 이 프로세스의 제어 터미널 경로 (stderr→stdin→stdout 순, git 은 askpass 에 stdin/stderr 를 물려준다).
+/// Windows 는 tty 개념이 없어 None — 세션 id 환경변수만으로 찾는다
+fn ctty_name() -> Option<String> {
+    #[cfg(unix)]
+    {
+        for fd in [2, 0, 1] {
+            // SAFETY: ttyname 은 정적 버퍼를 돌려준다 — 단일 스레드 시점에 즉시 복사한다
+            let p = unsafe { libc::ttyname(fd) };
+            if !p.is_null() {
+                return Some(unsafe { std::ffi::CStr::from_ptr(p) }.to_string_lossy().into_owned());
+            }
+        }
+    }
+    None
+}
+
+/// 요청자 좌표 해석 (와이어 v18) — tty 가 있으면 그 터미널을 지금 보고 있는(프론트 접속) 세션을 찾는다:
+/// tmux 방식이면 pane tty → tmux 세션 id → 그 세션에 붙은 터미널을 가진 세션, plain 이면 셸 tty 가 곧
+/// 터미널의 pty. 여럿이면(다중 attach) 가장 늦게 붙은 터미널의 세션. 없으면 SUPERLITE_SESSION 폴백.
+/// WHY: 세션 id 환경변수는 셸이 태어날 때 고정되는데 tmux 셸은 프론트·데몬 세션보다 오래 산다 —
+///      새로고침·다른 클라이언트의 이어받기 뒤엔 죽었거나 남의 세션을 가리킨다. sessions 락 아래에서
+///      terms 락을 잡지 않는다 — Arc 목록을 복사한 뒤 푼다
+fn resolve_requester(sessions: &Sessions, tty: Option<&str>, session: Option<&str>) -> Option<Arc<Session>> {
+    let all: Vec<Arc<Session>> = sessions.lock().unwrap().values().cloned().collect();
+    if let Some(tty) = tty {
+        let tmux_id = match crate::tmux::mode() {
+            crate::tmux::Mode::Tmux { bin } => crate::tmux::session_of_pane(bin, tty),
+            _ => None,
+        };
+        let hit = all
+            .iter()
+            .filter(|s| matches!(&*s.sink.lock().unwrap(), SinkState::Attached(_)))
+            .filter_map(|s| term::owner_of(&s.terms, tty, tmux_id.as_deref()).map(|at| (at, s.clone())))
+            .max_by_key(|(at, _)| *at);
+        if let Some((_, s)) = hit {
+            return Some(s);
+        }
+    }
+    session.and_then(|sid| all.into_iter().find(|s| s.id.as_deref() == Some(sid)))
 }
 
 /// 데몬 본체 spawn (헬퍼 → 자기 자신을 인자 없이) — relay 의 spawn_daemon 과 같은 정책
@@ -552,24 +676,32 @@ async fn handle_conn(
             // 요청자(셸 심)의 프론트 요청 (와이어 v9) — attach 없이 허용. 대상 세션은
             // params.session 으로 지목 (PTY 환경변수 SUPERLITE_SESSION). 응답은 프론트의
             // requestReply 가 올 때 front::reply 가 이 연결로 돌려준다
+            // 대상은 params.tty(지금 그 터미널을 보는 세션, 와이어 v18) 우선, 없으면 params.session.
+            // 해석은 tmux 조회(subprocess)를 낄 수 있어 블로킹 풀에서
             "frontRequest" => {
-                let p = &req["params"];
-                let target = p["session"]
-                    .as_str()
-                    .and_then(|sid| sessions.lock().unwrap().get(sid).cloned());
-                match target {
-                    Some(s) => front::request(
-                        &s.pending,
-                        &s.sink,
-                        &tx,
-                        req["id"].clone(),
-                        p["method"].as_str().unwrap_or(""),
-                        p["params"].clone(),
-                    ),
-                    None => {
-                        let _ = tx.send(json!({"id": req["id"], "error": "세션 없음"}).to_string());
+                let (id, p) = (req["id"].clone(), req["params"].clone());
+                let (sessions, tx) = (sessions.clone(), tx.clone());
+                tokio::spawn(async move {
+                    let (tty, sid) = (p["tty"].as_str().map(str::to_string), p["session"].as_str().map(str::to_string));
+                    let s2 = sessions.clone();
+                    let target = tokio::task::spawn_blocking(move || resolve_requester(&s2, tty.as_deref(), sid.as_deref()))
+                        .await
+                        .ok()
+                        .flatten();
+                    match target {
+                        Some(s) => front::request(
+                            &s.pending,
+                            &s.sink,
+                            &tx,
+                            id,
+                            p["method"].as_str().unwrap_or(""),
+                            p["params"].clone(),
+                        ),
+                        None => {
+                            let _ = tx.send(json!({"id": id, "error": "세션 없음"}).to_string());
+                        }
                     }
-                }
+                });
             }
             // 프론트의 요청 응답 — 이 연결의 세션에서 대기 중인 요청자에게 회신
             "requestReply" => {
@@ -704,6 +836,22 @@ async fn handle_conn(
                             let _ = tx.send(json!({"id": id, "error": e}).to_string());
                         }
                     }
+                });
+            }
+            // 원격 동기화(와이어 v18)는 askpass 가 지목할 세션 id 가 필요하다 — handle_req 는 root 만 받는다
+            "gitFetch" | "gitPull" | "gitPush" => {
+                let (id, params) = (req["id"].clone(), req["params"].clone());
+                let Some(s) = cleanup.session.clone() else {
+                    let _ = tx.send(json!({"id": id, "error": "attach 전 요청"}).to_string());
+                    continue;
+                };
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let out = match req::git_sync(&method, &params, &s.root, s.id.as_deref()).await {
+                        Ok(v) => json!({"id": id, "result": v}),
+                        Err(e) => json!({"id": id, "error": e}),
+                    };
+                    let _ = tx.send(out.to_string());
                 });
             }
             // quickOpen 은 세션 캐시(와이어 v12)가 필요하다 — handle_req 는 root 만 받는다

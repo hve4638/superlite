@@ -1,0 +1,50 @@
+import { backendApiUrl } from './host'
+import { errText, notify } from './notifications'
+import { showViewlet } from './workbench'
+
+role: git 인증 (ticket scm-subrepo-credential) — https 원격의 사용자명·토큰을 relay 의 /git/credentials(사용자 머신의 OS 키체인, 없으면 0600 파일 강등 — 앱·웹 공통, 브라우저 저장소에는 토큰이 남지 않고 git 이 물을 때마다 받아 메모리로만)에 보관하고, git 이 credential helper 규약으로 보내는 요청(host.ts handleRequest 'credential' — 데몬 실행 파일이 helper 로 등록돼 get/store/erase 중계, 데몬이 띄운 git 과 터미널 git 모두)에 답한다. 그 머신의 helper(GCM 등)가 목록 앞이라 먼저 답하고 비었을 때만 여기 차례 (VS Code 동일). 성공 store·인증 실패 erase 로 잘못 기억한 자격은 자동으로 지워진다. GitHub 는 device flow 로그인(OAuth App client ID 는 사용자가 등록, github.com 끝점은 relay /github/oauth 중계 — CORS 부재), 그 외 호스트는 수동 등록. 대화상자(ScmView 의 GitAuthDialog)는 이 모듈의 상태 prompt·device·manual 을 본다. GitHub client ID 만 localStorage(비밀 아님). mock 은 메모리 목록. ponytail: 호스트별 계정 하나
+
+export type GitCredential
+export type AskPrompt
+export type PromptAnswer
+export type DeviceFlow
+export val gitAuth
+
+export type GitCredentialInfo
+export fn refreshCredentials() {
+  role: 목록(토큰 없음)과 keychain 가용 여부를 relay 에서 다시 받는다 — SCM 뷰 마운트·저장/삭제 뒤
+}
+export fn credentialFor(host) -> GitCredentialInfo? {
+  role: 목록의 호스트 항목 (토큰 없음)
+}
+fn fetchSecret(host) -> GitCredential? {
+  role: 호스트의 토큰까지 — git 이 물을 때만 relay 에서 받는다 (mock 은 메모리)
+}
+export fn addCredential(cred) {
+  role: relay 에 저장(호스트별 하나, 같은 호스트는 덮음) — 키체인 부재로 파일에 갔으면 경고 알림. 뒤에 목록 재조회
+}
+export fn removeCredential(host) {
+  role: relay 에서 삭제 (메뉴 Forget) 후 목록 재조회
+}
+export type CredentialRequest
+export fn credential(req) -> answer? {
+  role: git credential 요청 하나 — get: 저장·임시 자격이 있으면 대화상자 없이 {username,password}, 없으면 SCM 뷰를 열고 대화상자(취소는 null → git 은 다음 수단: 터미널이면 자기 프롬프트, 데몬 실행이면 실패). store: 대화상자 답이 성공 — remember 면 localStorage 에. erase: 거부됨 — 저장·임시 삭제 + 알림, 다음 시도는 다시 묻는다. 한 번에 하나, 동시 요청은 줄 세운다
+}
+export fn answerPrompt(answer) {
+  role: 대화상자 확정 — 대기 중 프롬프트의 resolve
+}
+export fn cancelPrompt() {
+  role: 대화상자 취소 — 대기 중 프롬프트의 reject
+}
+export fn signInGithub() {
+  role: 'Sign in to GitHub…' — client ID 가 없으면 입력 단계(device.step clientId)부터, 있으면 device flow 시작
+}
+export fn setGithubClientId(id) {
+  role: client ID 확정·기억(localStorage) 후 device flow 시작
+}
+export fn cancelDeviceFlow() {
+  role: 진행 중 폴링 중단·대화상자 닫기 (세대 번호로 늦은 응답 무시)
+}
+fn runDeviceFlow(clientId) {
+  role: device/code 발급 → 코드·verification_uri 표시 → interval 마다 oauth/access_token 폴링(slow_down 은 +5초, expires_in 까지) → api.github.com/user 로 로그인 이름(실패해도 토큰은 유효 — 'oauth2') → github.com 자격 저장·알림. 오류는 device.step error
+}

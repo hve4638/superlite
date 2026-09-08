@@ -79,6 +79,9 @@ assert.ok(repos.includes(''), 'gitRepos root');
 const stRepo = await call('gitStatus', { repo: '' });
 assert.ok(typeof stRepo.branch === 'string', 'gitStatus repo=""');
 await assert.rejects(call('gitStatus', { repo: '../x' }), /이탈/, 'gitStatus repo safe_join');
+// 원격 동기화(와이어 v18) — 네트워크를 타므로 경로 관문만 확인 (모르는 메서드가 아니라 safe_join 에서 거부)
+await assert.rejects(call('gitFetch', { repo: '../x' }), /이탈/, 'gitFetch repo safe_join');
+await assert.rejects(call('gitPush', { repo: '../x' }), /이탈/, 'gitPush repo safe_join');
 const st = await call('gitStatus');
 assert.ok(typeof st.branch === 'string' && Array.isArray(st.changes), 'gitStatus');
 assert.match(st.head, /^([0-9a-f]{40}|[0-9a-f]{64})$/, 'gitStatus head 해시'); // sha1 | sha256 repo

@@ -30,6 +30,18 @@ fn clean_handler() {
 fn version_handler() {
   role: GET /version — 이 빌드의 version·channel(빈 문자열 = stable)·commit·builtAt·wire(WIRE_VERSION)·daemonBin(로컬 데몬 배치 경로, 부재면 오류 문자열) JSON. 프론트 About·시작 페이지가 쓴다. 데몬 와이어 밖 relay 자체 응답이라 WIRE_VERSION 불변, 웹·앱 동일 경로 (release-versioning). 인증·CORS 는 /ssh/* 와 같다
 }
+fn github_oauth_handler() {
+  role: POST /github/oauth?path=<device/code|oauth/access_token>&<폼 인자…> — GitHub device flow 두 끝점(https://github.com/login/<path>)으로 폼 인자를 전달하고 JSON 응답을 되돌리는 중계 (ticket scm-subrepo-credential). github.com 로그인 끝점은 CORS 가 없어 프론트가 직접 못 부른다. 인자를 query 로 받는 이유: 본문 없는 POST 는 단순 요청이라 preflight 가 없다. path 는 둘만 허용. 토큰은 프론트에만 간다 — relay 는 저장하지 않는다. 데몬 와이어 밖, WIRE_VERSION 불변. 인증·CORS 는 /ssh/* 와 같다
+}
+fn git_credentials_get() {
+  role: GET /git/credentials[?host=] — host 없으면 gitcred::list (토큰 없음), 있으면 gitcred::get 의 {username, secret, label?} 또는 null. git 이 credential get 을 보낼 때 프론트(gitauth)가 부른다 — 토큰은 응답으로 메모리에만. 인증·CORS 는 /ssh/* 와 같다
+}
+fn git_credentials_post() {
+  role: POST /git/credentials?action=set&host=&username=[&label=] (본문 text/plain = 토큰 — 단순 요청이라 preflight 없음) → gitcred::set, 응답 {insecure}; ?action=delete&host= → gitcred::delete
+}
+fn form_encode(s) -> encoded {
+  role: 폼 값 percent-encoding — reqwest 의 form 기능(추가 의존) 대신 직접
+}
 fn clean_local() -> report {
   role: 로컬 데몬 바이너리(daemon_bin_path)를 --clean 으로 실행해 stdout 반환
 }

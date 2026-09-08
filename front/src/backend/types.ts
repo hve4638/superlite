@@ -20,9 +20,9 @@ export interface DirEntry {
   kind: 'file' | 'directory';
   /** 디렉토리가 git 저장소 루트(.git 보유)면 true (와이어 v13) — 트리 펼침이 곧 하위 저장소 인식 */
   repo?: boolean;
-  /** 수정 시각(ms epoch, 와이어 v15) — 폴더 탭 자세히 보기. metadata 실패면 없다 */
+  /** 수정 시각(ms epoch, 와이어 v18) — 폴더 탭 자세히 보기. metadata 실패면 없다 */
   mtime?: number;
-  /** 바이트 크기(파일만, 와이어 v15) */
+  /** 바이트 크기(파일만, 와이어 v18) */
   size?: number;
 }
 
@@ -150,7 +150,7 @@ export interface QuickOpenResult {
 
 export interface ThinBackend {
   workspace(): Promise<WorkspaceInfo>;
-  /** path 디렉토리의 직계 엔트리. 정렬은 호출자 책임. 절대 경로(와이어 v15)면 워크스페이스 밖도
+  /** path 디렉토리의 직계 엔트리. 정렬은 호출자 책임. 절대 경로(와이어 v18)면 워크스페이스 밖도
    *  나열한다 — 항목 path 는 절대('/' 구분), repo 표식 없음 (폴더 탭의 밖 탐색) */
   readDir(path: string): Promise<DirEntry[]>;
   /** 크기 초과(maxBytes 또는 백엔드 기본 상한)·이진/미지원 인코딩은 reject 가 아니라
@@ -214,6 +214,15 @@ export interface ThinBackend {
   gitBranches(repo: string): Promise<string[]>;
   /** 브랜치 전환 (git checkout). 충돌 등 실패는 reject */
   gitCheckout(repo: string, branch: string): Promise<void>;
+  /**
+   * 원격 동기화 (와이어 v18). 인증은 그 머신의 credential helper(GCM 등)가 먼저 — 비었을 때 뒤에
+   * 덧붙인 데몬의 helper 모드가 onRequest('credential', {action, host, …}) 를 프론트에 보낸다
+   * (host.ts → gitauth, get/store/erase). 실패(인증 거부·충돌·원격 없음)는 git 의 stderr 로 reject
+   */
+  gitFetch(repo: string): Promise<void>;
+  gitPull(repo: string): Promise<void>;
+  /** 상류 없는 브랜치는 origin 에 같은 이름으로 올린다 (push.autoSetupRemote) */
+  gitPush(repo: string): Promise<void>;
   /** attach (와이어 v17): 새 셸 대신 기존 tmux 세션(TerminalInfo.id)에 붙는다 — 같은 세션을 여러
    *  탭·창이 동시에 볼 수 있다 */
   createTerminal(cols: number, rows: number, attach?: string): TerminalSession;

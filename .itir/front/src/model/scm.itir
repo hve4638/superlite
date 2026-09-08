@@ -62,6 +62,9 @@ export fn branches(repo) {
 export fn checkout(repo, branch) {
   role: 브랜치 전환 — 현재 브랜치면 no-op, 실패(충돌 등)는 notify
 }
+export fn sync(repo, kind) {
+  role: 원격 동기화 fetch/pull/push — 저장소당 하나씩(진행 중이면 무시, repo.syncing 이 종류를 든다 — ScmView 회전 아이콘·메뉴 비활성). 인증 프롬프트는 데몬 askpass 요청이 gitauth 로 가고 대화상자는 ScmView. 성공은 알림 없이 재조회, 실패 notify
+}
 export fn decorationFor(path, isDir) -> Decoration? {
   role: 탐색기·탭에 붙는 git 장식 (디렉토리는 자손 변경 전파) — 전 저장소 집계(scm.changes) 기준
 }

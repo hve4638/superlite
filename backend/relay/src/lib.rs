@@ -23,6 +23,7 @@ use tokio::net::TcpListener;
 use tower_http::services::ServeDir;
 
 mod ssh;
+mod gitcred;
 
 #[cfg(unix)]
 type DaemonStream = tokio::net::UnixStream;
@@ -93,7 +94,9 @@ pub async fn serve(listener: TcpListener, roots: SessionRoots, token: Option<Str
         .route("/ssh/state", axum::routing::post(state_handler))
         .route("/daemon/clean", axum::routing::post(clean_handler))
         .route("/tmux-conf", get(tmux_conf_get).put(tmux_conf_put))
-        .route("/version", get(version_handler));
+        .route("/version", get(version_handler))
+        .route("/github/oauth", axum::routing::post(github_oauth_handler))
+        .route("/git/credentials", get(git_credentials_get).post(git_credentials_post));
     // /nvim 은 독립 줄로 — 위 라우터 체인을 고치는 다른 브랜치와의 병합 충돌을 피한다
     let mut app = app.route("/nvim", get(nvim::nvim_handler));
     if let Some(dist) = &dist {
@@ -404,6 +407,113 @@ async fn version_handler(
         }))
         .into_response(),
     )
+}
+
+/// POST /github/oauth?path=<device/code|oauth/access_token>&<폼 인자…> — GitHub device flow 의
+/// 두 끝점(https://github.com/login/<path>)으로 폼 인자를 그대로 전달하고 JSON 응답을 되돌린다
+/// (ticket scm-subrepo-credential). 프론트가 직접 부르지 못하는 이유: github.com 의 로그인 끝점은
+/// CORS 헤더가 없어 브라우저·webview 가 응답을 버린다. 인자를 본문이 아니라 query 로 받는 이유:
+/// 본문 없는 POST 는 단순 요청이라 preflight 가 없다 (/ssh/* 와 같은 cors() 로 충분).
+/// 데몬 와이어 밖 relay 자체 응답 — WIRE_VERSION 불변. 토큰은 응답으로 프론트에만 간다 —
+/// relay 는 저장하지 않는다. path 는 둘만 허용 — 임의 GitHub 경로 중계기가 되지 않게
+async fn github_oauth_handler(
+    State(app): State<App>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Response {
+    if !authed(&app, &query, &headers) {
+        return cors(StatusCode::FORBIDDEN.into_response());
+    }
+    let path = match query.get("path").map(String::as_str) {
+        Some(p @ ("device/code" | "oauth/access_token")) => p,
+        _ => return cors((StatusCode::BAD_REQUEST, "path 는 device/code 또는 oauth/access_token").into_response()),
+    };
+    // application/x-www-form-urlencoded 본문 — reqwest 의 form 기능(추가 의존) 대신 직접 인코딩
+    let form = query
+        .iter()
+        .filter(|(k, _)| k.as_str() != "tkn" && k.as_str() != "path")
+        .map(|(k, v)| format!("{}={}", form_encode(k), form_encode(v)))
+        .collect::<Vec<_>>()
+        .join("&");
+    let res = reqwest::Client::new()
+        .post(format!("https://github.com/login/{path}"))
+        .header("accept", "application/json")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(form)
+        .send()
+        .await;
+    cors(match res {
+        Ok(r) => {
+            let status = r.status().as_u16();
+            let body = r.text().await.unwrap_or_default();
+            (StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY), [("content-type", "application/json")], body)
+                .into_response()
+        }
+        Err(e) => (StatusCode::BAD_GATEWAY, format!("github.com 요청 실패: {e}")).into_response(),
+    })
+}
+
+/// GET /git/credentials[?host=] — host 없으면 목록 {keychain, items[{host,username,label?,insecure}]}
+/// (토큰 없음), 있으면 그 호스트의 {username, secret, label?} 또는 null. git 이 credential get 을 보낼 때
+/// 프론트(gitauth)가 부른다 — 토큰은 응답으로 메모리에만 (gitcred 모듈). 인증·CORS 는 /ssh/* 와 같다
+async fn git_credentials_get(
+    State(app): State<App>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Response {
+    if !authed(&app, &query, &headers) {
+        return cors(StatusCode::FORBIDDEN.into_response());
+    }
+    let v = match query.get("host").filter(|h| !h.is_empty()) {
+        Some(h) => gitcred::get(h.clone()).await,
+        None => gitcred::list().await,
+    };
+    cors(Json(v).into_response())
+}
+
+/// POST /git/credentials?action=set&host=&username=[&label=] (본문 = 토큰, text/plain — 단순 요청이라
+/// preflight 없음) / ?action=delete&host=. set 응답 {insecure} — 키체인 부재로 파일에 갔는지
+async fn git_credentials_post(
+    State(app): State<App>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    if !authed(&app, &query, &headers) {
+        return cors(StatusCode::FORBIDDEN.into_response());
+    }
+    let host = query.get("host").cloned().unwrap_or_default();
+    if host.is_empty() {
+        return cors((StatusCode::BAD_REQUEST, "host 필요").into_response());
+    }
+    let result = match query.get("action").map(String::as_str) {
+        Some("set") => {
+            let username = query.get("username").cloned().unwrap_or_default();
+            if username.is_empty() || body.is_empty() {
+                return cors((StatusCode::BAD_REQUEST, "username·본문(토큰) 필요").into_response());
+            }
+            gitcred::set(host, username, query.get("label").cloned(), body).await
+        }
+        Some("delete") => gitcred::delete(host).await.map(|_| json!(null)),
+        _ => return cors((StatusCode::BAD_REQUEST, "action 은 set 또는 delete").into_response()),
+    };
+    cors(match result {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    })
+}
+
+/// 폼 값 percent-encoding — 비예약 문자(영숫자·-_.~)만 그대로
+fn form_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
 }
 
 async fn clean_local() -> Result<String, String> {

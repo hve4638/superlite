@@ -19,6 +19,9 @@ export fn base_args() -> args {
 export fn new_session(bin, root, env) -> id_and_name {
   role: 새 tmux 세션 detached 로 — 이름은 <폴더명>-<n> (충돌 시 n 증가), cwd root, -e 로 세션 환경변수(셸 심 좌표·ENV_ROOT). -P -F 로 session_id 를 받아 돌려준다
 }
+export fn session_of_pane(bin, tty) -> id? {
+  role: pane tty → 그 pane 이 속한 세션 id (list-panes -a) — askpass 요청자 좌표 해석 (와이어 v18). 요청자는 tmux 안의 셸 자식이라 자기 tty 만 안다. 서버 부재·미발견은 None
+}
 export fn name_of(bin, id) -> name {
   role: attach 시 프론트 탭 제목용 세션 이름 (display-message) — 실패면 id
 }

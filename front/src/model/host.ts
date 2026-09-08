@@ -4,6 +4,7 @@ import { WsBackend } from '../backend/ws';
 import type { ThinBackend } from '../backend/types';
 import { ctx, viewOf } from './ctx';
 import { daemonClean } from './daemon';
+import { credential, type CredentialRequest } from './gitauth';
 import { errText, notify } from './notifications';
 import { configureNvim } from './nvim';
 import type { SessionCtx } from './session';
@@ -126,6 +127,10 @@ async function handleRequest(
       openFolder(full); // 활성 세션 기준 원격 판정 — 방금 전환했으므로 이 세션의 호스트다
       return { kind: 'folder' };
     }
+    // git credential helper 중계 (와이어 v18 — 데몬이 띄운 git 과 터미널 git 모두): get 은 {username,
+    // password} 또는 null, store/erase 는 null
+    case 'credential':
+      return credential(p as unknown as CredentialRequest);
     default:
       throw new Error(`미지 요청: ${method}`);
   }

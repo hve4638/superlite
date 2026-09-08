@@ -59,7 +59,12 @@ pub fn socket_path() -> PathBuf {
 ///    listTerminals·killTerminal·renameTerminal·tmuxConf 추가, attach 응답에 terminal{mode,error},
 ///    이벤트 termTmux{term, id, name | error}. 구버전 데몬은 새 메서드를 모르는 메서드로 에러 응답해
 ///    사이드바 터미널 목록이 비어 보인다.
-pub const WIRE_VERSION: u32 = 17;
+/// 18: gitFetch/gitPull/gitPush 추가 — 인증은 그 머신의 credential helper 가 먼저, 그 뒤에 덧붙인
+///    데몬 자신의 helper 모드(--credential)가 frontRequest("credential") 로 프론트의 저장 자격을
+///    받는다 (데몬이 띄운 git·터미널 git 공통, ticket scm-subrepo-credential). frontRequest 는 params.tty
+///    로 대상 세션을 해석한다. 구버전 데몬은 세 메서드를 모르는 메서드로
+///    에러 응답한다.
+pub const WIRE_VERSION: u32 = 18;
 
 /// 릴리스 버전 — 루트 Cargo.toml `[workspace.package] version` 하나에서 온다 (crate 4개가 상속).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

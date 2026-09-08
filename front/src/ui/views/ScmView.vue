@@ -2,14 +2,16 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import {
   scm, activeRepo, selectRepo, openChange, openChangeFile, commit, refreshScm, rescanRepos, stage, unstage,
-  requestDiscard, confirmDiscard, cancelDiscard, branches, checkout, CHANGE_LETTER, CHANGE_COLOR,
+  requestDiscard, confirmDiscard, cancelDiscard, branches, checkout, sync, CHANGE_LETTER, CHANGE_COLOR,
   type ScmChange, type ScmRepo,
 } from '../../model/scm';
+import { gitAuth, signInGithub, removeCredential, refreshCredentials } from '../../model/gitauth';
 import { openContextMenu, showViewlet, workbench } from '../../model/workbench';
 import { revealPath } from '../../model/files';
 import { errText, notify } from '../../model/notifications';
 import FileIcon from '../widgets/FileIcon.vue';
 import ConfirmDialog from '../widgets/ConfirmDialog.vue';
+import GitAuthDialog from './GitAuthDialog.vue';
 
 const inputEl = ref<HTMLTextAreaElement>();
 
@@ -153,9 +155,34 @@ async function rescan(): Promise<void> {
   notify('info', n === 0 ? 'No git repositories found' : `${n} git repositor${n === 1 ? 'y' : 'ies'} found`);
 }
 
+/** "More Actions..." — 원격 동기화(pull/push/fetch)와 git 계정 관리 (VS Code SCM 제목 메뉴의 자리).
+ *  동기화 진행 중이면 그 저장소의 동기화 항목은 비활성. 저장된 자격은 호스트별 Forget 항목으로 */
+function moreActions(e: MouseEvent): void {
+  const r = repo.value;
+  if (!r) return;
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  const idle = !r.syncing;
+  openContextMenu(rect.left, rect.bottom + 4, [
+    { label: 'Pull', enabled: idle, run: () => void sync(r, 'pull') },
+    { label: 'Push', enabled: idle, run: () => void sync(r, 'push') },
+    { label: 'Fetch', enabled: idle, run: () => void sync(r, 'fetch') },
+    { separator: true },
+    { label: 'Sign in to GitHub...', run: () => signInGithub() },
+    { label: 'Add Git Credential...', run: () => { gitAuth.manual = true; } },
+    ...gitAuth.credentials.map((c) => ({
+      label: `Forget ${c.label ? `${c.label} (${c.username})` : `${c.username}@${c.host}`}${c.insecure ? ' (file)' : ''}`,
+      run: () => void removeCredential(c.host).catch((e) => notify('error', `Failed to forget: ${errText(e)}`)),
+    })),
+  ]);
+}
+const authOpen = computed(() => gitAuth.prompt !== null || gitAuth.device !== null || gitAuth.manual);
+
 // WHY: VS Code 는 SCM 뷰를 열면 커밋 입력에 포커스를 준다 — 레퍼런스 스크린샷의
 //      파란 focusBorder 상태가 기본 모습이므로 동일하게 재현한다.
-onMounted(() => inputEl.value?.focus());
+onMounted(() => {
+  inputEl.value?.focus();
+  void refreshCredentials(); // "…" 메뉴의 Forget 목록·대화상자의 키체인 안내
+});
 </script>
 
 <template>
@@ -203,9 +230,11 @@ onMounted(() => inputEl.value?.focus());
         <span class="pane-title">Changes</span>
         <span v-if="multi" class="pane-desc">{{ repoTitle(repo) }}</span>
         <div class="pane-actions" @click.stop>
+          <span v-if="repo.syncing" class="action codicon codicon-loading codicon-modifier-spin" :title="`Running git ${repo.syncing}...`" />
           <span class="action codicon codicon-check" :class="{ disabled: !canCommit }" title="Commit" @click="doCommit()" />
           <span class="action codicon codicon-refresh" title="Refresh" @click="refreshScm()" />
           <span v-if="!multi" class="action codicon codicon-repo" title="Rescan Repositories" @click="rescan()" />
+          <span class="action codicon codicon-ellipsis" title="More Actions..." @click="moreActions" />
         </div>
       </div>
       <div v-show="!collapsed.has('changes')" class="pane-body">
@@ -337,6 +366,7 @@ onMounted(() => inputEl.value?.focus());
       @confirm="confirmDiscard()"
       @cancel="cancelDiscard()"
     />
+    <GitAuthDialog v-if="authOpen" />
   </div>
 </template>
 
