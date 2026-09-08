@@ -9,8 +9,9 @@ import { daemonClean } from './daemon'
 import { SessionCtx } from './session'
 
 import { tauri } from './tauri'
+import { bootActiveSession, subWindow } from './window'
 import { configureNvim } from './nvim'
-role: ThinBackend 조립 지점 — 구현체를 직접 참조해도 되는 유일한 파일 (itir boundary assembly). 세션 관리자에 환경(kind·탭별 연결 생성기)을 주입하고 부팅 세션들을 등록한다. 앱은 주입된 __SUPERLITE_WS__ endpoint 와 __SUPERLITE_SESSIONS__ 목록(native 레지스트리가 발급 — 복원이면 여럿, 마지막이 활성)으로, 웹은 ?tkn=·?folder= 로 /ws 부팅 세션 하나를 만든다 (기본이 실 백엔드 — ?mock 일 때만 MockBackend, 2026-09-08 뒤집음. ?ws 는 무해한 잉여). root 가 null 인 탭(빈 세션)은 연결을 열지 않는다 — EmptyBackend (앱·웹 공통). 모듈 평가 시점에 부팅을 끝낸다 — model shim 을 쓰는 모든 모듈보다 앞서야 하므로 main.ts 가 이 파일을 최우선 import 한다. 임베드 nvim(편집기 vim 모드)의 /nvim 주소도 여기서 configureNvim 으로 준다 — 웹은 같은 오리진 /nvim(+tkn), 앱은 주입 endpoint 의 /ws 를 /nvim 으로, mock 은 null
+role: ThinBackend 조립 지점 — 구현체를 직접 참조해도 되는 유일한 파일 (itir boundary assembly). 세션 관리자에 환경(kind·탭별 연결 생성기)을 주입하고 부팅 세션들을 등록한다. 앱은 주입된 __SUPERLITE_WS__ endpoint 와 __SUPERLITE_SESSIONS__ 목록(native 레지스트리가 발급 — 복원이면 여럿, 마지막이 활성)으로, 웹은 ?tkn=·?folder= 로 /ws 부팅 세션 하나를 만든다 (기본이 실 백엔드 — ?mock 일 때만 MockBackend, 2026-09-08 뒤집음. ?ws 는 무해한 잉여). root 가 null 인 탭(빈 세션)은 연결을 열지 않는다 — EmptyBackend (앱·웹 공통). 서브 창(subWindow)은 세션 탭의 mirror(미러 세션 id)로 연결을 열고, 미러가 없는 탭은 무연결 자리표시(EmptyBackend) — 탭이 오면 native ensure_mirror 로 미러가 생겨 컨텍스트가 교체된다. 부팅 후 묶음의 활성 세션(bootActiveSession)이 있으면 그 탭으로 (sync 없이). 모듈 평가 시점에 부팅을 끝낸다 — model shim 을 쓰는 모든 모듈보다 앞서야 하므로 main.ts 가 이 파일을 최우선 import 한다. 임베드 nvim(편집기 vim 모드)의 /nvim 주소도 여기서 configureNvim 으로 준다 — 웹은 같은 오리진 /nvim(+tkn), 앱은 주입 endpoint 의 /ws 를 /nvim 으로, mock 은 null
 
 export val backend
 export val openRootDefault

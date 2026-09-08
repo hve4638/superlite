@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted } from 'vue';
-import { workbench } from '../model/workbench';
+import { workbench, sideBarShown, activityBarShown } from '../model/workbench';
 import {
   editors,
   baseName,
@@ -56,8 +56,8 @@ onBeforeUnmount(() => window.removeEventListener('resize', onWindowResize));
          컴포넌트 국소 명령형 상태가 세션을 넘어 새지 않게. 모델 상태는 세션 컨텍스트에
          남아 있으므로 재마운트가 곧 복원이다 (xterm 은 terminalHost 바인딩 맵이 살아 재부착) -->
     <div :key="sessions.activeId" class="workbench-middle">
-      <ActivityBar />
-      <div v-if="workbench.sideBarVisible" class="sidebar-slot">
+      <ActivityBar v-if="activityBarShown()" />
+      <div v-if="sideBarShown()" class="sidebar-slot">
         <SideBar />
         <Sash
           direction="vertical"

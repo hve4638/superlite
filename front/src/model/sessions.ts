@@ -1,11 +1,11 @@
-import { reactive } from '@vue/reactivity';
+import { effect, reactive } from '@vue/reactivity';
 import type { ThinBackend } from '../backend/types';
 import { activeCtx } from './ctx';
 import type { TabHandoff } from './editors';
 import { notify } from './notifications';
 import { createSessionCtx, type SessionCtx, type SessionSnapshot } from './session';
 import type { TerminalInstance, TerminalSnapshot } from './terminal';
-import { windowLabel } from './window';
+import { destroyWindow, onWindowCloseRequested, ownerWindow, subWindow, windowLabel } from './window';
 import { tauri } from './tauri';
 
 /**
@@ -58,8 +58,16 @@ export const DND_EDITOR = 'application/x-superlite-editor';
  *  from?: {group, member?}} — from 은 Pinned 안에서 옮길 때만 (recents.PinSource) */
 export const DND_ROOTS = 'application/x-superlite-roots';
 
-/** renamed: 사용자가 라벨을 바꾼 적이 있다 — 그 뒤로는 중복 구분(TitleBar 의 전체 경로 라벨)이 건드리지 않는다 */
-export type SessionTab = { id: string; name: string; root: string | null; renamed?: boolean };
+/** renamed: 사용자가 라벨을 바꾼 적이 있다 — 그 뒤로는 중복 구분(TitleBar 의 전체 경로 라벨)이 건드리지 않는다.
+ *  mirror: 서브 창 전용 — 이 창에서 그 세션(원본 id)에 붙는 미러 세션 id. 없으면 무연결 자리표시
+ *  (탭이 오면 native ensure_mirror 로 생긴다) */
+export type SessionTab = { id: string; name: string; root: string | null; renamed?: boolean; mirror?: string };
+
+/** 세션 키 → 데몬 세션 id — 서브 창은 미러 id, 그 외는 그대로. 핸드오프 fromSession·터미널 인수(adoptTerminal
+ *  from)는 데몬 세션 id 를 써야 한다 */
+export function daemonSession(id: string): string {
+  return sessions.list.find((t) => t.id === id)?.mirror ?? id;
+}
 
 
 /** 이 창에 보낸 이벤트만 듣는다.
@@ -193,10 +201,11 @@ function removeLocal(id: string): void {
   (ctx.backend as { dispose?: () => void }).dispose?.();
 }
 
-/** 부팅 세션 등록 (host.ts 조립 시점) — 마지막으로 등록된 것이 활성이 된다 */
+/** 부팅 세션 등록 (host.ts 조립 시점) — 마지막으로 등록된 것이 활성이 된다. 동기화 없이 — 서브 창의
+ *  부팅이 메인 묶음의 활성 세션을 덮으면 안 된다 (주입값 bootActiveSession 이 뒤에 적용된다) */
 export function bootSession(tab: SessionTab, backend: ThinBackend): void {
   addLocal(tab, backend);
-  activateSession(tab.id);
+  activateSession(tab.id, false);
 }
 
 /** 세션 탭 순환 (Ctrl+Shift+Tab, commands.ts) — 활성 탭의 이웃으로 wrap 이동 */
@@ -207,14 +216,17 @@ export function cycleSession(dir: 1 | -1): void {
   activateSession(next.id);
 }
 
-/** 탭 클릭 전환 — front 소유. 대상 컨텍스트를 활성으로 바꾸면 shim·UI 가 따라온다 */
-export function activateSession(id: string): void {
+/** 탭 클릭 전환 — front 소유. 대상 컨텍스트를 활성으로 바꾸면 shim·UI 가 따라온다.
+ *  앱은 메인·서브 창이 활성 세션을 공유한다 — native 에 알리면(set_active_session) 묶음 전체에
+ *  session-active 로 돌아온다 (같은 id 면 무동작). sync=false 는 그 반향·부팅 주입값 적용 */
+export function activateSession(id: string, sync = true): void {
   if (id === sessions.activeId) return;
   const ctx = ctxs.get(id);
   if (!ctx) return;
   beforeSwitch?.();
   sessions.activeId = id;
   activeCtx.value = ctx;
+  if (sync && multiWindow()) void tauri?.core.invoke('set_active_session', { id });
 }
 
 /** 탭 닫기 = 세션 종료(kill 의미) — 연결을 끊으면 데몬이 grace 후 터미널을 회수한다.
@@ -222,9 +234,10 @@ export function activateSession(id: string): void {
  *  대체한다 (2026-09-05, ticket convenience-features). */
 export function closeSession(id: string): void {
   if (env.kind === 'app') {
+    // 서브 창들이 가진 이 세션의 탭을 먼저 거둬들인다 — 함께 닫힌다 (2026-09-08 개정).
     // native 가 레지스트리 제거·지속 저장 후 sessions-changed 로 알린다 (reconcile 이 정리).
     // 마지막 탭이면 native 가 이 창을 닫는다 (방송 없음 — 페이지가 통째로 사라진다)
-    void tauri?.core.invoke('close_session', { id });
+    void recallSessionTabs(id).then(() => tauri?.core.invoke('close_session', { id }));
     return;
   }
   // 웹: 마지막 탭을 닫으면 빈 세션을 먼저 세워 활성으로 삼은 뒤 제거한다
@@ -386,6 +399,9 @@ function reconcile(list: SessionTab[]): void {
     if (!ctxs.has(n.id)) {
       addLocal(n);
       added = n.id;
+    } else if (subWindow && sessions.list.find((t) => t.id === n.id)?.mirror !== n.mirror) {
+      // 서브 창: 미러가 생겼다(자리표시 → 연결) — 컨텍스트를 새 연결로 교체한다. 자리표시엔 탭이 없어 잃는 것이 없다
+      replaceLocal(n);
     }
   }
   // 순서는 native 가 단일 출처 — 이름은 로컬 갱신분(워크스페이스 정보)을 우선한다
@@ -393,7 +409,20 @@ function reconcile(list: SessionTab[]): void {
     const prev = sessions.list.find((t) => t.id === n.id);
     return { ...n, name: prev?.name ?? n.name, renamed: prev?.renamed };
   });
-  if (added && !consumeBackground(added)) activateSession(added);
+  // 서브 창은 새 탭을 스스로 활성화하지 않는다 — 메인이 활성화하고 session-active 로 따라온다
+  if (added && !subWindow && !consumeBackground(added)) activateSession(added);
+}
+
+/** 같은 키의 컨텍스트 교체 (서브 창 미러 생성) — 목록 자리는 그대로, 활성이면 새 컨텍스트로 */
+function replaceLocal(tab: SessionTab): void {
+  const old = ctxs.get(tab.id);
+  const idx = sessions.list.findIndex((t) => t.id === tab.id);
+  if (idx !== -1) sessions.list.splice(idx, 1);
+  ctxs.delete(tab.id);
+  (old?.backend as { dispose?: () => void } | undefined)?.dispose?.();
+  const ctx = addLocal(tab);
+  // addLocal 은 끝에 push — 자리는 곧 native 순서로 덮인다 (reconcile 의 목록 재구성)
+  if (sessions.activeId === tab.id) activeCtx.value = ctx;
 }
 
 export function initSessions(): void {
@@ -420,6 +449,89 @@ export function initSessions(): void {
     onSessionMoveRequest(e.payload as { id: string; toWindow: string; toIndex: number }),
   );
   listenHere('tabs-move-request', (e) => onTabsMoveRequest(e.payload as TabsMoveRequest));
+  // 메인·서브 공유 활성 세션 (native set_active_session 의 방송 — 자기 호출의 반향 포함)
+  listenHere('session-active', (e) => activateSession(e.payload as string, false));
+  // 메인 창이 세션을 떠나보내기 전 그 세션의 탭 회수 요청 (서브 창이 받는다)
+  listenHere('session-recall', (e) => onSessionRecall(e.payload as { id: string; token: string; toWindow: string }));
+  listenHere('session-recalled', (e) => {
+    const { token } = e.payload as { token: string };
+    recallWaiters.get(token)?.();
+  });
+  if (subWindow) initSubWindow();
+}
+
+// ---- 서브 창 (앱 전용, decision 2026-09-08 개정)
+
+/** 서브 창의 수명 — X·OS 닫기는 탭을 메인에 되돌린 뒤 닫고, 모든 세션의 작업 탭이 0 이 되면
+ *  스스로 닫힌다 (세션 하나가 비는 것은 아무 일도 아니다). 부팅 직후 핸드오프가 오기 전의
+ *  0 은 세지 않는다 (everHadTabs) */
+function initSubWindow(): void {
+  onWindowCloseRequested(() => void closeSubWindow());
+  let everHadTabs = false;
+  effect(() => {
+    const total = sessions.list.reduce(
+      (n, t) => n + (ctxs.get(t.id)?.editors.editors.groups.reduce((m, g) => m + g.tabs.length, 0) ?? 0),
+      0,
+    );
+    if (total > 0) everHadTabs = true;
+    else if (everHadTabs) destroyWindow();
+  });
+}
+
+/** 서브 창 X — 가진 탭을 전부 소속 메인 창의 해당 세션에 되돌린 뒤 창을 파괴한다. 메인이 이미
+ *  없으면(forward 거절) 그대로 닫는다 */
+async function closeSubWindow(): Promise<void> {
+  if (ownerWindow === null) return;
+  for (const t of sessions.list) {
+    if (t.mirror) await returnSessionTabs(t.id, ownerWindow);
+  }
+  destroyWindow();
+}
+
+/** 이 창이 가진 세션 key 의 탭 전부를 toWindow 의 같은 세션에 핸드오프 (터미널 포함) */
+async function returnSessionTabs(key: string, toWindow: string): Promise<void> {
+  const ctx = ctxs.get(key);
+  if (!ctx) return;
+  const picks = ctx.editors.editors.groups.flatMap((g) => g.tabs.map((t) => ({ groupId: g.id, tabId: t.id })));
+  const handoff = tabsHandoff(key, picks);
+  if (!handoff) return;
+  handoff.toSession = key;
+  const ok = await invoke('forward', { toWindow, event: 'tabs-handoff', payload: handoff });
+  if (!ok) undoTabsHandoff(key, handoff);
+}
+
+/** 서브 창이 받는 회수 요청 — 그 세션의 탭을 요청한 메인에 되돌리고 응답한다 (탭이 없어도 응답) */
+async function onSessionRecall(p: { id: string; token: string; toWindow: string }): Promise<void> {
+  await returnSessionTabs(p.id, p.toWindow);
+  void invoke('forward', { toWindow: p.toWindow, event: 'session-recalled', payload: { token: p.token } });
+}
+
+const recallWaiters = new Map<string, () => void>();
+
+/** 메인 창 — 세션이 떠나기(닫기·분리·병합) 전에 서브 창들의 그 세션 탭을 거둬들인다. 서브가 전부
+ *  응답하거나 1.5초가 지나면 진행한다 (응답 없는 서브의 탭은 native 가 미러와 함께 지운다) */
+async function recallSessionTabs(id: string): Promise<void> {
+  if (!multiWindow() || subWindow) return;
+  const subs = (await tauri!.core.invoke('list_subs')) as string[];
+  if (subs.length === 0) return;
+  const token = genSessionId();
+  let remaining = subs.length;
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(done, 1500);
+    function done(): void {
+      clearTimeout(timer);
+      recallWaiters.delete(token);
+      resolve();
+    }
+    recallWaiters.set(token, () => {
+      if (--remaining <= 0) done();
+    });
+    for (const sub of subs) {
+      void invoke('forward', { toWindow: sub, event: 'session-recall', payload: { id, token, toWindow: windowLabel } }).then((ok) => {
+        if (!ok) recallWaiters.get(token)?.();
+      });
+    }
+  });
 }
 
 // ---- 다중 창 (앱 전용)
@@ -450,9 +562,12 @@ function sessionHandoff(id: string): Extract<Handoff, { kind: 'session' }> | nul
 /** 세션 탭을 창 밖에 놓음 → 그 화면 좌표에 새 창. 출처(이 창)는 sessions-changed 로 탭을 잃고
  *  연결을 닫는다 — 새 창이 같은 id 로 재-attach 해 터미널을 이어받고, 핸드오프로 나머지를 복원 */
 export function detachSession(id: string, x: number, y: number): void {
-  const handoff = sessionHandoff(id);
-  // 화면 밖(음수) 좌표로 창이 생기지 않게 — 좌상단 근처 드롭 보정
-  if (handoff) void invoke('detach_session', { id, x: Math.max(0, x), y: Math.max(0, y), handoff });
+  // 서브 창들이 가진 이 세션의 탭을 먼저 거둬들여 함께 데려간다 (2026-09-08 개정) — 핸드오프는 그 뒤에 만든다
+  void recallSessionTabs(id).then(() => {
+    const handoff = sessionHandoff(id);
+    // 화면 밖(음수) 좌표로 창이 생기지 않게 — 좌상단 근처 드롭 보정
+    if (handoff) void invoke('detach_session', { id, x: Math.max(0, x), y: Math.max(0, y), handoff });
+  });
 }
 
 /** 세션 탭 우클릭 "Move to New Window" — 좌표가 없으니 이 창 근처에 */
@@ -472,8 +587,10 @@ export function requestSessionMove(fromWindow: string, id: string, toIndex: numb
 /** 출처 창 — 요청 시점 상태를 직렬화해 이동을 확정한다. 이미 떠난 세션(창 밖 드롭이 먼저
  *  인식돼 새 창으로 갔거나 닫힘)이면 무시 */
 function onSessionMoveRequest(p: { id: string; toWindow: string; toIndex: number }): void {
-  const handoff = sessionHandoff(p.id);
-  if (handoff) void invoke('move_session_to_window', { id: p.id, toWindow: p.toWindow, toIndex: p.toIndex, handoff });
+  void recallSessionTabs(p.id).then(() => {
+    const handoff = sessionHandoff(p.id);
+    if (handoff) void invoke('move_session_to_window', { id: p.id, toWindow: p.toWindow, toIndex: p.toIndex, handoff });
+  });
 }
 
 /** 세션 탭 우클릭 "Move to Window …" — 그 창의 끝에 붙인다 */
@@ -488,28 +605,31 @@ export function listWindows(): Promise<{ label: string; title: string }[]> {
 
 /** 이동이 실패했을 때 떼어 둔 탭·터미널을 출처 세션에 되돌린다 — 핸드오프 생성은 파괴적이라
  *  (탭 제거·터미널 핸들 해제) invoke 가 거절되면 미저장 버퍼·살아 있는 PTY 가 고아가 된다 */
-function undoTabsHandoff(fromSession: string, h: Extract<Handoff, { kind: 'tabs' }>, pick: TabsPick): void {
-  const ctx = ctxs.get(fromSession);
+function undoTabsHandoff(key: string, h: Extract<Handoff, { kind: 'tabs' }>, groupId?: number): void {
+  const ctx = ctxs.get(key);
   if (!ctx) return;
-  for (const e of h.editors) ctx.editors.acceptTab(e, pick.editorTab?.groupId);
+  for (const e of h.editors) ctx.editors.acceptTab(e, groupId);
   // 같은 세션의 터미널 — 데몬 쪽은 그대로라 로컬 핸들만 다시 잡는다 (탭도 다시 열린다)
-  ctx.terminals.adoptTerminals(h.terminals, undefined, { groupId: pick.editorTab?.groupId });
+  ctx.terminals.adoptTerminals(h.terminals, undefined, { groupId });
 }
 
 type TabsPick = { editorTab?: { groupId: number; tabId: string } };
+type TabPick = { groupId: number; tabId: string };
 
 /** 이 세션의 root — 에디터·터미널 탭 이동은 같은 root 사이에서만 (와이어 경로가 root 상대) */
 export function sessionRoot(id: string): string | null {
   return sessions.list.find((t) => t.id === id)?.root ?? null;
 }
 
-function tabsHandoff(fromSession: string, pick: TabsPick): Extract<Handoff, { kind: 'tabs' }> | null {
-  const ctx = ctxs.get(fromSession);
+/** key 세션의 탭들을 떼어 핸드오프로 — fromSession 은 데몬 세션 id (서브 창은 미러 id — 받는 쪽의
+ *  터미널 인수 adoptTerminal from 이 데몬을 가리킨다) */
+function tabsHandoff(key: string, picks: TabPick[]): Extract<Handoff, { kind: 'tabs' }> | null {
+  const ctx = ctxs.get(key);
   if (!ctx) return null;
   const editors: TabHandoff[] = [];
   const terminals: TerminalSnapshot[] = [];
-  if (pick.editorTab) {
-    const h = ctx.editors.takeTabForHandoff(pick.editorTab.groupId, pick.editorTab.tabId);
+  for (const pick of picks) {
+    const h = ctx.editors.takeTabForHandoff(pick.groupId, pick.tabId);
     if (h && h.tab.kind === 'terminal') {
       // 터미널 탭 — 탭 대신 PTY 스냅샷(버퍼)을 싣는다. 데몬 터미널은 살려 둔다 (받는 쪽이 adoptTerminal 로)
       terminals.push(...ctx.terminals.snapshot(h.tab.term));
@@ -519,7 +639,7 @@ function tabsHandoff(fromSession: string, pick: TabsPick): Extract<Handoff, { ki
     }
   }
   if (editors.length === 0 && terminals.length === 0) return null;
-  return { kind: 'tabs', fromSession, editors, terminals };
+  return { kind: 'tabs', fromSession: daemonSession(key), editors, terminals };
 }
 
 /** 활성 세션의 에디터 탭을 창 밖에 놓음 → 같은 root 의 새 세션이 새 창에 뜨고 그 탭을 받는다 */
@@ -527,14 +647,15 @@ export function detachEditorTab(groupId: number, tabId: string, x: number, y: nu
   detachTabs({ editorTab: { groupId, tabId } }, x, y);
 }
 
+/** 새 서브 창 — 이 창의 메인 소속 서브 창이 생기고 그 세션의 미러가 탭을 받는다 (toSession 은 native 가 원본 id 로) */
 function detachTabs(pick: TabsPick, x: number, y: number): void {
   const from = sessions.activeId;
   const root = sessionRoot(from);
-  if (root === null || isRemoteEmpty(root)) return;
-  const handoff = tabsHandoff(from, pick);
+  if (root === null || isRemoteEmpty(root) || !pick.editorTab) return;
+  const handoff = tabsHandoff(from, [pick.editorTab]);
   if (!handoff) return;
   void invoke('detach_tabs', { root, x: Math.max(0, x), y: Math.max(0, y), handoff }).then((ok) => {
-    if (!ok) undoTabsHandoff(from, handoff, pick);
+    if (!ok) undoTabsHandoff(from, handoff, pick.editorTab?.groupId);
   });
 }
 
@@ -560,13 +681,14 @@ export function requestTabsMove(
 
 /** 출처 창 — 탭을 떼어 핸드오프를 만들고 살아 있는 대상 창에 바로 보낸다 (native 는 중계만) */
 function onTabsMoveRequest(p: TabsMoveRequest): void {
-  const handoff = tabsHandoff(p.fromSession, p);
+  if (!p.editorTab) return;
+  const handoff = tabsHandoff(p.fromSession, [p.editorTab]);
   if (!handoff) return;
   handoff.toSession = p.toSession;
   handoff.toGroupId = p.toGroupId;
   handoff.toIndex = p.toIndex;
   void invoke('forward', { toWindow: p.toWindow, event: 'tabs-handoff', payload: handoff }).then((ok) => {
-    if (!ok) undoTabsHandoff(p.fromSession, handoff, p);
+    if (!ok) undoTabsHandoff(p.fromSession, handoff, p.editorTab?.groupId);
   });
 }
 
@@ -581,19 +703,28 @@ function takeHandoffs(): void {
 
 function flushPendingHandoffs(): void {
   for (const h of pendingHandoffs.splice(0)) applyHandoff(h);
-  // 대상 세션이 끝내 오지 않는 핸드오프는 버린다 — 큰 페이로드를 무한히 붙들지 않게 (다음 reconcile 까지 한 번만 유예)
-  if (pendingHandoffs.length > 0) {
+  // 대상 세션이 목록에 아예 없는 핸드오프는 버린다 — 큰 페이로드를 무한히 붙들지 않게. 목록에는 있는데
+  // 컨텍스트가 아직 준비 전(서브 창의 미러 생성 대기)이면 다음 reconcile 까지 더 기다린다
+  const gone = pendingHandoffs.filter((h) => !sessions.list.some((t) => t.id === handoffTarget(h)));
+  if (gone.length > 0) {
     notify('warning', 'A tab hand-off could not be applied (target session is gone)');
-    pendingHandoffs.length = 0;
+    for (const h of gone) pendingHandoffs.splice(pendingHandoffs.indexOf(h), 1);
   }
+}
+
+function handoffTarget(h: Handoff): string {
+  return h.kind === 'session' ? h.id : h.toSession ?? sessions.activeId;
 }
 
 /** 도착한 핸드오프를 세션에 적용 — 세션 통째면 그 세션(같은 id, 이미 재-attach 중)에 덮어쓰고,
  *  탭 일부면 toSession(없으면 활성)에 붙인다. 대상 컨텍스트가 아직 없으면 다음 reconcile 뒤로 미룬다 */
 function applyHandoff(h: Handoff): void {
-  const sid = h.kind === 'session' ? h.id : h.toSession ?? sessions.activeId;
+  const sid = handoffTarget(h);
   const ctx = ctxs.get(sid);
-  if (!ctx) {
+  const tab = sessions.list.find((t) => t.id === sid);
+  if (!ctx || (subWindow && h.kind === 'tabs' && tab && !tab.mirror)) {
+    // 서브 창의 자리표시 세션에 탭이 왔다 — 미러를 만들어 달라고 하고, 컨텍스트가 교체되면(reconcile) 적용
+    if (subWindow && tab && !tab.mirror && h.kind === 'tabs') void invoke('ensure_mirror', { origin: sid });
     pendingHandoffs.push(h);
     return;
   }

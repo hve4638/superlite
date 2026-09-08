@@ -10,6 +10,8 @@ type TauriWindow = {
   minimize(): Promise<void>;
   toggleMaximize(): Promise<void>;
   close(): Promise<void>;
+  destroy(): Promise<void>;
+  onCloseRequested(handler: (e: { preventDefault(): void }) => void): Promise<() => void>;
   isMaximized(): Promise<boolean>;
   onResized(handler: () => void): Promise<() => void>;
 };

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { workbench, showViewlet, type ViewletId } from '../model/workbench';
+import { workbench, showViewlet, sideBarShown, type ViewletId } from '../model/workbench';
 import { scm } from '../model/scm';
 import { remoteEnabled } from '../model/remote';
 import { terminalState } from '../model/terminal';
@@ -21,7 +21,7 @@ const items = computed<{ id: ViewletId; icon: string; label: string }[]>(() => [
 ]);
 
 function isActive(id: ViewletId): boolean {
-  return workbench.sideBarVisible && workbench.activeViewlet === id;
+  return sideBarShown() && workbench.activeViewlet === id;
 }
 </script>
 

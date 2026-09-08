@@ -1,6 +1,7 @@
 import { reactive } from '@vue/reactivity';
 import type { ThinBackend } from '../backend/types';
 import { ctx, viewOf } from './ctx';
+import { subWindow } from './window';
 
 export type ViewletId = 'explorer' | 'search' | 'scm' | 'remote' | 'terminals';
 
@@ -110,9 +111,41 @@ export function createWorkbench(backend: ThinBackend) {
 // ---- 활성 세션 전달 shim
 
 export const workbench = viewOf(() => ctx().workbench.workbench);
-export const toggleSideBar = (): void => ctx().workbench.toggleSideBar();
-export const showViewlet = (id: ViewletId, toggle = false): void =>
-  ctx().workbench.showViewlet(id, toggle);
+
+/** 서브 창의 사이드바(+액티비티바) 표시 — 창 단위 상태. 세션의 sideBarVisible 은 건드리지 않아
+ *  세션 스냅샷(핸드오프)에 실리지 않는다 — 서브 창에서 잠시 펼친 것이 메인 창의 세션에 번지지
+ *  않는다 (ticket window-secondary-no-sidebar). 기본 접힘 — VS Code auxiliary window 처럼 편집기 위주 */
+export const subShell = reactive({ sideBarVisible: false });
+
+/** 이 창에서 사이드바를 그리는가 — 메인 창은 세션 상태, 서브 창은 창 단위 상태 */
+export function sideBarShown(): boolean {
+  return subWindow ? subShell.sideBarVisible : workbench.sideBarVisible;
+}
+
+/** 액티비티바 — 메인 창은 늘 그린다 (사이드바를 접어도 남는다, VS Code 동일). 서브 창은 사이드바와 함께 */
+export function activityBarShown(): boolean {
+  return !subWindow || subShell.sideBarVisible;
+}
+
+export function toggleSideBar(): void {
+  if (subWindow) subShell.sideBarVisible = !subShell.sideBarVisible;
+  else ctx().workbench.toggleSideBar();
+}
+
+export function showViewlet(id: ViewletId, toggle = false): void {
+  if (!subWindow) {
+    ctx().workbench.showViewlet(id, toggle);
+    return;
+  }
+  // 서브 창 — 뷰렛 선택은 세션 몫이되 펼침 여부는 창 몫 (같은 토글 규칙)
+  const wb = ctx().workbench.workbench;
+  if (toggle && subShell.sideBarVisible && wb.activeViewlet === id) {
+    subShell.sideBarVisible = false;
+    return;
+  }
+  wb.activeViewlet = id;
+  subShell.sideBarVisible = true;
+}
 export const openQuickInput = (mode: 'files' | 'commands' | 'folder'): void =>
   ctx().workbench.openQuickInput(mode);
 export const closeQuickInput = (): void => ctx().workbench.closeQuickInput();

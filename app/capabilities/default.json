@@ -1,13 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "모든 창(main·분리 창 w*) 공통 권한 — core 기본 묶음 (event.listen 포함 — sessions-changed·handoff 반영에 필수) + 커스텀 타이틀바의 창 제어·드래그",
+  "description": "모든 창(main·분리 창 w*) 공통 권한 — core 기본 묶음 (event.listen 포함 — sessions-changed·handoff 반영에 필수) + 커스텀 타이틀바의 창 제어·드래그. destroy 는 서브 창이 탭을 메인에 되돌린 뒤 닫기 요청 훅(onCloseRequested)을 거치지 않고 스스로 닫는 경로 (window-secondary-no-sidebar) — 없으면 거부돼 창이 남는다 (2026-09-08 실기)",
   "windows": ["*"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
     "core:window:allow-minimize",
     "core:window:allow-toggle-maximize",
-    "core:window:allow-close"
+    "core:window:allow-close",
+    "core:window:allow-destroy"
   ]
 }

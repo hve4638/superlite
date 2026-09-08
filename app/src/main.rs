@@ -16,6 +16,15 @@
 //! 병합 모두 같은 규칙, 2026-09-05 개정). 창의 X 는 그 창의 세션만 정리한다. 마지막 창이
 //! 닫히면 앱 종료다 (Tauri 기본 — 창이 모두 닫히면 종료).
 //!
+//! 메인 창과 서브 창 (2026-09-08 개정, decision/workspace-session-tabs.md): 첫 창과 세션 탭
+//! 분리로 생긴 창은 메인 창(대등·독립). 에디터·터미널 탭 분리(detach_tabs)로 생긴 창은 서브 창 —
+//! 소속 메인(groups.subs)이 있고, 세션 탭 스트립은 메인 것을 비춘다 (infos_for 가 메인 목록을
+//! 준다). 활성 세션은 메인·서브가 공유하며 native 가 메인 창 단위로 들고 방송한다
+//! (set_active_session → session-active). 서브 창의 세션은 전부 미러 — 같은 root 의 별도 세션
+//! (groups.mirrors: 미러 id → 원본 id, 데몬은 같은 id 의 두 연결을 허용하지 않아 별도 id 가
+//! 필요하다). 미러는 탭이 처음 오는 세션에만 만든다 (ensure_mirror). 메인 창이 닫히면 서브 창도
+//! 닫히고(drop_window), 서브 창의 X·탭 0 종료는 front 가 결정한다 (탭을 메인에 되돌린 뒤 destroy).
+//!
 //! 탭 이동의 front 상태(에디터 문서·터미널 버퍼 등)는 JSON 핸드오프로 나른다 — 출처 창이
 //! 만들고 native 는 내용을 모른 채 대상 창에 전달만 한다 (아직 로드 전인 새 창은 부팅 후
 //! take_handoff 로 가져간다).
@@ -48,6 +57,50 @@ type Sessions = Arc<Mutex<Vec<(String, Option<PathBuf>)>>>;
 /// 첫 창의 label — 이후 창은 w1, w2 … (new_window_label)
 const MAIN_WINDOW: &str = "main";
 
+/// 메인 창과 서브 창의 관계 (2026-09-08 개정). 어느 맵에도 없는 창은 메인 창이다
+#[derive(Default)]
+struct Groups {
+    /// 서브 창 label → 소속 메인 창 label
+    subs: HashMap<String, String>,
+    /// 미러 세션 id → 원본(메인 창) 세션 id. 서브 창 소속 세션은 전부 미러다
+    mirrors: HashMap<String, String>,
+    /// 메인 창 label → 활성 세션 id (메인·서브 공유). front 가 set_active_session 으로 알린다
+    active: HashMap<String, String>,
+}
+
+impl Groups {
+    /// 창의 메인 창 — 서브면 소속 메인, 아니면 자신
+    fn main_of<'a>(&'a self, label: &'a str) -> &'a str {
+        self.subs.get(label).map(String::as_str).unwrap_or(label)
+    }
+    fn subs_of(&self, main: &str) -> Vec<String> {
+        self.subs.iter().filter(|(_, m)| m.as_str() == main).map(|(s, _)| s.clone()).collect()
+    }
+    /// 서브 창 label 의, 원본 세션 origin 에 대한 미러 id
+    fn mirror_in(&self, windows: &HashMap<String, String>, label: &str, origin: &str) -> Option<String> {
+        self.mirrors
+            .iter()
+            .find(|(m, o)| o.as_str() == origin && owns(windows, m, label))
+            .map(|(m, _)| m.clone())
+    }
+}
+
+/// 세션의 미러들을 레지스트리에서 지운다 — 세션이 메인 창을 떠날 때(닫기·분리·병합). 서브 창의
+/// 탭은 front 가 그 전에 되돌려 받는다 (session-recall). 세 락을 잡고 부른다
+fn drop_mirrors_of(
+    list: &mut Vec<(String, Option<PathBuf>)>,
+    windows: &mut HashMap<String, String>,
+    groups: &mut Groups,
+    origin: &str,
+) {
+    let gone: Vec<String> = groups.mirrors.iter().filter(|(_, o)| o.as_str() == origin).map(|(m, _)| m.clone()).collect();
+    for m in &gone {
+        groups.mirrors.remove(m);
+        windows.remove(m);
+    }
+    list.retain(|(id, _)| !gone.contains(id));
+}
+
 struct AppState {
     ws_url: String,
     sessions: Sessions,
@@ -59,6 +112,8 @@ struct AppState {
     handoffs: Mutex<HashMap<String, Vec<serde_json::Value>>>,
     /// 마지막으로 포커스된 창 — 두 번째 실행(argv)·OS 드롭처럼 창을 지목하지 않는 열기의 대상
     focused: Mutex<String>,
+    /// 메인·서브 창 묶음. 락 순서는 sessions → windows → groups
+    groups: Mutex<Groups>,
     next_window: AtomicUsize,
     /// 최근 폴더·고정 그룹 — state.json 의 메모리 사본. 락 순서는 sessions → windows → persisted
     persisted: Mutex<Persisted>,
@@ -193,6 +248,9 @@ struct SessionInfo {
     name: String,
     /// null = 루트 없는 빈 세션 — 표시 라벨·시작 페이지 여부는 front 가 이걸로 판단한다
     root: Option<String>,
+    /// 서브 창 목록 전용 — 이 창에 있는 그 세션의 미러 id (없으면 미러 없음 = 자리표시 컨텍스트)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mirror: Option<String>,
 }
 
 /// 창 목록 사영 — 탭 우클릭 "Move to Window …" 메뉴용 (title = 그 창의 세션 이름들)
@@ -213,16 +271,27 @@ fn info_of(id: &str, root: Option<&std::path::Path>) -> SessionInfo {
             })
             .unwrap_or_default(),
         root: root.map(|r| r.to_string_lossy().into_owned()),
+        mirror: None,
     }
 }
 
-/// 한 창의 세션 탭 목록 — 레지스트리 순서 중 그 창 소속만
+/// 한 창의 세션 탭 목록 — 레지스트리 순서 중 메인 창 소속만. 서브 창은 소속 메인의 목록에
+/// 이 창의 미러 id 를 얹어 준다 (스트립은 메인을 비추고 연결은 미러로)
 fn infos_for(state: &AppState, label: &str) -> Vec<SessionInfo> {
     let list = state.sessions.lock().unwrap();
     let windows = state.windows.lock().unwrap();
+    let groups = state.groups.lock().unwrap();
+    let main = groups.main_of(label);
+    let is_sub = main != label;
     list.iter()
-        .filter(|(id, _)| owns(&windows, id, label))
-        .map(|(id, root)| info_of(id, root.as_deref()))
+        .filter(|(id, _)| owns(&windows, id, main))
+        .map(|(id, root)| {
+            let mut info = info_of(id, root.as_deref());
+            if is_sub {
+                info.mirror = groups.mirror_in(&windows, label, id);
+            }
+            info
+        })
         .collect()
 }
 
@@ -245,6 +314,10 @@ fn emit_sessions(app: &tauri::AppHandle, state: &AppState) {
 /// 남은 정리(핸드오프·focused)는 Destroyed → drop_window. 호출자가 sessions·windows 락을 잡지
 /// 않은 상태여야 한다
 fn close_if_empty(app: &tauri::AppHandle, state: &AppState, label: &str) {
+    // 서브 창의 수명은 front 가 정한다 (미러 0 개여도 닫지 않는다)
+    if state.groups.lock().unwrap().subs.contains_key(label) {
+        return;
+    }
     if state.windows.lock().unwrap().values().any(|w| w == label) {
         return;
     }
@@ -256,11 +329,23 @@ fn close_if_empty(app: &tauri::AppHandle, state: &AppState, label: &str) {
 /// 창 소속 제거 — 창 X(Destroyed) 가 그 창의 세션들을 레지스트리에서 뺀다 (재-attach 차단 →
 /// 데몬 grace 후 회수). 대기 핸드오프도 버린다
 fn drop_window(app: &tauri::AppHandle, state: &AppState, label: &str) {
-    {
+    let subs = {
         let mut list = state.sessions.lock().unwrap();
         let mut windows = state.windows.lock().unwrap();
+        let mut groups = state.groups.lock().unwrap();
         list.retain(|(id, _)| !owns(&windows, id, label));
         windows.retain(|_, w| w != label);
+        groups.mirrors.retain(|m, _| windows.contains_key(m));
+        groups.subs.remove(label);
+        groups.active.remove(label);
+        groups.subs_of(label)
+    };
+    // 메인 창이 닫히면 서브 창도 함께 — destroy 로 (close 는 서브 front 의 onCloseRequested 가
+    // 막고 탭을 사라진 메인에 되돌리려 한다)
+    for sub in subs {
+        if let Some(w) = app.get_webview_window(&sub) {
+            let _ = w.destroy();
+        }
     }
     state.handoffs.lock().unwrap().remove(label);
     // 죽은 창이 focused 로 남으면 두 번째 실행이 어느 창에도 안 보이는 세션을 만든다 — 살아 있는
@@ -296,6 +381,21 @@ fn push_session(
 /// 세션 id 가 창 label 소속인가
 fn owns(windows: &HashMap<String, String>, id: &str, label: &str) -> bool {
     windows.get(id).map(String::as_str) == Some(label)
+}
+
+/// 창의 메인 창 label — "이 창에 세션 추가" 를 뜻하는 진입로(폴더 열기·+·두 번째 실행·OS 드롭·
+/// 그룹 열기)가 서브 창에서 불리면 소속 메인에 추가된다. 락을 잡지 않은 상태에서 부른다
+fn main_label(state: &AppState, label: &str) -> String {
+    state.groups.lock().unwrap().main_of(label).to_string()
+}
+
+/// 메인·서브 창 묶음 전체에 방송 (session-active)
+fn emit_group(app: &tauri::AppHandle, state: &AppState, main: &str, event: &str, payload: impl serde::Serialize + Clone) {
+    let subs = state.groups.lock().unwrap().subs_of(main);
+    let _ = app.emit_to(main, event, payload.clone());
+    for sub in subs {
+        let _ = app.emit_to(sub.as_str(), event, payload.clone());
+    }
 }
 
 /// 창 소속 엔트리의 레지스트리 인덱스 — 레지스트리 순서대로
@@ -338,6 +438,11 @@ fn build_window(
     //      상태에서 로딩을 미뤄 오히려 흰 화면이 길어지는 역효과가 실측됐다.
     //      흰 플래시는 창 배경색 + index.html 인라인 배경으로 막는다.
     let boot = serde_json::to_string(&infos_for(state, label)).expect("세션 목록 직렬화는 실패할 수 없다");
+    let (owner, active) = {
+        let groups = state.groups.lock().unwrap();
+        let main = groups.main_of(label);
+        (groups.subs.get(label).cloned(), groups.active.get(main).cloned())
+    };
     let mut b = tauri::WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::App("index.html".into()))
         // 창 제목은 productName — 채널 overlay(tauri.dev.conf.json)가 "Superlite-Dev" 로 가른다
         .title(app.package_info().name.clone())
@@ -350,8 +455,10 @@ fn build_window(
         // 첫 페인트 전 흰 플래시 방지 — 테마 배경(--vscode-editor-background)과 일치
         .background_color(tauri::window::Color(0x1f, 0x1f, 0x1f, 0xff))
         .initialization_script(format!(
-            "window.__SUPERLITE_WS__ = '{}'; window.__SUPERLITE_SESSIONS__ = {boot}; window.__SUPERLITE_OPEN_ROOT__ = {open_root}; window.__SUPERLITE_WINDOW__ = {win};",
+            "window.__SUPERLITE_WS__ = '{}'; window.__SUPERLITE_SESSIONS__ = {boot}; window.__SUPERLITE_OPEN_ROOT__ = {open_root}; window.__SUPERLITE_WINDOW__ = {win}; window.__SUPERLITE_OWNER__ = {owner}; window.__SUPERLITE_ACTIVE__ = {active};",
             state.ws_url,
+            owner = serde_json::to_string(&owner).expect("문자열 직렬화는 실패할 수 없다"),
+            active = serde_json::to_string(&active).expect("문자열 직렬화는 실패할 수 없다"),
             // JSON 문자열로 — 경로 이스케이프 안전 (드라이브 문자엔 특수문자 없지만 관례)
             open_root = serde_json::to_string(&default_open_root()).expect("문자열 직렬화는 실패할 수 없다"),
             win = serde_json::to_string(label).expect("문자열 직렬화는 실패할 수 없다"),
@@ -415,6 +522,7 @@ fn is_empty_root(root: Option<&std::path::Path>) -> bool {
 /// 에디터·터미널 탭 분리(detach_tabs)는 같은 root 의 두 번째 세션을 의도적으로 만들므로
 /// 이 함수를 타지 않는다.
 fn open_workspace(app: &tauri::AppHandle, state: &AppState, label: &str, root: PathBuf, replace: Option<&str>) {
+    let label = &main_label(state, label);
     // 이미 열려 있어 포커스만 옮기는 경우도 "최근 연 폴더"다
     remember_recent(state, &root);
     {
@@ -547,10 +655,11 @@ fn parse_root(path: &str) -> Result<PathBuf, String> {
 #[tauri::command]
 fn open_empty_session(app: tauri::AppHandle, window: tauri::WebviewWindow) {
     let state = app.state::<AppState>();
+    let label = main_label(&state, window.label());
     {
         let mut list = state.sessions.lock().unwrap();
         let mut windows = state.windows.lock().unwrap();
-        push_session(&mut list, &mut windows, window.label(), None);
+        push_session(&mut list, &mut windows, &label, None);
     }
     emit_sessions(&app, &state);
 }
@@ -625,11 +734,14 @@ async fn close_session(app: tauri::AppHandle, window: tauri::WebviewWindow, id: 
     }
     let label = {
         let mut list = state.sessions.lock().unwrap();
+        let mut windows = state.windows.lock().unwrap();
+        let mut groups = state.groups.lock().unwrap();
         let Some(i) = list.iter().position(|(sid, _)| sid == &id) else {
             return;
         };
         list.remove(i);
-        state.windows.lock().unwrap().remove(&id)
+        drop_mirrors_of(&mut list, &mut windows, &mut groups, &id);
+        windows.remove(&id)
     };
     emit_sessions(&app, &state);
     if let Some(label) = label {
@@ -676,8 +788,12 @@ async fn detach_session(
     owned_by(&state, &id, &from)?;
     let label = new_window_label(&state);
     {
-        let _list = state.sessions.lock().unwrap();
-        state.windows.lock().unwrap().insert(id.clone(), label.clone());
+        let mut list = state.sessions.lock().unwrap();
+        let mut windows = state.windows.lock().unwrap();
+        let mut groups = state.groups.lock().unwrap();
+        // 서브 창의 탭은 출처 창이 이미 되돌려 받았다 (session-recall) — 미러만 지운다
+        drop_mirrors_of(&mut list, &mut windows, &mut groups, &id);
+        windows.insert(id.clone(), label.clone());
     }
     deliver_handoff(&app, &state, &label, handoff);
     match build_window(&app, &state, &label, Some((x, y))) {
@@ -721,6 +837,10 @@ async fn move_session_to_window(
     let from = {
         let mut list = state.sessions.lock().unwrap();
         let mut windows = state.windows.lock().unwrap();
+        let mut groups = state.groups.lock().unwrap();
+        if groups.subs.contains_key(&to_window) {
+            return Err("서브 창으로는 세션을 옮길 수 없다".into());
+        }
         let Some(from) = windows.get(&id).cloned() else {
             return Err("세션 없음".into());
         };
@@ -731,6 +851,7 @@ async fn move_session_to_window(
             return Err("세션 없음".into());
         };
         let item = list.remove(i);
+        drop_mirrors_of(&mut list, &mut windows, &mut groups, &id);
         windows.insert(id.clone(), to_window.clone());
         // 대상 창 소속 엔트리들 사이의 to_index 자리에 — 넘치면 그 창의 마지막 뒤 (없으면 끝)
         let slots = slots_of(&list, &windows, &to_window);
@@ -750,10 +871,13 @@ async fn move_session_to_window(
     Ok(())
 }
 
-/// 에디터·터미널 탭을 새 창으로 분리 — 같은 root 의 새 세션(새 id)을 새 창에 만든다
-/// (open_workspace 의 "이미 열림 → 포커스" 규칙을 의도적으로 건너뛴다 — 같은 워크스페이스의
-/// 두 번째 세션이 목적). 핸드오프에 toSession 을 채워 새 창이 어느 세션에 붙일지 알게 한다.
-/// 터미널은 그 새 창이 adoptTerminal(와이어 v10)로 출처 세션에서 가져간다
+/// 에디터·터미널 탭을 새 서브 창으로 분리 (2026-09-08 개정) — 호출 창의 메인 창 소속 서브 창을
+/// 만들고, 출처 세션(핸드오프 fromSession — 메인 세션 또는 미러)의 원본에 대한 미러 세션(같은
+/// root, 새 id)을 그 창에 만든다. open_workspace 의 "이미 열림 → 포커스" 규칙을 의도적으로
+/// 건너뛴다 (같은 워크스페이스의 두 번째 세션이 목적). 핸드오프 toSession 은 원본 id — 서브 창
+/// front 는 세션을 원본 id 로 키잡는다. 터미널은 새 창이 adoptTerminal(와이어 v10)로 출처 세션
+/// (fromSession, 데몬 세션 id)에서 가져간다. root 인자는 출처가 아는 root — 레지스트리의
+/// 원본 root 가 우선이다
 #[tauri::command]
 async fn detach_tabs(
     app: tauri::AppHandle,
@@ -768,22 +892,37 @@ async fn detach_tabs(
     let Some(obj) = handoff.as_object_mut() else {
         return Err("핸드오프는 객체여야 한다".into());
     };
+    let from_session = obj.get("fromSession").and_then(|v| v.as_str()).unwrap_or_default().to_string();
     let state = app.state::<AppState>();
+    let main = main_label(&state, window.label());
     let label = new_window_label(&state);
-    let session = {
+    let (origin, session) = {
         let mut list = state.sessions.lock().unwrap();
         let mut windows = state.windows.lock().unwrap();
-        push_session(&mut list, &mut windows, &label, Some(root))
+        let mut groups = state.groups.lock().unwrap();
+        let origin = groups.mirrors.get(&from_session).cloned().unwrap_or(from_session);
+        if !owns(&windows, &origin, &main) {
+            return Err("이 창 묶음의 세션이 아니다".into());
+        }
+        let root = list.iter().find(|(id, _)| id == &origin).and_then(|(_, r)| r.clone()).unwrap_or(root);
+        groups.subs.insert(label.clone(), main.clone());
+        let session = push_session(&mut list, &mut windows, &label, Some(root));
+        groups.mirrors.insert(session.clone(), origin.clone());
+        (origin, session)
     };
-    obj.insert("toSession".into(), serde_json::Value::String(session.clone()));
+    obj.insert("toSession".into(), serde_json::Value::String(origin));
     deliver_handoff(&app, &state, &label, handoff);
     match build_window(&app, &state, &label, Some((x, y))) {
         Err(e) => {
-            // 롤백 — 생기지 않은 창의 세션·핸드오프를 지운다 (front 는 실패를 받아 탭을 되돌린다)
+            // 롤백 — 생기지 않은 창의 세션·미러·핸드오프를 지운다 (front 는 실패를 받아 탭을 되돌린다)
             {
                 let mut list = state.sessions.lock().unwrap();
+                let mut windows = state.windows.lock().unwrap();
+                let mut groups = state.groups.lock().unwrap();
                 list.retain(|(sid, _)| sid != &session);
-                state.windows.lock().unwrap().remove(&session);
+                windows.remove(&session);
+                groups.mirrors.remove(&session);
+                groups.subs.remove(&label);
             }
             state.handoffs.lock().unwrap().remove(&label);
             return Err(format!("창 생성 실패: {e}"));
@@ -800,14 +939,75 @@ async fn detach_tabs(
     Ok(())
 }
 
+/// 서브 창이 아직 미러가 없는 세션(원본 id)에 탭을 받게 될 때 미러를 만든다 — 다른 창의 탭바
+/// 드롭이 자리표시 컨텍스트에 떨어진 경우. 이미 있으면 그 id. 방송으로 front 가 컨텍스트를 교체한다
+#[tauri::command]
+fn ensure_mirror(app: tauri::AppHandle, window: tauri::WebviewWindow, origin: String) -> Result<String, String> {
+    let state = app.state::<AppState>();
+    let label = window.label().to_string();
+    let (id, created) = {
+        let mut list = state.sessions.lock().unwrap();
+        let mut windows = state.windows.lock().unwrap();
+        let mut groups = state.groups.lock().unwrap();
+        let Some(main) = groups.subs.get(&label).cloned() else {
+            return Err("서브 창이 아니다".into());
+        };
+        if !owns(&windows, &origin, &main) {
+            return Err("이 창 묶음의 세션이 아니다".into());
+        }
+        if let Some(m) = groups.mirror_in(&windows, &label, &origin) {
+            (m, false)
+        } else {
+            let root = list.iter().find(|(id, _)| id == &origin).and_then(|(_, r)| r.clone());
+            if root.is_none() {
+                return Err("빈 세션에는 탭을 둘 수 없다".into());
+            }
+            let session = push_session(&mut list, &mut windows, &label, root);
+            groups.mirrors.insert(session.clone(), origin);
+            (session, true)
+        }
+    };
+    if created {
+        emit_sessions(&app, &state);
+    }
+    Ok(id)
+}
+
+/// 활성 세션 전환 알림 — 메인·서브 창이 활성 세션을 공유한다 (2026-09-08 개정 — 종전엔 native 가
+/// 활성을 몰랐다). 호출 창의 메인 창 단위로 기억하고 묶음 전체에 session-active 로 방송한다
+/// (호출 창 포함 — front 는 같은 id 면 무동작). id 는 메인 세션 id (서브 창 스트립도 원본 id 를 쓴다)
+#[tauri::command]
+fn set_active_session(app: tauri::AppHandle, window: tauri::WebviewWindow, id: String) {
+    let state = app.state::<AppState>();
+    let main = main_label(&state, window.label());
+    {
+        let windows = state.windows.lock().unwrap();
+        if !owns(&windows, &id, &main) {
+            return;
+        }
+        state.groups.lock().unwrap().active.insert(main.clone(), id.clone());
+    }
+    emit_group(&app, &state, &main, "session-active", id);
+}
+
+/// 호출 창의 메인 창에 딸린 서브 창 label 들 — 메인 창이 세션을 떠나보내기 전 탭 회수(session-recall)
+/// 대상. 서브 창에서 부르면 형제들
+#[tauri::command]
+fn list_subs(state: tauri::State<AppState>, window: tauri::WebviewWindow) -> Vec<String> {
+    let groups = state.groups.lock().unwrap();
+    groups.subs_of(groups.main_of(window.label()))
+}
+
 /// 창 간 메시지 중계 — 대상 창의 드롭이 출처 창에 이동을 요청하거나(…-move-request), 출처
-/// 창이 살아 있는 대상 창에 에디터·터미널 탭 핸드오프를 보낼 때(tabs-handoff) 쓴다.
+/// 창이 살아 있는 대상 창에 에디터·터미널 탭 핸드오프를 보낼 때(tabs-handoff), 메인 창이 서브
+/// 창에 세션의 탭 회수를 요청하고(session-recall) 서브가 응답할 때(session-recalled) 쓴다.
 /// native 는 payload 내용을 모른다
 #[tauri::command]
 fn forward(app: tauri::AppHandle, to_window: String, event: String, payload: serde_json::Value) -> Result<(), String> {
     // 창 간 중계 전용 이벤트만 — 웹뷰가 native 전용 이벤트(sessions-changed 등)를 위조해 다른
     // 창에 보내는 통로가 되지 않게
-    const ALLOWED: [&str; 3] = ["session-move-request", "tabs-move-request", "tabs-handoff"];
+    const ALLOWED: [&str; 5] =
+        ["session-move-request", "tabs-move-request", "tabs-handoff", "session-recall", "session-recalled"];
     if !ALLOWED.contains(&event.as_str()) {
         return Err("허용되지 않은 이벤트".into());
     }
@@ -824,11 +1024,12 @@ fn take_handoff(state: tauri::State<AppState>, window: tauri::WebviewWindow) -> 
     state.handoffs.lock().unwrap().remove(window.label()).unwrap_or_default()
 }
 
-/// 창 목록 — 탭 우클릭 "Move to Window …" 메뉴가 자기 외 창을 나열한다. title 은 그 창의
-/// 세션 이름들 (빈 세션은 Welcome)
+/// 메인 창 목록 — 탭 우클릭 "Move to Window …" 메뉴가 자기 외 창을 나열한다. title 은 그 창의
+/// 세션 이름들 (빈 세션은 Welcome). 서브 창은 세션을 받을 수 없어 뺀다
 #[tauri::command]
 fn list_windows(app: tauri::AppHandle, state: tauri::State<AppState>) -> Vec<WindowInfo> {
-    let mut labels: Vec<String> = app.webview_windows().keys().cloned().collect();
+    let subs: Vec<String> = state.groups.lock().unwrap().subs.keys().cloned().collect();
+    let mut labels: Vec<String> = app.webview_windows().keys().filter(|l| !subs.contains(l)).cloned().collect();
     labels.sort();
     labels
         .into_iter()
@@ -955,7 +1156,7 @@ struct GroupSpec {
 /// 그룹 열기 본체 — open_group·open_groups 가 공유. 반환은 그룹이 열린 창 label (from 재사용 또는 새 창).
 /// 방송(emit_sessions)은 호출자가 한다 — open_groups 는 여러 그룹을 등록한 뒤 한 번만 방송한다
 fn open_group_in(app: &tauri::AppHandle, state: &AppState, from: &str, roots: &[String]) -> Result<String, String> {
-    let from = from.to_string();
+    let from = main_label(state, from);
     let parsed: Vec<PathBuf> = roots.iter().filter_map(|r| parse_root(r).ok()).collect();
     if parsed.is_empty() {
         return Err("열 수 있는 폴더가 없다".into());
@@ -1203,7 +1404,8 @@ fn open_second_instance(app: &tauri::AppHandle, argv: Vec<String>, cwd: String) 
         None => PathBuf::from(&cwd),
     };
     let state = app.state::<AppState>();
-    let label = state.focused.lock().unwrap().clone();
+    // 포커스가 서브 창이면 세션은 소속 메인에 붙는다 — 앞으로 가져오는 창도 메인
+    let label = main_label(&state, &state.focused.lock().unwrap().clone());
     // plain: Windows verbatim 루트는 '/' 와이어 경로·자식 cwd 를 깨뜨린다 (common 참조)
     // 경로 오류는 로그만 — 두 번째 실행의 잘못된 인자가 기존 앱을 죽이면 안 된다
     match root.canonicalize() {
@@ -1262,6 +1464,9 @@ fn main() {
             detach_session,
             move_session_to_window,
             detach_tabs,
+            ensure_mirror,
+            set_active_session,
+            list_subs,
             forward,
             take_handoff,
             list_windows,
@@ -1275,7 +1480,7 @@ fn main() {
             local_write,
             local_mkdir
         ])
-        // 창 닫힘(X·close_if_empty) = 그 창의 세션만 정리 (다른 창은 영향 없음). 포커스 추적은 두 번째 실행의 대상 창
+        // 창 닫힘(X·close_if_empty) = 그 창의 세션만 정리 (메인 창이면 서브 창도 함께 닫는다). 포커스 추적은 두 번째 실행의 대상 창
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::Destroyed => {
                 let app = window.app_handle();
@@ -1318,6 +1523,7 @@ fn main() {
                 windows: Mutex::default(),
                 handoffs: Mutex::default(),
                 focused: Mutex::new(MAIN_WINDOW.to_string()),
+                groups: Mutex::default(),
                 next_window: AtomicUsize::new(0),
                 persisted: Mutex::new(persisted),
                 state_file,

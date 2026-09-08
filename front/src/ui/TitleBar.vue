@@ -11,6 +11,7 @@ import {
   toggleMaximizeWindow,
   closeWindow,
   windowLabel,
+  subWindow,
 } from '../model/window';
 import {
   sessions,
@@ -33,7 +34,6 @@ import {
   type SessionTab,
   loading,
 } from '../model/sessions';
-import { pointerOutside } from './dndUtil';
 
 // 같은 이름(루트 basename)의 세션이 한 창에 여럿이면, rename 된 적 없는 탭들의 라벨을 전체 경로로
 // 바꿔 구분한다 (2026-09-07 사용자 결정). 세그먼트가 많으면 가운데를 줄인다 (/a/.../c/d). 중복이
@@ -93,8 +93,9 @@ const foreign = ref(false);
 const TAB_GRAB_Y = 17;
 const dragging = computed(() => dragId.value !== null || foreign.value);
 
+// 서브 창의 스트립은 메인 것을 비추는 전환 전용 — 세션을 받지도(드롭) 내보내지도(드래그) 않는다
 function isForeign(e: DragEvent): boolean {
-  return dragId.value === null && multiWindow() && (e.dataTransfer?.types.includes(DND_SESSION) ?? false);
+  return dragId.value === null && multiWindow() && !subWindow && (e.dataTransfer?.types.includes(DND_SESSION) ?? false);
 }
 
 function onTabDragStart(e: DragEvent, tab: SessionTab): void {
@@ -143,11 +144,25 @@ function onStripDrop(e: DragEvent): void {
   endTabDrag();
 }
 
-// 출처 창의 dragend — 아무 드롭 존도 받지 않았고(dropEffect none) 포인터가 이 창 밖이면
-// 창 밖 드롭 = 새 창으로 분리. 다른 창의 스트립이 받았으면 그쪽이 이동을 요청해 온다
+/** 타이틀바 루트 — 세션 탭 분리 판정의 기준 영역 */
+const titlebarEl = ref<HTMLElement | null>(null);
+
+// 출처 창의 dragend — 아무 드롭 존도 받지 않았고(dropEffect none) 포인터가 타이틀바(헤더) 밖이면
+// 새 창으로 분리 (ticket session-tab-detach-header: 창 밖까지 갈 필요 없이 에디터 영역 위에
+// 놓아도 분리 — 창 밖은 헤더 밖에 포함된다). 다른 창의 스트립이 받았으면 dropEffect 가
+// move 라 여기 오지 않고 그쪽이 이동을 요청해 온다.
+// WHY: HTML5 DnD 는 "밖에 놓았다"는 이벤트가 없다 — dragend 좌표로 판정한다. Esc 취소도
+//      dragend 좌표가 마지막 포인터 위치라 헤더 밖이면 분리된다 (드래그 중 키 이벤트는 페이지에
+//      오지 않아 구분 불가) — 헤더 안으로 되돌려 놓으면 취소.
+function pointerOutsideHeader(e: DragEvent): boolean {
+  const r = titlebarEl.value?.getBoundingClientRect();
+  if (!r) return false;
+  return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+}
+
 function onTabDragEnd(e: DragEvent): void {
   const id = dragId.value;
-  if (id !== null && multiWindow() && e.dataTransfer?.dropEffect === 'none' && pointerOutside(e)) {
+  if (id !== null && multiWindow() && e.dataTransfer?.dropEffect === 'none' && pointerOutsideHeader(e)) {
     // 새 창의 탭이 포인터 아래 오도록 살짝 왼쪽 위로
     detachSession(id, e.screenX - 100, e.screenY - TAB_GRAB_Y);
   }
@@ -170,7 +185,7 @@ function onStripDragLeave(e: DragEvent): void {
 
 /** 세션 탭 우클릭 — 창 이동 메뉴 (앱 전용). 창 간 DnD 가 안 되는 환경의 대체 경로이기도 하다 */
 function onTabContextMenu(e: MouseEvent, tab: SessionTab): void {
-  if (!multiWindow()) return; // 웹은 브라우저 기본 메뉴 그대로
+  if (!multiWindow() || subWindow) return; // 웹은 브라우저 기본 메뉴 그대로, 서브 창은 이동 없음
   e.preventDefault();
   void listWindows().then((wins) => {
     const others = wins.filter((w) => w.label !== windowLabel);
@@ -213,7 +228,7 @@ function onNewTabDragStart(e: DragEvent, kind: 'new-folder' | 'new-terminal'): v
 
 <template>
   <!-- data-tauri-drag-region 은 이벤트 target 에만 적용된다 — 드래그할 빈 영역마다 직접 붙인다 -->
-  <div class="titlebar" data-tauri-drag-region>
+  <div ref="titlebarEl" class="titlebar" data-tauri-drag-region>
     <!-- 좌측정렬 워크스페이스 세션 탭 (decision/workspace-session-tabs.md, Windows Terminal 참조)
          — 탭 밖 여백은 드래그 영역. 웹에서도 그린다 (mock 만 제외) -->
     <div class="titlebar-tabs" data-tauri-drag-region>
@@ -234,14 +249,14 @@ function onNewTabDragStart(e: DragEvent, kind: 'new-folder' | 'new-terminal'): v
             'drop-after': dragging && dropIndex === i + 1 && i === sessions.list.length - 1,
           }"
           :title="tab.root ?? undefined"
-          :draggable="renamingId !== tab.id"
+          :draggable="renamingId !== tab.id && !subWindow"
           @dragstart="onTabDragStart($event, tab)"
           @dragend="onTabDragEnd($event)"
           @dragover="onTabDragOver($event, i)"
           @click="activateSession(tab.id)"
           @contextmenu="onTabContextMenu($event, tab)"
-          @dblclick="startRename(tab)"
-          @mousedown.middle.prevent="closeSession(tab.id)"
+          @dblclick="subWindow || startRename(tab)"
+          @mousedown.middle.prevent="subWindow || closeSession(tab.id)"
         >
           <input
             v-if="renamingId === tab.id"
@@ -262,7 +277,9 @@ function onNewTabDragStart(e: DragEvent, kind: 'new-folder' | 'new-terminal'): v
           <!-- 로딩 스피너 — 초기 로드(ctx.init) 중, X 바로 왼쪽. 예비 파이프 접속은 상태바 단계가
                안 보이므로 로드 완료의 유일한 시각 신호다 -->
           <span v-if="loading.has(tab.id)" class="session-loading codicon codicon-loading codicon-modifier-spin" />
+          <!-- 서브 창은 전환만 — 닫기·+·이름·이동은 메인 창에서 (2026-09-08 사용자 결정) -->
           <span
+            v-if="!subWindow"
             class="session-close codicon codicon-close"
             @click.stop="closeSession(tab.id)"
           />
@@ -270,11 +287,13 @@ function onNewTabDragStart(e: DragEvent, kind: 'new-folder' | 'new-terminal'): v
         <!-- 탭 끝의 + = 빈 세션 탭 (시작 페이지에서 폴더 열기로 잇는다),
              옆의 v = 열기 방식 드롭다운 (Windows Terminal 구성) -->
         <span
+          v-if="!subWindow"
           class="session-add codicon codicon-add"
           title="New Session"
           @click="addEmptySession()"
         />
         <span
+          v-if="!subWindow"
           class="session-add session-add-menu codicon codicon-chevron-down"
           title="Open Options"
           @click="openAddMenu($event)"

@@ -25,6 +25,7 @@ import {
   sessions,
   type SessionTab,
 } from './sessions';
+import { bootActiveSession, subWindow } from './window';
 
 // WHY: 백엔드 구현체 선택이 일어나는 유일한 지점 (itir boundary assembly) — 세션 관리자에
 //      환경(kind·연결 생성기)을 주입하고 부팅 세션들을 등록한다.
@@ -62,14 +63,17 @@ const backendOf = (t: { id: string; root: string | null }): ThinBackend =>
   t.root === null ? new EmptyBackend() : new WsBackend(webWsUrl(t.root), t.id);
 
 if (injected) {
-  const appBackendOf = (t: { id: string; root: string | null }): ThinBackend =>
-    t.root === null ? new EmptyBackend() : new WsBackend(injected, t.id);
+  // 서브 창은 미러 세션 id 로 붙는다 (데몬은 같은 id 의 두 연결을 허용하지 않는다). 미러가 아직 없는
+  // 세션은 무연결 자리표시 — 탭이 오면 native ensure_mirror 로 미러가 생기고 컨텍스트가 교체된다
+  const appBackendOf = (t: { id: string; root: string | null; mirror?: string }): ThinBackend =>
+    t.root === null || (subWindow && !t.mirror) ? new EmptyBackend() : new WsBackend(injected, t.mirror ?? t.id);
   configureSessions({ kind: 'app', backendFor: appBackendOf, onRequest: handleRequest });
   // 임베드 nvim (편집기 vim 모드) — relay 의 /nvim, /ws 와 같은 주소·토큰
   configureNvim(injected.replace(/\/ws(\?|$)/, '/nvim$1'));
   // 부팅 세션들 — native 가 initialization_script 로 목록을 주입한다 (복원이면 여럿).
-  // 마지막 탭이 활성이 된다
+  // 마지막 탭이 활성이 되고, 묶음의 활성 세션이 주입됐으면(서브 창) 그 탭으로
   for (const t of injectedSessions ?? []) bootSession(t, appBackendOf(t));
+  if (bootActiveSession !== null) activateSession(bootActiveSession, false);
 } else if (webBackend) {
   configureSessions({ kind: 'web', backendFor: backendOf, onRequest: handleRequest });
   configureNvim(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/nvim${tkn !== null ? `?tkn=${tkn}` : ''}`);
