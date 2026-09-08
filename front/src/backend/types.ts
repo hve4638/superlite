@@ -177,6 +177,8 @@ export interface ThinBackend {
   createDir(path: string): Promise<void>;
   /** 이름 변경/이동 — 대상이 이미 존재하면 reject */
   rename(from: string, to: string): Promise<void>;
+  /** 파일·디렉토리 복사 (와이어 v19, 디렉토리는 재귀) — 대상이 이미 존재하거나 자기 하위면 reject */
+  copy(from: string, to: string): Promise<void>;
   /** 파일·디렉토리 겸용 삭제 (디렉토리는 재귀, 휴지통 없음) */
   delete(path: string): Promise<void>;
   /** Quick Open 후보 검색 (와이어 v12) — 목록은 백엔드가 들고, 패턴별 상위 결과만 온다.

@@ -247,6 +247,20 @@ export class MockBackend implements ThinBackend {
     return delay(undefined);
   }
 
+  copy(from: string, to: string): Promise<void> {
+    if (to in FILES || isDirPath(to)) return Promise.reject(new Error(`이미 존재: ${to}`));
+    if (!isDirPath(from) && !(from in FILES)) return Promise.reject(new Error(`ENOENT: ${from}`));
+    if (to === from || to.startsWith(`${from}/`)) return Promise.reject(new Error(`자기 자신 안으로는 복사할 수 없다: ${to}`));
+    const move = (p: string) => (p === from ? to : `${to}${p.slice(from.length)}`);
+    for (const f of Object.keys(FILES)) {
+      if (f === from || f.startsWith(`${from}/`)) FILES[move(f)] = FILES[f];
+    }
+    for (const d of [...DIRS]) {
+      if (d === from || d.startsWith(`${from}/`)) DIRS.add(move(d));
+    }
+    return delay(undefined);
+  }
+
   delete(path: string): Promise<void> {
     // 없는 경로는 에러 (데몬의 symlink_metadata 실패와 동일 계약)
     if (!(path in FILES) && !isDirPath(path)) return Promise.reject(new Error(`ENOENT: ${path}`));

@@ -1,4 +1,4 @@
-role: ThinBackend 계약 — 와이어 프로토콜(백엔드 /ws JSON-RPC, v6 부터 대형 readFile 응답은 바이너리 payload 프레임 — 계약 표면(content=string)은 불변, 복원은 ws.ts 몫. v10 adoptTerminal — 세션 간 터미널 이동. v11 readFile 범위 읽기 offset + stat size — hex 뷰어 청크. v12 listFiles → quickOpen: 빠른 열기 목록을 나르지 않고 데몬 캐시에서 검색. v14 writeFile append — 청크 업로드. v15 readDir 절대 경로 — 폴더 탭의 워크스페이스 밖 탐색. v17 내장 tmux — createTerminal attach·listTerminals·killTerminal·renameTerminal·applyTmuxConf·onTerminalMode·TerminalSession.onTmux)의 TS 사영. 와이어 쪽 대응은 daemon/src 참조
+role: ThinBackend 계약 — 와이어 프로토콜(백엔드 /ws JSON-RPC, v6 부터 대형 readFile 응답은 바이너리 payload 프레임 — 계약 표면(content=string)은 불변, 복원은 ws.ts 몫. v10 adoptTerminal — 세션 간 터미널 이동. v11 readFile 범위 읽기 offset + stat size — hex 뷰어 청크. v12 listFiles → quickOpen: 빠른 열기 목록을 나르지 않고 데몬 캐시에서 검색. v14 writeFile append — 청크 업로드. v15 readDir 절대 경로 — 폴더 탭의 워크스페이스 밖 탐색. v17 내장 tmux — createTerminal attach·listTerminals·killTerminal·renameTerminal·applyTmuxConf·onTerminalMode·TerminalSession.onTmux. v19 copy — 탐색기 드래그 복사)의 TS 사영. 와이어 쪽 대응은 daemon/src 참조
 
 export class TerminalMode {
   role: 데몬의 터미널 방식 (attach 응답, 와이어 v17) — 'tmux'(내장 tmux 서버) | 'plain'(unix 인데 tmux 를 못 써 PTY 직접 — 경고 배지) | 'unsupported'(Windows — 아이콘 없음)
@@ -46,6 +46,9 @@ port ThinBackend {
   }
   fn rename(from, to) {
     role: 이름 변경/이동 — 대상이 이미 존재하면 에러
+  }
+  fn copy(from, to) {
+    role: 파일·디렉토리 복사 (와이어 v19, 디렉토리 재귀) — 대상이 이미 존재하거나 자기 하위면 에러. 탐색기 Ctrl+드래그 복사 (explorer-multiselect-dnd)
   }
   fn delete(path) {
     role: 파일·디렉토리 삭제 (디렉토리는 재귀, 휴지통 없음 — 안전장치는 프론트 confirm, undo 는 파일 한정)

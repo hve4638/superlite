@@ -70,7 +70,12 @@ export function createFiles(backend: ThinBackend) {
   const files = reactive({
     root: [] as TreeNode[],
     expanded: new Set<string>(),
+    /** 포커스 행 — 키보드·rename·새 파일 위치의 기준이자 Shift 범위 선택의 끝점 */
     selectedPath: null as string | null,
+    /** 선택 집합 (ticket explorer-multiselect-dnd) — 삭제·드래그 이동·Copy Path 가 이 전체에 작용한다.
+     *  selectedPath 는 항상 이 안에 있거나 null. 접힌 폴더 아래 항목도 남아 있을 수 있어 조작 때는
+     *  selectedNodes()(보이는 순서·트리에 실재하는 것만)로 읽는다 */
+    selected: new Set<string>(),
     /** 루트 첫 로드 중 — 탐색기가 진행 막대를 보인다 (셸은 로드를 기다리지 않고 마운트된다) */
     loading: true,
     /** 자식 로드가 800ms 를 넘긴 디렉토리 — twistie 가 스피너로 바뀐다 (VS Code asyncDataTree
@@ -263,7 +268,7 @@ export function createFiles(backend: ThinBackend) {
       if (!node || node.kind !== 'directory') return;
       if (!files.expanded.has(node.path)) await toggleDir(node);
     }
-    if (findNode(path)) files.selectedPath = path;
+    if (findNode(path)) select(path);
   }
 
   /** 펼침 집합 복원 (ticket workspace-state-restore) — 얕은 것부터 차례로 자식을 읽어 펼친다. 트리에서
@@ -281,6 +286,50 @@ export function createFiles(backend: ThinBackend) {
     }
   }
 
+  // ---- 선택 (VS Code 트리 규칙): 클릭 = 단일, Ctrl = 토글, Shift = 앵커부터 범위(보이는 순서)
+  /** Shift 범위의 시작 — 마지막 단일·토글 선택 위치. Shift 클릭은 앵커를 옮기지 않는다 */
+  let anchor: string | null = null;
+
+  function select(path: string | null): void {
+    files.selected = new Set(path === null ? [] : [path]);
+    files.selectedPath = path;
+    anchor = path;
+  }
+
+  function toggleSelect(path: string): void {
+    if (files.selected.has(path)) {
+      files.selected.delete(path);
+      if (files.selectedPath === path) files.selectedPath = null;
+    } else {
+      files.selected.add(path);
+      files.selectedPath = path;
+    }
+    anchor = path;
+  }
+
+  /** 앵커부터 path 까지 보이는 순서로 선택 — 앵커가 사라졌으면 단일 선택으로 물러난다 */
+  function rangeSelect(path: string): void {
+    const vis = visibleNodes();
+    const a = anchor === null ? -1 : vis.findIndex((n) => n.path === anchor);
+    const b = vis.findIndex((n) => n.path === path);
+    if (a === -1 || b === -1) {
+      select(path);
+      return;
+    }
+    const [lo, hi] = a < b ? [a, b] : [b, a];
+    files.selected = new Set(vis.slice(lo, hi + 1).map((n) => n.path));
+    files.selectedPath = path;
+  }
+
+  function selectAll(): void {
+    files.selected = new Set(visibleNodes().map((n) => n.path));
+  }
+
+  /** 선택된 노드 — 보이는 순서, 트리에 실재하는 것만 (접힘·리프레시로 사라진 경로는 걸러진다) */
+  function selectedNodes(): TreeNode[] {
+    return visibleNodes().filter((n) => files.selected.has(n.path));
+  }
+
   function visibleNodes(): TreeNode[] {
     const out: TreeNode[] = [];
     const walk = (nodes: TreeNode[]) => {
@@ -296,7 +345,7 @@ export function createFiles(backend: ThinBackend) {
   return {
     files, initFiles, toggleDir, refreshDir, loadedDirPaths, onDirLoaded,
     quickOpen, invalidateQuickOpen, refreshTree, collapseAll, visibleNodes, revealPath, expandPaths,
-    acquireDir, releaseDir,
+    acquireDir, releaseDir, select, toggleSelect, rangeSelect, selectAll, selectedNodes,
   };
 }
 
@@ -311,3 +360,8 @@ export const visibleNodes = (): TreeNode[] => ctx().files.visibleNodes();
 export const revealPath = (path: string): Promise<void> => ctx().files.revealPath(path);
 export const acquireDir = (path: string): void => ctx().files.acquireDir(path);
 export const releaseDir = (path: string): void => ctx().files.releaseDir(path);
+export const select = (path: string | null): void => ctx().files.select(path);
+export const toggleSelect = (path: string): void => ctx().files.toggleSelect(path);
+export const rangeSelect = (path: string): void => ctx().files.rangeSelect(path);
+export const selectAll = (): void => ctx().files.selectAll();
+export const selectedNodes = (): TreeNode[] => ctx().files.selectedNodes();

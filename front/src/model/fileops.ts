@@ -115,6 +115,54 @@ export function createFileops(
     undoStack.push(() => rawRename(to, from));
   }
 
+  /** 복사 (와이어 v19, 디렉토리 재귀). undo = 사본 삭제 */
+  async function copyEntry(from: string, to: string): Promise<void> {
+    await backend.copy(from, to);
+    undoStack.push(() => rawDelete(to));
+    await refreshAfter([to]);
+  }
+
+  /**
+   * 탐색기 드래그 이동·복사 — paths 를 dir 안으로 같은 이름으로 (ticket explorer-multiselect-dnd). 순차
+   * 실행이라 undo 는 항목별로 쌓인다 (한 번의 Ctrl+Z 가 한 항목씩 되돌린다 — VS Code 의 묶음 undo 와
+   * 다르다, redo 없음). dir 에 같은 이름이 있으면 confirmReplace(name) 로 항목마다 묻고(false = 그 항목
+   * 건너뜀), 승인이면 기존 것을 지운 뒤 진행 (rename·copy 는 대상 존재를 거부하므로 덮어쓰기는 여기서
+   * 명시). 실패한 항목은 notify 하고 다음으로. 자기 자신·자기 하위로의 이동 차단은 호출측(드롭 판정) 몫.
+   * 반환은 새 경로들 — 호출측이 선택을 옮긴다
+   */
+  async function transferEntries(
+    paths: string[],
+    dir: string,
+    mode: 'move' | 'copy',
+    confirmReplace: (name: string) => Promise<boolean>,
+  ): Promise<string[]> {
+    let existing: Set<string>;
+    try {
+      existing = new Set((await backend.readDir(dir)).map((e) => e.name));
+    } catch (e) {
+      notify('error', `Failed to read destination folder: ${errText(e)}`);
+      return [];
+    }
+    const out: string[] = [];
+    for (const from of paths) {
+      const name = baseName(from);
+      const to = dir === '' ? name : `${dir}/${name}`;
+      if (to === from) continue;
+      try {
+        if (existing.has(name)) {
+          if (!(await confirmReplace(name))) continue;
+          await rawDelete(to);
+        }
+        if (mode === 'move') await renameEntry(from, to);
+        else await copyEntry(from, to);
+        out.push(to);
+      } catch (e) {
+        notify('error', `Failed to ${mode} '${name}': ${errText(e)}`);
+      }
+    }
+    return out;
+  }
+
   async function deleteEntry(path: string, kind: 'file' | 'directory'): Promise<void> {
     // 삭제 전에 내용을 캡처해야 undo 로 되살릴 수 있다 — 바이너리(read 실패)·대용량·폴더는
     // 캡처 없이 지우고 undo 미등록 (VS Code 동일: 폴더·5MB 초과는 undo 불가)
@@ -165,7 +213,7 @@ export function createFileops(
     }
   }
 
-  return { createFile, createDir, saveClipboardImage, renameEntry, deleteEntry, undoFileOp };
+  return { createFile, createDir, saveClipboardImage, renameEntry, copyEntry, transferEntries, deleteEntry, undoFileOp };
 }
 
 // ---- 활성 세션 전달 shim
@@ -176,6 +224,9 @@ export const saveClipboardImage = (dir: string, blob: Blob): Promise<string | nu
   ctx().fileops.saveClipboardImage(dir, blob);
 export const renameEntry = (from: string, to: string): Promise<void> =>
   ctx().fileops.renameEntry(from, to);
+export const transferEntries = (
+  paths: string[], dir: string, mode: 'move' | 'copy', confirmReplace: (name: string) => Promise<boolean>,
+): Promise<string[]> => ctx().fileops.transferEntries(paths, dir, mode, confirmReplace);
 export const deleteEntry = (path: string, kind: 'file' | 'directory'): Promise<void> =>
   ctx().fileops.deleteEntry(path, kind);
 export const undoFileOp = (): Promise<void> => ctx().fileops.undoFileOp();

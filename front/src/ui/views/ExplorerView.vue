@@ -1,16 +1,16 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { files, parentOf, revealPath, toAbsPath, visibleNodes, toggleDir, type TreeNode } from '../../model/files';
-import { activeTab, editors, openFile } from '../../model/editors';
+import { files, parentOf, rangeSelect, revealPath, select, selectAll, selectedNodes, toAbsPath, toggleSelect, visibleNodes, toggleDir, type TreeNode } from '../../model/files';
+import { activeTab, baseName, editors, openFile } from '../../model/editors';
 import { openFolder } from '../../model/host';
-import { createDir, createFile, deleteEntry, renameEntry, saveClipboardImage, undoFileOp } from '../../model/fileops';
+import { createDir, createFile, deleteEntry, renameEntry, saveClipboardImage, transferEntries, undoFileOp } from '../../model/fileops';
 import { decorationFor } from '../../model/scm';
 import { DND_FILE, activeSessionEmpty, multiWindow, remoteHost, sessionRoot, sessions } from '../../model/sessions';
 import { windowLabel } from '../../model/window';
 import { downloadEntry, uploadDropped, type DroppedEntry } from '../../model/transfer';
 import { connection } from '../../model/watch';
 import { openContextMenu, openQuickInput, workbench, type ContextMenuItem } from '../../model/workbench';
-import { endEditorDrag, startFileDrag } from '../editor/tabDnd';
+import { editorDrag, endEditorDrag, startFileDrag } from '../editor/tabDnd';
 import FileIcon from '../widgets/FileIcon.vue';
 import InlineNameInput from '../widgets/InlineNameInput.vue';
 import ConfirmDialog from '../widgets/ConfirmDialog.vue';
@@ -34,7 +34,21 @@ function openDefault(): void {
 const editing = ref<Editing | null>(null);
 /** 백엔드 거부(동시 생성 등) — 입력을 남겨 정정 기회를 준다 */
 const opError = ref<string | null>(null);
-const confirming = ref<TreeNode | null>(null);
+/** 삭제 확인 대상 — 선택 집합 전체를 한 번에 (VS Code 다중 삭제 확인) */
+const confirming = ref<TreeNode[] | null>(null);
+
+/** 조상이 같은 목록에 있는 경로를 뺀다 — 폴더와 그 안 항목을 함께 골랐을 때 조작은 폴더 한 번이면 된다 */
+function topLevel(paths: string[]): string[] {
+  return paths.filter((p) => !paths.some((q) => q !== p && p.startsWith(`${q}/`)));
+}
+
+/** 확인 대화상자의 이름 목록 (VS Code getFileNamesMessage — 10개까지, 나머지는 개수만) */
+function namesDetail(names: string[]): string {
+  const MAX = 10;
+  const lines = names.slice(0, MAX);
+  if (names.length > MAX) lines.push(`...${names.length - MAX} additional files not shown`);
+  return lines.join('\n');
+}
 
 /** 트리 행 + (생성 중이면) 입력 행. 입력 행은 대상 디렉토리 바로 아래 — 정렬 위치는 커밋 후 리프레시가 잡는다 */
 const rows = computed(() => {
@@ -119,7 +133,7 @@ async function commitEdit(name: string): Promise<void> {
       // 새 폴더는 접힌 채 둔다 — expanded 에만 넣으면 children 미로드 모순 상태가 된다
       editing.value = null;
     }
-    files.selectedPath = target;
+    select(target);
   } catch (e) {
     opError.value = e instanceof Error ? e.message : String(e);
   }
@@ -131,32 +145,48 @@ function cancelEdit(): void {
 }
 
 const confirmMessage = computed(() => {
-  const node = confirming.value;
-  if (!node) return { message: '', detail: '' };
+  const nodes = confirming.value;
+  if (!nodes || nodes.length === 0) return { message: '', detail: '' };
   const dirty = [...editors.docs].some(
-    ([p, d]) => (p === node.path || p.startsWith(`${node.path}/`)) && d.content !== d.savedContent,
+    ([p, d]) => nodes.some((n) => p === n.path || p.startsWith(`${n.path}/`)) && d.content !== d.savedContent,
   );
+  if (nodes.length === 1) {
+    const node = nodes[0];
+    return {
+      message: dirty
+        ? `Are you sure you want to delete '${node.name}' with unsaved changes? Your changes will be lost.`
+        : `Are you sure you want to permanently delete '${node.name}'${node.kind === 'directory' ? ' and its contents' : ''}?`,
+      detail: 'This action is irreversible!',
+    };
+  }
+  // 여럿 — VS Code 문구 (confirmMultiDelete / 미저장은 confirmDeleteDirtyMultiple)
   return {
     message: dirty
-      ? `Are you sure you want to delete '${node.name}' with unsaved changes? Your changes will be lost.`
-      : `Are you sure you want to permanently delete '${node.name}'${node.kind === 'directory' ? ' and its contents' : ''}?`,
-    detail: 'This action is irreversible!',
+      ? 'You are deleting files with unsaved changes. Do you want to continue?'
+      : `Are you sure you want to permanently delete the following ${nodes.length} files/directories and their contents?`,
+    detail: `${namesDetail(nodes.map((n) => n.name))}\nThis action is irreversible!`,
   };
 });
 
-function onConfirmDelete(): void {
-  const node = confirming.value;
+async function onConfirmDelete(): Promise<void> {
+  const nodes = confirming.value;
   confirming.value = null;
-  if (node) void deleteEntry(node.path, node.kind); // 실패는 model 이 notify 한다
+  if (!nodes) return;
+  const top = new Set(topLevel(nodes.map((n) => n.path)));
+  // 순차 — 실패는 model 이 notify 하고 다음 항목으로 (undo 는 항목별 스택)
+  for (const n of nodes) if (top.has(n.path)) await deleteEntry(n.path, n.kind);
 }
 
 /** 원격(ssh) 세션인가 — Download 메뉴·드롭 업로드는 원격에서만 (VS Code 원격 탐색기와 동일) */
 const isRemote = computed(() => remoteHost(sessionRoot(sessions.activeId) ?? '') !== null);
 
-function menuFor(node: TreeNode): ContextMenuItem[] {
+/** 행 메뉴 — 선택 집합(sel, 우클릭 행 포함)에 작용. 여럿이면 새 세션·Rename 은 빠지고 Copy Path 는 줄바꿈 나열,
+ *  Download 는 차례로, Delete 는 한 번의 확인으로 전체 (VS Code 파리티) */
+function menuFor(node: TreeNode, sel: TreeNode[]): ContextMenuItem[] {
+  const multi = sel.length > 1;
   return [
     // 폴더 행 — 그 폴더를 root 로 하는 새 세션 탭 (이미 열린 세션이면 포커스만, 원격이면 그 호스트의 경로)
-    ...(node.kind === 'directory'
+    ...(node.kind === 'directory' && !multi
       ? [{ label: 'Open in New Session', run: () => openFolder(toAbsPath(node.path, workbench.rootPath)) }, { separator: true }]
       : []),
     { label: 'New File...', run: () => void startCreate('createFile', node) },
@@ -164,14 +194,18 @@ function menuFor(node: TreeNode): ContextMenuItem[] {
     { separator: true },
     { label: 'Cut', keybinding: 'Ctrl+X', enabled: false },
     { label: 'Copy', keybinding: 'Ctrl+C', enabled: false },
-    { label: 'Copy Path', keybinding: 'Shift+Alt+C', run: () => void navigator.clipboard.writeText(node.path) },
+    { label: 'Copy Path', keybinding: 'Shift+Alt+C', run: () => void navigator.clipboard.writeText(sel.map((n) => n.path).join('\n')) },
     ...(isRemote.value
-      ? [{ separator: true }, { label: 'Download...', run: () => void downloadEntry(node.path, node.kind) }]
+      ? [{ separator: true }, { label: 'Download...', run: () => void downloadAll(sel) }]
       : []),
     { separator: true },
-    { label: 'Rename...', keybinding: 'F2', run: () => startRename(node) },
-    { label: 'Delete', keybinding: 'Delete', run: () => (confirming.value = node) },
+    { label: 'Rename...', keybinding: 'F2', enabled: !multi, run: () => startRename(node) },
+    { label: 'Delete', keybinding: 'Delete', run: () => (confirming.value = sel) },
   ];
+}
+
+async function downloadAll(nodes: TreeNode[]): Promise<void> {
+  for (const n of nodes) await downloadEntry(n.path, n.kind);
 }
 
 const BACKGROUND_MENU: ContextMenuItem[] = [
@@ -185,8 +219,17 @@ function twistieClass(node: TreeNode): string {
   return files.expanded.has(node.path) ? 'codicon-chevron-down' : 'codicon-chevron-right';
 }
 
-function onRowClick(node: TreeNode): void {
-  files.selectedPath = node.path;
+function onRowClick(node: TreeNode, e: MouseEvent): void {
+  // Ctrl = 토글, Shift = 앵커부터 범위 — 둘 다 펼침·열기 없이 선택만 바꾼다 (VS Code 트리)
+  if (e.ctrlKey || e.metaKey) {
+    toggleSelect(node.path);
+    return;
+  }
+  if (e.shiftKey) {
+    rangeSelect(node.path);
+    return;
+  }
+  select(node.path);
   if (node.kind === 'directory') {
     void toggleDir(node);
   } else {
@@ -201,20 +244,25 @@ function onRowDblClick(node: TreeNode): void {
 
 // 파일·폴더 행을 에디터 영역으로 끌기 — 드롭 처리(열기/분할)는 에디터 쪽 드롭 존이 한다.
 // 폴더는 폴더 탭(yazi 식 탐색 화면)으로 열린다 (explorer-folder-tab)
+// 선택 밖의 행을 끌면 그 행만 선택하고 끈다. 선택 집합(조상이 같이 선택된 항목은 뺀 것)은 editorDrag.paths 로
+// 같은 트리의 드롭(이동·복사)이 읽고, DND_FILE 에도 paths 로 실린다 (explorer-multiselect-dnd)
 function onRowDragStart(e: DragEvent, node: TreeNode): void {
+  if (!files.selected.has(node.path)) select(node.path);
+  const paths = topLevel(selectedNodes().map((n) => n.path));
   const kind = node.kind === 'directory' ? 'folder' : 'file';
-  e.dataTransfer?.setData('text/plain', node.path);
+  e.dataTransfer?.setData('text/plain', paths.join('\n'));
   // 다른 창의 편집기 영역이 같은 root 세션에서 열 수 있게 — 출처 창·root·경로 (cross-window-editor-drop)
   if (multiWindow()) {
-    e.dataTransfer?.setData(DND_FILE, JSON.stringify({ window: windowLabel, root: sessionRoot(sessions.activeId), path: node.path, kind }));
+    e.dataTransfer?.setData(DND_FILE, JSON.stringify({ window: windowLabel, root: sessionRoot(sessions.activeId), path: node.path, kind, paths }));
   }
-  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
-  startFileDrag(node.path, kind);
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'copyMove'; // Ctrl 드롭 = 복사
+  startFileDrag(node.path, kind, paths);
 }
 
 function onRowContextMenu(node: TreeNode, e: MouseEvent): void {
-  files.selectedPath = node.path;
-  openContextMenu(e.clientX, e.clientY, menuFor(node));
+  // 선택 안에서 우클릭하면 선택 유지, 밖이면 그 행만 선택 (VS Code)
+  if (!files.selected.has(node.path)) select(node.path);
+  openContextMenu(e.clientX, e.clientY, menuFor(node, selectedNodes()));
 }
 
 function onTreeContextMenu(e: MouseEvent): void {
@@ -225,12 +273,32 @@ function onTreeContextMenu(e: MouseEvent): void {
 // 대상 폴더: 폴더 행은 그 폴더, 파일 행은 그 부모, 행 밖은 루트. VS Code 처럼 대상 폴더 행을 강조
 /** 드래그 중 대상 폴더 ('' = 루트, null = 드래그 아님) */
 const dropDir = ref<string | null>(null);
-/** 덮어쓰기 확인 — 같은 이름의 최상위 항목이 이미 있을 때 (resolve 로 답한다) */
-const replaceAsk = ref<{ names: string[]; resolve: (ok: boolean) => void } | null>(null);
+/** 덮어쓰기 확인 (resolve 로 답한다) — 업로드는 충돌 이름을 모아 한 번, 드래그 이동·복사는 항목마다 (VS Code 문구) */
+const replaceAsk = ref<{ message: string; detail: string; resolve: (ok: boolean) => void } | null>(null);
 
 const dirOf = (node: TreeNode): string => (node.kind === 'directory' ? node.path : parentOf(node.path));
 
+// ---- 트리 안 드래그 이동·복사 (explorer-multiselect-dnd) — 이 트리의 행 드래그(editorDrag.paths)만.
+// 자기 자신·자기 하위·이미 있는 부모로는 드롭 불가 (VS Code). Ctrl 을 누르고 놓으면 복사
+/** 이 탐색기에서 시작된 행 드래그인가 */
+const treeDrag = (): boolean => (editorDrag.kind === 'file' || editorDrag.kind === 'folder') && editorDrag.paths.length > 0;
+
+function canDropInto(dir: string): boolean {
+  return editorDrag.paths.every((src) => dir !== src && !dir.startsWith(`${src}/`) && parentOf(src) !== dir);
+}
+
 function onDragOver(e: DragEvent, dir: string): void {
+  if (treeDrag()) {
+    e.stopPropagation();
+    if (!canDropInto(dir)) {
+      dropDir.value = null;
+      return; // preventDefault 없음 = 놓을 수 없음 커서
+    }
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = e.ctrlKey ? 'copy' : 'move';
+    dropDir.value = dir;
+    return;
+  }
   if (!isRemote.value || !e.dataTransfer?.types.includes('Files')) return;
   e.preventDefault();
   e.stopPropagation();
@@ -244,6 +312,14 @@ function onTreeDragLeave(e: DragEvent): void {
 }
 
 function onDrop(e: DragEvent, dir: string): void {
+  if (treeDrag()) {
+    e.preventDefault();
+    e.stopPropagation();
+    dropDir.value = null;
+    if (!canDropInto(dir)) return;
+    void dropEntries([...editorDrag.paths], dir, e.ctrlKey ? 'copy' : 'move');
+    return;
+  }
   if (!isRemote.value || !e.dataTransfer?.types.includes('Files')) return;
   e.preventDefault();
   e.stopPropagation();
@@ -253,12 +329,53 @@ function onDrop(e: DragEvent, dir: string): void {
     .filter((it) => it.kind === 'file')
     .map((it) => it.webkitGetAsEntry() ?? it.getAsFile())
     .filter((en): en is DroppedEntry => en !== null);
-  void uploadDropped(dir, entries, (names) => new Promise((resolve) => (replaceAsk.value = { names, resolve })));
+  void uploadDropped(dir, entries, (names) => new Promise((resolve) => (replaceAsk.value = {
+    message: `${names.length === 1 ? `'${names[0]}' already exists` : `${names.length} items already exist`} in the destination. Do you want to replace?`,
+    detail: 'Files with the same names will be overwritten. Other files in existing folders are kept.',
+    resolve,
+  })));
 }
 
 function answerReplace(ok: boolean): void {
   replaceAsk.value?.resolve(ok);
   replaceAsk.value = null;
+}
+
+/** 이동 확인 끄기 (VS Code explorer.confirmDragAndDrop) — 대화상자의 "Do not ask me again" 이 세운다. 복사는 묻지 않는다 */
+const DND_CONFIRM_KEY = 'superlite.explorer.confirmDragAndDrop';
+/** 이동 확인 — resolve(ok, checked) */
+const moveAsk = ref<{ message: string; detail?: string; resolve: (ok: boolean, checked: boolean) => void } | null>(null);
+
+function answerMove(ok: boolean, checked = false): void {
+  moveAsk.value?.resolve(ok, checked);
+  moveAsk.value = null;
+}
+
+async function dropEntries(paths: string[], dir: string, mode: 'move' | 'copy'): Promise<void> {
+  if (mode === 'move' && localStorage.getItem(DND_CONFIRM_KEY) !== '0') {
+    const dest = dir === '' ? baseName(workbench.rootPath.replace(/\\/g, '/')) : baseName(dir);
+    const ok = await new Promise<boolean>((resolve) => {
+      moveAsk.value = {
+        message: paths.length === 1
+          ? `Are you sure you want to move '${baseName(paths[0])}' into '${dest}'?`
+          : `Are you sure you want to move the following ${paths.length} files into '${dest}'?`,
+        detail: paths.length === 1 ? undefined : namesDetail(paths.map(baseName)),
+        resolve: (ok, checked) => {
+          if (ok && checked) localStorage.setItem(DND_CONFIRM_KEY, '0');
+          resolve(ok);
+        },
+      };
+    });
+    if (!ok) return;
+  }
+  const done = await transferEntries(paths, dir, mode, (name) => new Promise((resolve) => (replaceAsk.value = {
+    message: `A file or folder with the name '${name}' already exists in the destination folder. Do you want to replace it?`,
+    detail: 'This action is irreversible!',
+    resolve,
+  })));
+  // 선택은 옮겨진(복사된) 쪽으로 — 놓은 폴더가 펼쳐져 있어야 보인다 (접혀 있으면 집합에만 남는다)
+  select(done[0] ?? null);
+  for (const p of done.slice(1)) files.selected.add(p);
 }
 
 /** 트리 포커스 한정 키 — F2/Delete/Ctrl+Z. 에디터의 같은 키와 충돌하지 않는다 */
@@ -268,16 +385,28 @@ function onTreeKeydown(e: KeyboardEvent): void {
     cancelEdit();
     return;
   }
-  if (editing.value || confirming.value) return;
-  const sel = files.selectedPath !== null
-    ? visibleNodes().find((n) => n.path === files.selectedPath) ?? null
-    : null;
-  if (e.key === 'F2' && sel) {
+  if (editing.value || confirming.value || moveAsk.value || replaceAsk.value) return;
+  const vis = visibleNodes();
+  const sel = files.selectedPath !== null ? vis.find((n) => n.path === files.selectedPath) ?? null : null;
+  const multi = selectedNodes();
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    // ↑/↓ 포커스 이동(단일 선택), Shift+↑/↓ 는 앵커부터 범위 확장 (VS Code list)
+    e.preventDefault();
+    if (vis.length === 0) return;
+    const i = sel ? vis.indexOf(sel) : -1;
+    const next = vis[Math.max(0, Math.min(vis.length - 1, i + (e.key === 'ArrowDown' ? 1 : -1)))];
+    if (e.shiftKey) rangeSelect(next.path);
+    else select(next.path);
+    scrollRowIntoView(next.path);
+  } else if (e.key === 'a' && e.ctrlKey && !e.shiftKey && !e.altKey) {
+    e.preventDefault();
+    selectAll();
+  } else if (e.key === 'F2' && sel && multi.length <= 1) {
     e.preventDefault();
     startRename(sel);
-  } else if (e.key === 'Delete' && sel) {
+  } else if (e.key === 'Delete' && multi.length > 0) {
     e.preventDefault();
-    confirming.value = sel;
+    confirming.value = multi;
   } else if (e.key === 'z' && e.ctrlKey && !e.shiftKey && !e.altKey) {
     e.preventDefault();
     // 스택 항목의 경로가 이후 조작으로 낡았을 수 있다 — 실패한 항목은 버려진다 (redo 없음)
@@ -322,16 +451,21 @@ watch(
   async (path) => {
     if (!path) return;
     await revealPath(path);
-    const el = treeEl.value;
-    const i = rows.value.findIndex((r) => r.node?.path === path);
-    if (!el || i < 0) return;
-    const top = i * ROW_H;
-    if (top < el.scrollTop || top + ROW_H > el.scrollTop + el.clientHeight) {
-      el.scrollTop = Math.max(0, top - Math.floor(el.clientHeight / 2));
-    }
+    scrollRowIntoView(path);
   },
   { immediate: true },
 );
+
+/** 행이 뷰포트 밖이면 가운데로 스크롤 */
+function scrollRowIntoView(path: string): void {
+  const el = treeEl.value;
+  const i = rows.value.findIndex((r) => r.node?.path === path);
+  if (!el || i < 0) return;
+  const top = i * ROW_H;
+  if (top < el.scrollTop || top + ROW_H > el.scrollTop + el.clientHeight) {
+    el.scrollTop = Math.max(0, top - Math.floor(el.clientHeight / 2));
+  }
+}
 
 /** 행 밖(빈 영역) 클릭 판정 — 가상 스크롤 래퍼가 있어 .self 로는 잡히지 않는다 */
 function outsideRows(e: Event): boolean {
@@ -364,7 +498,7 @@ async function pasteImage(blob: Blob): Promise<void> {
     : null;
   const dir = sel === null ? '' : sel.kind === 'directory' ? sel.path : parentOf(sel.path);
   const saved = await saveClipboardImage(dir, blob); // 실패는 model 이 notify 한다
-  if (saved !== null) files.selectedPath = saved;
+  if (saved !== null) select(saved);
 }
 
 onMounted(() => window.addEventListener('paste', onPaste));
@@ -409,7 +543,7 @@ defineExpose({
         @dragover="onDragOver($event, '')"
         @dragleave="onTreeDragLeave"
         @drop="onDrop($event, '')"
-        @click="outsideRows($event) && (files.selectedPath = null)"
+        @click="outsideRows($event) && select(null)"
         @contextmenu="outsideRows($event) && (($event.preventDefault(), onTreeContextMenu($event)))"
       >
         <div class="tree-inner" :style="{ height: `${win.total * ROW_H}px` }">
@@ -442,7 +576,8 @@ defineExpose({
             v-else-if="row.node"
             class="row"
             :class="{
-              selected: files.selectedPath === row.node.path,
+              selected: files.selected.has(row.node.path),
+              focused: files.selectedPath === row.node.path,
               'drop-target': row.node.kind === 'directory' && dropDir === row.node.path,
             }"
             :style="{ paddingLeft: `${row.node.depth * 8}px` }"
@@ -451,7 +586,7 @@ defineExpose({
             @dragend="endEditorDrag()"
             @dragover="onDragOver($event, dirOf(row.node))"
             @drop="onDrop($event, dirOf(row.node))"
-            @click="onRowClick(row.node)"
+            @click="onRowClick(row.node, $event)"
             @dblclick="onRowDblClick(row.node)"
             @contextmenu.prevent="onRowContextMenu(row.node, $event)"
           >
@@ -512,11 +647,20 @@ defineExpose({
     />
     <ConfirmDialog
       v-if="replaceAsk"
-      :message="`${replaceAsk.names.length === 1 ? `'${replaceAsk.names[0]}' already exists` : `${replaceAsk.names.length} items already exist`} in the destination. Do you want to replace?`"
-      detail="Files with the same names will be overwritten. Other files in existing folders are kept."
+      :message="replaceAsk.message"
+      :detail="replaceAsk.detail"
       confirm-label="Replace"
       @confirm="answerReplace(true)"
       @cancel="answerReplace(false)"
+    />
+    <ConfirmDialog
+      v-if="moveAsk"
+      :message="moveAsk.message"
+      :detail="moveAsk.detail"
+      confirm-label="Move"
+      checkbox-label="Do not ask me again"
+      @confirm="(checked) => answerMove(true, checked)"
+      @cancel="answerMove(false)"
     />
   </div>
 </template>
@@ -620,12 +764,22 @@ defineExpose({
   line-height: 22px;
   cursor: pointer;
   white-space: nowrap;
+  user-select: none; /* Shift+클릭 범위 선택이 텍스트 선택을 만들지 않게 */
 }
 .row:hover {
   background: var(--vscode-list-hoverBackground);
 }
 .row.selected {
   background: var(--vscode-list-inactiveSelectionBackground);
+}
+.tree:focus-within .row.selected {
+  background: var(--vscode-list-activeSelectionBackground);
+  color: var(--vscode-list-activeSelectionForeground);
+}
+/* 포커스 행 — 선택 집합 안에서 키보드·범위 선택의 기준 (VS Code list.focusOutline) */
+.tree:focus-within .row.focused {
+  outline: 1px solid var(--vscode-list-focusOutline, var(--vscode-focusBorder));
+  outline-offset: -1px;
 }
 /* OS 드롭 업로드 대상 강조 — 폴더 행은 배경, 루트(행 밖·루트 파일 위)는 트리 테두리 (VS Code 동일 감각) */
 .row.drop-target {

@@ -398,6 +398,9 @@ export class WsBackend implements ThinBackend {
   rename(from: string, to: string): Promise<void> {
     return this.call('rename', { from, to });
   }
+  copy(from: string, to: string): Promise<void> {
+    return this.call('copy', { from, to });
+  }
   delete(path: string): Promise<void> {
     return this.call('delete', { path });
   }

@@ -64,7 +64,9 @@ pub fn socket_path() -> PathBuf {
 ///    받는다 (데몬이 띄운 git·터미널 git 공통, ticket scm-subrepo-credential). frontRequest 는 params.tty
 ///    로 대상 세션을 해석한다. 구버전 데몬은 세 메서드를 모르는 메서드로
 ///    에러 응답한다.
-pub const WIRE_VERSION: u32 = 18;
+/// 19: copy(from, to) 추가 — 파일·디렉토리(재귀) 복사, 대상 존재·자기 하위로의 복사는 에러. 탐색기
+///    Ctrl+드래그 복사(ticket explorer-multiselect-dnd). 구버전 데몬은 모르는 메서드로 에러 응답한다.
+pub const WIRE_VERSION: u32 = 19;
 
 /// 릴리스 버전 — 루트 Cargo.toml `[workspace.package] version` 하나에서 온다 (crate 4개가 상속).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

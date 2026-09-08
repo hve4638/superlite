@@ -34,6 +34,9 @@ export class EmptyBackend implements ThinBackend {
   rename(): Promise<void> {
     return Promise.reject(new Error(NO_FOLDER));
   }
+  copy(): Promise<void> {
+    return Promise.reject(new Error(NO_FOLDER));
+  }
   delete(): Promise<void> {
     return Promise.reject(new Error(NO_FOLDER));
   }

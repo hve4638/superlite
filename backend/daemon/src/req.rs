@@ -314,6 +314,30 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
             std::fs::rename(&from, &to).map_err(err)?;
             Ok(Value::Null)
         }
+        // 파일·디렉토리 복사 (와이어 v19) — 탐색기 Ctrl+드래그. rename 과 같은 계약: 대상 존재는 에러
+        // (덮어쓰기는 프론트가 먼저 delete 로 명시). 존재 검사만 락 안에서, 복사 자체는 재귀라 오래
+        // 걸릴 수 있어 락 밖 spawn_blocking — 그 사이 다른 쓰기와의 경합은 rename 의 "대상 없음"
+        // 검사와 같은 수준으로 열어 둔다 (ponytail)
+        "copy" => {
+            let from_rel = p["from"].as_str().ok_or("from 필요")?;
+            let to_rel = p["to"].as_str().ok_or("to 필요")?;
+            if from_rel.is_empty() || to_rel.is_empty() {
+                return Err("빈 경로 — 루트는 copy 대상이 아니다".into());
+            }
+            let from = safe_join(root, from_rel)?;
+            let to = safe_join(root, to_rel)?;
+            if to.starts_with(&from) {
+                return Err(format!("자기 자신 안으로는 복사할 수 없다: {to_rel}"));
+            }
+            {
+                let _g = FS_LOCK.lock().await;
+                if std::fs::symlink_metadata(&to).is_ok() {
+                    return Err(format!("이미 존재: {to_rel}"));
+                }
+            }
+            tokio::task::spawn_blocking(move || copy_recursive(&from, &to)).await.map_err(err)??;
+            Ok(Value::Null)
+        }
         "delete" => {
             let rel = req_path(p)?;
             if rel.is_empty() {
@@ -760,6 +784,38 @@ async fn run_cmd(mut cmd: tokio::process::Command) -> Result<String, String> {
             Err(stderr)
         }
     }
+}
+
+/// 재귀 복사 — 파일은 fs::copy(권한 유지), 디렉토리는 만들고 내려간다. 심링크는 unix 에선 링크 자체를
+/// 다시 만들고(따라가면 루트 밖·순환에 닿을 수 있다), 그 외 플랫폼은 대상이 파일이면 내용을 복사하고
+/// 디렉토리 링크는 빈 디렉토리로 남긴다. 중간 실패는 그 자리에서 에러 — 부분 복사본 정리는 하지 않는다
+/// (프론트가 실패를 알리고 사용자가 지운다, ponytail)
+fn copy_recursive(from: &Path, to: &Path) -> Result<(), String> {
+    let meta = std::fs::symlink_metadata(from).map_err(err)?;
+    let ft = meta.file_type();
+    if ft.is_symlink() {
+        #[cfg(unix)]
+        {
+            let target = std::fs::read_link(from).map_err(err)?;
+            return std::os::unix::fs::symlink(target, to).map_err(err);
+        }
+        #[cfg(not(unix))]
+        {
+            return match std::fs::metadata(from) {
+                Ok(m) if m.is_dir() => std::fs::create_dir(to).map_err(err),
+                _ => std::fs::copy(from, to).map(|_| ()).map_err(err),
+            };
+        }
+    }
+    if ft.is_dir() {
+        std::fs::create_dir(to).map_err(err)?;
+        for entry in std::fs::read_dir(from).map_err(err)? {
+            let entry = entry.map_err(err)?;
+            copy_recursive(&entry.path(), &to.join(entry.file_name()))?;
+        }
+        return Ok(());
+    }
+    std::fs::copy(from, to).map(|_| ()).map_err(err)
 }
 
 fn req_path(p: &Value) -> Result<&str, String> {

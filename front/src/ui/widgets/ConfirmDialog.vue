@@ -92,6 +92,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown, true));
   user-select: text;
 }
 .dialog-detail {
+  white-space: pre-line; /* 이름 목록(다중 삭제·이동 확인)은 줄바꿈으로 온다 */
   margin-top: 6px;
   line-height: 18px;
   opacity: 0.9;

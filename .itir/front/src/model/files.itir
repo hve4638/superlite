@@ -7,7 +7,7 @@ export type TreeNode
 export val files
 
 export fn createFiles(backend) {
-  role: 세션별 트리 모듈 생성 — 트리·펼침·로딩 상태가 팩토리 클로저에 산다 (한 페이지에 세션 여럿). 인스턴스 전용 expandPaths(paths)는 펼침 집합 복원(ticket workspace-state-restore) — 얕은 경로부터 자식을 읽어 expanded 에 넣고 사라진 경로·읽기 실패는 건너뛴다 (shim 없음, workspaceState.restoreWorkspace 가 ctx 로 부른다). 초기 로드(initFiles)는 루트 readDir 만 — 빠른 열기 목록은 나르지 않는다 (와이어 v12). onDirLoaded: 디렉토리 나열(readDir) 결과 구독 — SCM 이 repo 표식으로 하위 저장소를 즉시 등록한다 (session 조립 지점에서 연결). loading(루트 첫 로드, 진행 막대)·slowDirs(자식 로드 800ms 초과 디렉토리, twistie 스피너 — VS Code asyncDataTree slow 규칙)
+  role: 세션별 트리 모듈 생성 — 트리·펼침·선택 집합(selected + 포커스 selectedPath, Shift 앵커)·로딩 상태가 팩토리 클로저에 산다 (한 페이지에 세션 여럿). 인스턴스 전용 expandPaths(paths)는 펼침 집합 복원(ticket workspace-state-restore) — 얕은 경로부터 자식을 읽어 expanded 에 넣고 사라진 경로·읽기 실패는 건너뛴다 (shim 없음, workspaceState.restoreWorkspace 가 ctx 로 부른다). 초기 로드(initFiles)는 루트 readDir 만 — 빠른 열기 목록은 나르지 않는다 (와이어 v12). onDirLoaded: 디렉토리 나열(readDir) 결과 구독 — SCM 이 repo 표식으로 하위 저장소를 즉시 등록한다 (session 조립 지점에서 연결). loading(루트 첫 로드, 진행 막대)·slowDirs(자식 로드 800ms 초과 디렉토리, twistie 스피너 — VS Code asyncDataTree slow 규칙)
 }
 export fn parentOf(path) {
   role: 부모 디렉토리 경로 (루트는 '') — 순수 함수, 세션 무관
@@ -41,6 +41,21 @@ export fn quickOpen(pattern) -> QuickOpenResult {
 }
 export fn visibleNodes() -> TreeNode[] {
   role: 펼침 상태 기준 평탄화 — 렌더링용
+}
+export fn select(path?) {
+  role: 단일 선택 — 선택 집합을 그 하나로, 포커스(selectedPath)·Shift 앵커도 그 자리 (null 은 전부 해제). 선택 집합 files.selected 는 세션별 (ticket explorer-multiselect-dnd)
+}
+export fn toggleSelect(path) {
+  role: Ctrl+클릭 토글 — 집합에 넣고 빼며 앵커를 옮긴다
+}
+export fn rangeSelect(path) {
+  role: Shift+클릭·Shift+↑/↓ — 앵커부터 path 까지 보이는 순서로 선택, 앵커는 유지. 앵커가 트리에서 사라졌으면 단일 선택
+}
+export fn selectAll() {
+  role: Ctrl+A — 보이는 행 전부
+}
+export fn selectedNodes() -> TreeNode[] {
+  role: 선택된 노드 — 보이는 순서, 트리에 실재하는 것만 (접힘·리프레시로 사라진 경로는 걸러진다). 삭제·드래그·메뉴가 이걸로 읽는다
 }
 export fn acquireDir(path) {
   role: 폴더 탭(FolderView) 열의 나열 참조 — files.listing (path → {entries|null(로드 중), error?}) 을 참조 계수로 든다. 0→1 에 readDir, 이미 있으면 왕복 없음 (부모·현재·미리보기 열과 여러 폴더 탭이 같은 경로를 공유). 트리와 별개라 임의 경로를 나열한다. refreshDir 는 listing 에 있는 경로를 트리의 로드된 디렉토리와 같게 갱신하고(실패는 error 로 보인다) loadedDirPaths 에도 포함되어 감시·fileops·전체 리프레시가 같은 경로로 닿는다 (ticket explorer-folder-tab)

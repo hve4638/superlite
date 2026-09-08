@@ -12,6 +12,9 @@ export const editorDrag = reactive({
   groupId: 0,
   tabId: '',
   path: '',
+  /** 탐색기 드래그의 선택 집합 전체 (path 는 그 첫 항목) — 트리 안 드롭(이동·복사)이 읽는다.
+   *  편집기 쪽 드롭은 여전히 path 하나만 연다 (ponytail) */
+  paths: [] as string[],
 });
 
 export function startTabDrag(groupId: number, tabId: string): void {
@@ -20,9 +23,10 @@ export function startTabDrag(groupId: number, tabId: string): void {
   editorDrag.tabId = tabId;
 }
 
-export function startFileDrag(path: string, kind: 'file' | 'folder' = 'file'): void {
+export function startFileDrag(path: string, kind: 'file' | 'folder' = 'file', paths: string[] = [path]): void {
   editorDrag.kind = kind;
   editorDrag.path = path;
+  editorDrag.paths = paths;
 }
 
 /** 타이틀바 아이콘 드래그 — 놓는 자리에 새 탭을 만든다 (클릭은 활성 그룹 끝) */
