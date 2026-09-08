@@ -1,4 +1,4 @@
-role: 중계 코어 — 준비된 TcpListener 위에 /ws·/ssh/hosts·/ssh/state·/daemon/clean·/tmux-conf(GET/PUT — 클라이언트 tmux.conf, 사이드바 터미널 뷰가 편집)·/version·/nvim(nvim.rs — 임베드 Neovim 중계, 데몬 와이어 밖) 라우터를 얹어 serve. attach 직후 클라이언트 tmux.conf 를 데몬에 tmuxConf 로 밀어 넣는다 (와이어 v17 — 원격별 관리 없이 이 백엔드 머신의 파일 하나가 원본). 데몬 spawn·attach, 상주 제어 연결 포함. dist 는 옵션 (bin 은 정적 서빙, Tauri 앱은 자산 번들이라 불필요). root 는 세션 해석기(SessionRoots)가 정한다 — 고정 root(bin) 또는 세션 레지스트리 조회(Tauri 앱, decision/workspace-session-tabs.md). root 문자열이 ssh:// 스킴이면 원격 — 해석(Target)은 접속 직전 한 곳에서만 한다
+role: 중계 코어 — 준비된 TcpListener 위에 /ws·/ssh/hosts·/ssh/state·/daemon/clean·/tmux-conf(GET/PUT/OPTIONS — 클라이언트 tmux.conf, 사이드바 터미널 뷰가 편집)·/version·/nvim(nvim.rs — 임베드 Neovim 중계, 데몬 와이어 밖) 라우터를 얹어 serve. attach 직후 클라이언트 tmux.conf 를 데몬에 tmuxConf 로 밀어 넣는다 (와이어 v17 — 원격별 관리 없이 이 백엔드 머신의 파일 하나가 원본). 데몬 spawn·attach, 상주 제어 연결 포함. dist 는 옵션 (bin 은 정적 서빙, Tauri 앱은 자산 번들이라 불필요). root 는 세션 해석기(SessionRoots)가 정한다 — 고정 root(bin) 또는 세션 레지스트리 조회(Tauri 앱, decision/workspace-session-tabs.md). root 문자열이 ssh:// 스킴이면 원격 — 해석(Target)은 접속 직전 한 곳에서만 한다
 
 export class SessionRoots {
   role: 세션 id → root 해석기 (rust enum). Fixed 는 모든 세션이 기동 인자의 root 하나(bin·종전 동작), Registry 는 native 쪽이 등록한 세션만 허용 — root 결정권이 native 에 남아 front 가 임의 경로를 지목할 통로가 없다. Registry 는 순서 보존 리스트 — 등록 순서가 곧 세션 탭 순서라 순서의 단일 출처를 레지스트리에 둔다 (세션 수가 한 자리라 선형 탐색으로 충분). 엔트리의 root 는 Option — 루트 없는 빈 세션(시작 페이지)도 레지스트리에 산다 (ticket app-empty-session). 원격 root(ssh://host/path)도 불투명 문자열로 나른다
@@ -78,6 +78,9 @@ fn tmux_conf_get() {
 }
 fn tmux_conf_put() {
   role: PUT /tmux-conf — 본문을 파일로. 접속 중인 데몬 적용은 프론트가 세션마다 tmuxConf 로 (relay 는 연결을 모아 두지 않는다)
+}
+fn tmux_conf_options() {
+  role: OPTIONS /tmux-conf — PUT 의 CORS preflight 응답 (204 + allow-methods GET, PUT + allow-headers content-type + cors). Tauri 앱은 프론트 오리진과 relay 가 달라 브라우저가 PUT 앞에 preflight 를 보내는데 종전엔 405 라 저장이 실패했다 (웹은 같은 오리진이라 무관 — ticket relay-conn-fixes). 다른 끝점처럼 preflight 를 피하는 대신 PUT 의미를 유지했다. 인증 없음 — 메타데이터 응답이고 실제 PUT 이 authed 를 거친다
 }
 fn daemon_bin_for(os, arch) -> path {
   role: OS·arch 에 맞는 데몬 바이너리 배치 규칙 하나 — 실행 파일 옆 daemon/<os>-<arch>[.exe] (이름은 std::env::consts::OS·ARCH 값 그대로, 매핑 표 없음). 로컬(내 OS·arch)이면 SUPERLITE_DAEMON_BIN 우회가 먼저, daemon/ 에 없으면 형제 superlite-daemon 폴백 (cargo 가 target/debug 에 평평하게 놓는다 — check 하니스·cargo run). 원격용은 daemon/ 에 없으면 파일명·위치를 담은 오류

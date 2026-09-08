@@ -93,7 +93,7 @@ pub async fn serve(listener: TcpListener, roots: SessionRoots, token: Option<Str
         .route("/ssh/hosts", get(hosts_handler))
         .route("/ssh/state", axum::routing::post(state_handler))
         .route("/daemon/clean", axum::routing::post(clean_handler))
-        .route("/tmux-conf", get(tmux_conf_get).put(tmux_conf_put))
+        .route("/tmux-conf", get(tmux_conf_get).put(tmux_conf_put).options(tmux_conf_options))
         .route("/version", get(version_handler))
         .route("/github/oauth", axum::routing::post(github_oauth_handler))
         .route("/git/credentials", get(git_credentials_get).post(git_credentials_post));
@@ -207,6 +207,20 @@ async fn tmux_conf_put(
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{}: {e}", p.display())).into_response(),
     })
+}
+
+/// OPTIONS /tmux-conf — PUT 의 CORS preflight 응답. Tauri 앱은 프론트 오리진(tauri.localhost)과
+/// relay 가 달라 PUT 앞에 브라우저가 OPTIONS 를 먼저 보내는데, 종전에는 405 라 저장이 "Failed to
+/// fetch" 로 실패했다 (웹 모드는 같은 오리진이라 드러나지 않았다 — ticket relay-conn-fixes).
+/// 이 파일의 다른 끝점은 쿼리 인자·text/plain 본문으로 preflight 자체를 피하지만, tmux-conf 는
+/// PUT 의미(본문 = 파일 전체 교체)를 유지하고 프론트를 건드리지 않는 쪽을 택했다.
+/// 인증은 하지 않는다 — preflight 는 메타데이터 응답일 뿐이고 실제 PUT 이 authed 를 거친다
+async fn tmux_conf_options() -> Response {
+    let mut resp = cors(StatusCode::NO_CONTENT.into_response());
+    let h = resp.headers_mut();
+    h.insert("access-control-allow-methods", axum::http::HeaderValue::from_static("GET, PUT"));
+    h.insert("access-control-allow-headers", axum::http::HeaderValue::from_static("content-type"));
+    resp
 }
 
 /// 로컬 데몬 바이너리 — 내 OS·아키텍처용 (daemon_bin_for)

@@ -248,8 +248,15 @@ export class WsBackend implements ThinBackend {
       // 4502 = relay 의 접속 실패(ssh 접속·원격 데몬 기동·attach 실패), 사유 동봉 — 재연결해도
       // 같은 결과(원격은 매번 ssh 를 다시 띄운다)라 자동 재시도하지 않고 사유를 UI 에 넘긴다
       // (재접속은 사용자 몫)
+      // WHY: opened 도 여기서 내린다 — 4502 는 upgrade 뒤의 close 라 onopen 이 이미 true 로
+      //      만든 상태다. 안 내리면 이후 요청이 큐 대신 닫힌 소켓으로 나가 영원히 미해결이고
+      //      (CLOSED 소켓의 send 는 조용히 버려진다), reconnect() 의 CONNECTING 중 send 가
+      //      던지며, 그 시도가 1006 으로 실패하면 아래 wasOpen 이 낡은 true 를 읽어 미전송
+      //      큐까지 실패 처리한다 (ticket relay-conn-fixes). 영구 실패 뒤 들어온 요청은
+      //      큐에 남아 reconnect() 성공 시 나간다 — 파일 헤더의 끊김 중 요청 계약과 같다
       if (ev.code === 4403 || ev.code === 4502) {
         this.gaveUp = true;
+        this.opened = false;
         const reason = ev.code === 4403 ? '세션이 등록되어 있지 않다' : ev.reason || '접속 실패';
         for (const p of this.pending.values()) p.reject(new Error(reason));
         this.pending.clear();
