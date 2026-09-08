@@ -332,16 +332,22 @@ async fn hosts_handler(
     cors(Json(ssh::host_list()).into_response())
 }
 
-/// POST /ssh/state?op=&host= — 즐겨찾기·고정·최근·pane 상태 변경 (fav·unfav·pin·unpin·ack·refresh·forget·pane).
-/// 본문 없이 쿼리만 쓴다 — JSON 본문은 CORS preflight(OPTIONS) 를 유발해 라우트가 하나 더
-/// 필요해진다. 응답은 갱신된 목록 (GET 과 같은 형태) — 프론트가 재조회 없이 갈아끼운다
+/// POST /ssh/state?op=&host= — 즐겨찾기·고정·경로 아이템·pane 상태 변경 (fav·unfav·pin·unpin·ack·refresh·
+/// set-items·pane·expand). 인자는 쿼리로 — JSON content-type 본문은 CORS preflight(OPTIONS) 를 유발해
+/// 라우트가 하나 더 필요해진다. set-items 의 아이템 배열만은 크기 때문에 본문으로 받되 프론트가
+/// text/plain 으로 보내 preflight 없이(단순 요청) 들어온다 — 여기서 쿼리 items 자리에 넣는다.
+/// 응답은 갱신된 목록 (GET 과 같은 형태) — 프론트가 재조회 없이 갈아끼운다
 async fn state_handler(
     State(app): State<App>,
-    Query(query): Query<std::collections::HashMap<String, String>>,
+    Query(mut query): Query<std::collections::HashMap<String, String>>,
     headers: HeaderMap,
+    body: String,
 ) -> Response {
     if !authed(&app, &query, &headers) {
         return cors(StatusCode::FORBIDDEN.into_response());
+    }
+    if !body.is_empty() {
+        query.insert("items".into(), body);
     }
     let op = query.get("op").map(String::as_str).unwrap_or("");
     cors(match ssh::update_state(op, &query) {

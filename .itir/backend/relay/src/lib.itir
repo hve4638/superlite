@@ -22,7 +22,7 @@ fn hosts_handler() {
   role: GET /ssh/hosts — 백엔드 머신의 ~/.ssh/config Host 별칭 목록에 즐겨찾기·고정·drift·missing 을 합친 JSON (ssh::host_list). 데몬 와이어 밖 백엔드 자체 응답의 첫 표면 (주소·연결은 백엔드 소유 — decision/remote-ssh.md 2026-08-31)
 }
 fn state_handler() {
-  role: POST /ssh/state?op=&host=(&path=|&open=) — 즐겨찾기·고정·최근·pane 상태 변경 (ssh::update_state 에 쿼리 전체를 넘긴다). 본문 없이 쿼리만 — JSON 본문은 CORS preflight 를 유발한다. 응답은 갱신된 목록 (GET 과 동일 형태)
+  role: POST /ssh/state?op=&host=(&open=) — 즐겨찾기·고정·경로 아이템·pane 상태 변경 (ssh::update_state 에 쿼리 전체를 넘긴다). 인자는 쿼리로 — JSON content-type 본문은 CORS preflight 를 유발한다. set-items 의 아이템 배열만 본문(프론트가 text/plain 으로 보내 단순 요청)으로 받아 쿼리 items 자리에 넣는다. 응답은 갱신된 목록 (GET 과 동일 형태)
 }
 fn clean_handler() {
   role: POST /daemon/clean?host= — 문제 데몬 정리 (superlite-daemon --clean). host 없으면 clean_local, 있으면 ssh::clean_remote. 프론트가 '데몬 기동 실패' 뒤 사용자 승인을 받은 경우에만 부른다 — 자동 호출 없음 (사용자 결정 2026-09-04). 응답 본문은 --clean 의 stdout, 실패는 502 + 사유. 인증은 authed, CORS 는 /ssh/* 와 같다

@@ -93,12 +93,89 @@ struct RemoteState {
     /// 최근 폴더 목록을 접어 둔 host (기본은 펼침) — 호스트별 지속 (remote-explorer-polish)
     #[serde(default)]
     collapsed: Vec<String>,
-    /// host → 최근 연 폴더 (최신순, RECENT_MAX)
+    /// host → 경로 아이템 목록 (remote-path-items) — 고정(pinned) 단일 아이템이 위, 그 아래는 최근순.
+    /// 항상 normalize_items 를 거친 형태로 저장한다
     #[serde(default)]
-    recent: std::collections::BTreeMap<String, Vec<String>>,
+    items: std::collections::BTreeMap<String, Vec<Item>>,
     /// 구 형식(2026-09-02 이전 고정 목록) — 읽을 때 favorites 로 옮긴다
     #[serde(default, skip_serializing)]
     pinned: Vec<Favorite>,
+    /// 구 형식(2026-09-08 이전 최근 폴더 문자열 목록) — 읽을 때 items 로 옮긴다 (pin 없는 단일 아이템)
+    #[serde(default, skip_serializing)]
+    recent: std::collections::BTreeMap<String, Vec<String>>,
+}
+
+/// 호스트 아래 경로 아이템 — 단일 경로 또는 그룹(경로 여러 개 = 한 번에 여러 탭, 별칭 선택). 둘 다
+/// pin 가능 (그룹 pin 은 2026-09-08 사용자 요청 — 최근 기록에 밀리지 않게). JSON 은
+/// {path, pinned} | {alias?, paths, pinned}
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub enum Item {
+    Group {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        alias: Option<String>,
+        paths: Vec<String>,
+        #[serde(default)]
+        pinned: bool,
+    },
+    Path {
+        path: String,
+        #[serde(default)]
+        pinned: bool,
+    },
+}
+
+impl Item {
+    fn pinned(&self) -> bool {
+        matches!(self, Item::Path { pinned: true, .. } | Item::Group { pinned: true, .. })
+    }
+}
+
+/// 아이템 목록 정규화 — 프론트가 보낸 목록(set-items)과 record_recent 결과가 모두 거친다.
+/// 규칙: 경로는 절대 경로만, 평면(최상위·각 그룹)마다 같은 경로는 앞의 것 하나(뒤에 온 쪽이 사라진다 —
+/// 이동·복사 병합), 멤버가 하나 남은 그룹은 단일 아이템으로 풀리고 별칭도 버린다, 빈 그룹 제거, 빈 별칭은
+/// 없음, pin 된 아이템(단일·그룹)이 맨 위(안정 분할 — pin 끼리의 순서는 그대로), pin 안 된 단일 아이템만
+/// RECENT_MAX 상한 (pin·그룹은 상한 밖)
+fn normalize_items(items: Vec<Item>) -> Vec<Item> {
+    let abs = |p: &String| p.starts_with('/');
+    let mut top: Vec<String> = Vec::new();
+    let mut out: Vec<Item> = Vec::new();
+    for it in items {
+        let it = match it {
+            Item::Group { alias, paths, pinned } => {
+                let mut ps: Vec<String> = Vec::new();
+                for p in paths.into_iter().filter(abs) {
+                    if !ps.contains(&p) {
+                        ps.push(p);
+                    }
+                }
+                match ps.len() {
+                    0 => continue,
+                    1 => Item::Path { path: ps.remove(0), pinned },
+                    _ => Item::Group { alias: alias.map(|a| a.trim().to_string()).filter(|a| !a.is_empty()), paths: ps, pinned },
+                }
+            }
+            p => p,
+        };
+        if let Item::Path { path, .. } = &it {
+            if !abs(path) || top.contains(path) {
+                continue;
+            }
+            top.push(path.clone());
+        }
+        out.push(it);
+    }
+    let (mut pins, rest): (Vec<Item>, Vec<Item>) = out.into_iter().partition(Item::pinned);
+    let mut unpinned = 0;
+    pins.extend(rest.into_iter().filter(|i| {
+        if matches!(i, Item::Path { .. }) {
+            unpinned += 1;
+            unpinned <= RECENT_MAX
+        } else {
+            true
+        }
+    }));
+    pins
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -142,14 +219,14 @@ pub struct HostEntry {
 }
 
 /// 원격 탐색기 전체 응답 — FAVORITE pane(즐겨찾기 순), ALL pane(config 순, 즐겨찾기 표시),
-/// pane 접힘, 접어 둔 host, 호스트별 최근 폴더
+/// pane 접힘, 접어 둔 host, 호스트별 경로 아이템
 #[derive(serde::Serialize)]
 pub struct HostList {
     pub favorites: Vec<HostEntry>,
     pub all: Vec<HostEntry>,
     pub panes: Panes,
     pub collapsed: Vec<String>,
-    pub recent: std::collections::BTreeMap<String, Vec<String>>,
+    pub items: std::collections::BTreeMap<String, Vec<Item>>,
 }
 
 fn state_path() -> Option<PathBuf> {
@@ -173,6 +250,12 @@ fn load_state() -> RemoteState {
         if !st.favorites.iter().any(|f| f.host == p.host) {
             st.favorites.push(p);
         }
+    }
+    // 구 형식 이전 — 최근 폴더 문자열 목록은 pin 없는 단일 아이템으로 (items 가 이미 있으면 그쪽 우선)
+    for (host, paths) in std::mem::take(&mut st.recent) {
+        st.items.entry(host).or_insert_with(|| {
+            normalize_items(paths.into_iter().map(|path| Item::Path { path, pinned: false }).collect())
+        });
     }
     // pane 초기값은 딱 한 번 — 즐겨찾기가 없으면 FAVORITE 닫힘·ALL 열림, 있으면 둘 다 열림. 그 뒤는
     // 사용자가 접고 펼친 대로만 (2026-09-07 개정: 종전의 "즐겨찾기가 비면 항상 강제" 는 헤더 클릭이
@@ -235,14 +318,18 @@ pub fn host_list() -> HostList {
         })
         .collect();
     let panes = st.panes.unwrap_or_default();
-    HostList { favorites, all, panes, collapsed: st.collapsed, recent: st.recent }
+    HostList { favorites, all, panes, collapsed: st.collapsed, items: st.items }
 }
 
-/// 상태 변경 한 번 — op: fav·unfav·pin·unpin·ack·refresh·forget·pane·expand. 성공 시 갱신된 목록.
+/// 상태 변경 한 번 — op: fav·unfav·pin·unpin·ack·refresh·set-items·pane·expand. 성공 시 갱신된 목록.
 /// pin 은 즐겨찾기에서만(사용자 결정) config 블록을 스냅샷, unfav 는 고정도 함께 버린다.
 /// ack = 현재 config 상태를 인정(경고만 끈다), refresh = 저장본을 현재 config 로 교체.
-/// forget 은 최근 폴더 한 줄 제거(q.path), pane 은 접힘 상태(q.host = favorite|all, q.open = 0|1),
-/// expand 는 호스트 행의 최근 폴더 펼침(q.open = 0|1 — 0 이면 collapsed 에 기록).
+/// set-items 는 호스트의 경로 아이템 목록 교체(q.items = JSON 배열 — pin·그룹·순서·별칭·제거를 프론트가
+/// 계산해 통째로 보내고 relay 는 normalize_items 로 검증한다. 시작 페이지 Pinned 의 set_pinned 와 같은
+/// 방식 — op 를 다섯 개 늘리는 대신 하나. 대가: attach 의 record_recent 와 경합하면 프론트 스냅샷이
+/// 그 최근 항목을 덮을 수 있다 — 세션 변화마다 목록을 다시 읽으므로 감수).
+/// pane 은 접힘 상태(q.host = favorite|all, q.open = 0|1),
+/// expand 는 호스트 행의 경로 아이템 펼침(q.open = 0|1 — 0 이면 collapsed 에 기록).
 pub fn update_state(op: &str, q: &std::collections::HashMap<String, String>) -> Result<HostList, String> {
     let host = q.get("host").map(String::as_str).unwrap_or("");
     if host.is_empty() || !host_ok(host) {
@@ -285,13 +372,14 @@ pub fn update_state(op: &str, q: &std::collections::HashMap<String, String>) -> 
                 f.ack = None;
             }
         }
-        "forget" => {
-            let path = q.get("path").map(String::as_str).unwrap_or("");
-            if let Some(list) = st.recent.get_mut(host) {
-                list.retain(|p| p != path);
-                if list.is_empty() {
-                    st.recent.remove(host);
-                }
+        "set-items" => {
+            let raw = q.get("items").map(String::as_str).unwrap_or("[]");
+            let items: Vec<Item> = serde_json::from_str(raw).map_err(|e| format!("items 형식 오류: {e}"))?;
+            let items = normalize_items(items);
+            if items.is_empty() {
+                st.items.remove(host);
+            } else {
+                st.items.insert(host.to_string(), items);
             }
         }
         "pane" => {
@@ -317,13 +405,21 @@ pub fn update_state(op: &str, q: &std::collections::HashMap<String, String>) -> 
 }
 
 /// 최근 폴더 기록 — relay 가 원격 attach 성공(데몬이 돌려준 정규화 경로) 시 부른다.
-/// 최신을 앞에, 중복 제거, RECENT_MAX 초과는 버림. 저장 실패는 로그만 (접속에는 무관)
+/// pin 안 된 단일 아이템은 pin 바로 아래 맨 위로 (있던 것은 옮기고 없던 것은 새로), pin 된 것은 자리
+/// 그대로. 그룹 안의 같은 경로는 다른 평면이라 건드리지 않는다. 상한은 normalize_items. 저장 실패는
+/// 로그만 (접속에는 무관)
 pub fn record_recent(host: &str, path: &str) {
     let mut st = load_state();
-    let list = st.recent.entry(host.to_string()).or_default();
-    list.retain(|p| p != path);
-    list.insert(0, path.to_string());
-    list.truncate(RECENT_MAX);
+    let list = st.items.entry(host.to_string()).or_default();
+    if let Some(pos) = list.iter().position(|i| matches!(i, Item::Path { path: p, .. } if p == path)) {
+        if matches!(list[pos], Item::Path { pinned: true, .. }) {
+            return;
+        }
+        list.remove(pos);
+    }
+    let at = list.iter().take_while(|i| i.pinned()).count();
+    list.insert(at, Item::Path { path: path.to_string(), pinned: false });
+    *list = normalize_items(std::mem::take(list));
     if let Err(e) = save_state(&st) {
         eprintln!("backend: 최근 폴더 저장 실패: {e}");
     }
