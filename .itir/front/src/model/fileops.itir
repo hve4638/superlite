@@ -1,6 +1,6 @@
 import { ctx } from './ctx'
 import { ThinBackend } from '../backend/types'
-import { notify } from './notifications'
+import { notify, errText } from './notifications'
 import { createFiles, parentOf } from './files'
 import { createEditors, baseName } from './editors'
 import { createScm } from './scm'
@@ -29,7 +29,7 @@ export fn renameEntry(from, to) {
   role: 이름 변경 + 열린 문서/탭 경로 재매핑 (etag 유지). undo = 역방향 rename
 }
 export fn transferEntries(paths, dir, mode, confirmReplace) -> path[] {
-  role: 탐색기 드래그 이동·복사 (ticket explorer-multiselect-dnd) — paths 를 dir 안으로 같은 이름으로 순차 실행 (move 는 renameEntry, copy 는 내부 copyEntry — backend.copy 와이어 v19, undo = 사본 삭제. undo 는 항목별 스택, 묶음 undo·redo 없음). dir 을 readDir 로 나열해 같은 이름이 있으면 confirmReplace(name) 로 항목마다 묻고(false = 건너뜀) 승인이면 기존 것을 delete 한 뒤 진행 (rename·copy 는 대상 존재를 거부하므로 덮어쓰기는 여기서 명시). 실패 항목은 notify 후 다음으로. 자기 자신·하위로의 이동 차단은 호출측(드롭 판정). 반환은 새 경로들 — 호출측이 선택을 옮긴다
+  role: 탐색기 드래그 이동·복사 (ticket explorer-multiselect-dnd) — paths 를 dir 안으로 같은 이름으로 순차 실행 (move 는 renameEntry, copy 는 내부 copyEntry — backend.copy 와이어 v19, undo = 사본 삭제. undo 는 항목별 스택, 묶음 undo·redo 없음). dir 을 readDir 로 나열해 같은 이름이 있으면 confirmReplace(name) 로 항목마다 묻고(false = 건너뜀) 승인이면 기존 것을 delete 한 뒤 진행 (그 삭제는 내용을 캡처하지 않아 undo 가 대체당한 원본은 복구하지 못한다 — 옮겨 온 항목만 되돌린다) (rename·copy 는 대상 존재를 거부하므로 덮어쓰기는 여기서 명시). 실패 항목은 notify 후 다음으로. 자기 자신·하위로의 이동 차단은 호출측(드롭 판정). 반환은 새 경로들 — 호출측이 선택을 옮긴다
 }
 export fn deleteEntry(path, kind) {
   role: 삭제 + 해당 경로(하위 포함) 탭 닫기. 파일이면 5MB 내에서 내용 캡처를 시도해 undo = 재생성 — 캡처 불가(바이너리·대용량)와 디렉토리는 undo 없음. 삭제 실패는 notify 후 삼킨다

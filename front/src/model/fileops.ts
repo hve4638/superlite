@@ -127,7 +127,8 @@ export function createFileops(
    * 실행이라 undo 는 항목별로 쌓인다 (한 번의 Ctrl+Z 가 한 항목씩 되돌린다 — VS Code 의 묶음 undo 와
    * 다르다, redo 없음). dir 에 같은 이름이 있으면 confirmReplace(name) 로 항목마다 묻고(false = 그 항목
    * 건너뜀), 승인이면 기존 것을 지운 뒤 진행 (rename·copy 는 대상 존재를 거부하므로 덮어쓰기는 여기서
-   * 명시). 실패한 항목은 notify 하고 다음으로. 자기 자신·자기 하위로의 이동 차단은 호출측(드롭 판정) 몫.
+   * 명시 — 그 rawDelete 는 내용을 캡처하지 않으므로 Ctrl+Z 는 옮겨 온 항목만 되돌리고 대체당한 원본은
+   * 복구하지 못한다). 실패한 항목은 notify 하고 다음으로. 자기 자신·자기 하위로의 이동 차단은 호출측(드롭 판정) 몫.
    * 반환은 새 경로들 — 호출측이 선택을 옮긴다
    */
   async function transferEntries(
@@ -213,7 +214,7 @@ export function createFileops(
     }
   }
 
-  return { createFile, createDir, saveClipboardImage, renameEntry, copyEntry, transferEntries, deleteEntry, undoFileOp };
+  return { createFile, createDir, saveClipboardImage, renameEntry, transferEntries, deleteEntry, undoFileOp };
 }
 
 // ---- 활성 세션 전달 shim

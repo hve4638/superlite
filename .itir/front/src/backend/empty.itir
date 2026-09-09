@@ -3,5 +3,5 @@ import { ThinBackend } from './types'
 role: 루트 없는 빈 세션(시작 페이지 탭)용 무연결 백엔드 — 연결·워크스페이스가 없다는 사실을 계약으로 표현한다 (ticket app-empty-session)
 
 export class EmptyBackend {
-  role: 조회 계열(readDir·quickOpen·search·gitStatus·gitLog·gitBranches·workspace)은 빈 결과 — 초기 로드(SessionCtx.init)가 조건 분기 없이 지나가게. browseDir 는 구현하지 않는다 — 나열·확정 검증이 불가능하다는 신호로, 폴더 퀵인풋은 sessions.browseBackend 로 형제 연결 세션에 위임한다. 변경 계열(writeFile 등)은 reject — 빈 세션에 쓰기가 도달하면 버그다 (UI 가 진입로를 막는다). createTerminal 은 콜백이 발화하지 않는 스텁 — 생성 진입로(패널 자동 생성·커맨드)는 activeSessionEmpty 가드가 막고, 스텁은 경합 잔여 호출의 안전망이다
+  role: 초기 로드(SessionCtx.init)가 조건 분기 없이 지나가도록 목록형 조회(readDir·quickOpen·search·gitRepos·gitStatus·gitLog·gitBranches·workspace)는 빈 결과. 루트가 있어야 뜻이 서는 조회(readFile·stat·gitOriginalContent)는 변경 계열과 같이 reject. browseDir 는 구현하지 않는다 — 나열·확정 검증이 불가능하다는 신호로, 폴더 퀵인풋은 sessions.browseBackend 로 형제 연결 세션에 위임한다. 변경 계열(writeFile 등)은 reject — 빈 세션에 쓰기가 도달하면 버그다 (UI 가 진입로를 막는다). createTerminal 은 콜백이 발화하지 않는 스텁 — 생성 진입로(패널 자동 생성·커맨드)는 activeSessionEmpty 가드가 막고, 스텁은 경합 잔여 호출의 안전망이다
 }

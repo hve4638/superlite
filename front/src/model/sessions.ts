@@ -137,12 +137,12 @@ export function rootOfBackend(backend: ThinBackend): string | null {
   return null;
 }
 
-/** 활성 세션 컨텍스트 (없으면 null) */
 /** 열려 있는 모든 세션 컨텍스트 — tmux.conf 저장을 접속 중인 데몬(로컬·원격) 전부에 적용할 때 */
 export function allSessionCtxs(): SessionCtx[] {
   return [...ctxs.values()];
 }
 
+/** 활성 세션 컨텍스트 (없으면 null) */
 export function activeSessionCtx(): SessionCtx | null {
   return ctxs.get(sessions.activeId) ?? null;
 }
@@ -226,7 +226,7 @@ function removeLocal(id: string): void {
   loading.delete(id);
   untrackWorkspace(id);
   if (idx !== -1) sessions.list.splice(idx, 1);
-  (ctx.backend as { dispose?: () => void }).dispose?.();
+  ctx.backend.dispose?.();
 }
 
 /** 부팅 세션 등록 (host.ts 조립 시점) — 마지막으로 등록된 것이 활성이 된다. 동기화 없이 — 서브 창의
@@ -456,7 +456,7 @@ function replaceLocal(tab: SessionTab): void {
   const idx = sessions.list.findIndex((t) => t.id === tab.id);
   if (idx !== -1) sessions.list.splice(idx, 1);
   ctxs.delete(tab.id);
-  (old?.backend as { dispose?: () => void } | undefined)?.dispose?.();
+  old?.backend.dispose?.();
   const ctx = addLocal(tab);
   // addLocal 은 끝에 push — 자리는 곧 native 순서로 덮인다 (reconcile 의 목록 재구성)
   if (sessions.activeId === tab.id) activeCtx.value = ctx;
@@ -499,20 +499,25 @@ export function initSessions(): void {
 
 // ---- 서브 창 (앱 전용, decision 2026-09-08 개정)
 
-/** 서브 창의 수명 — X·OS 닫기는 탭을 메인에 되돌린 뒤 닫고, 모든 세션의 작업 탭이 0 이 되면
- *  스스로 닫힌다 (세션 하나가 비는 것은 아무 일도 아니다). 부팅 직후 핸드오프가 오기 전의
- *  0 은 세지 않는다 (everHadTabs) */
 /** 서브 창이 탭을 내보내는 중(X·회수) — 탭 0 자동 파괴가 그 흐름을 가로채지 않게 */
 let subLeaving = false;
 
+/** 모든 세션의 편집기 탭 총수 — 서브 창 자동 종료 조건 (initSubWindow 의 감시와 onSessionRecall 이 같은 수를 본다) */
+function totalTabs(): number {
+  return sessions.list.reduce(
+    (n, t) => n + (ctxs.get(t.id)?.editors.editors.groups.reduce((m, g) => m + g.tabs.length, 0) ?? 0),
+    0,
+  );
+}
+
+/** 서브 창의 수명 — X·OS 닫기는 탭을 메인에 되돌린 뒤 닫고, 모든 세션의 작업 탭이 0 이 되면
+ *  스스로 닫힌다 (세션 하나가 비는 것은 아무 일도 아니다). 부팅 직후 핸드오프가 오기 전의
+ *  0 은 세지 않는다 (everHadTabs) */
 function initSubWindow(): void {
   onWindowCloseRequested(() => void closeSubWindow());
   let everHadTabs = false;
   effect(() => {
-    const total = sessions.list.reduce(
-      (n, t) => n + (ctxs.get(t.id)?.editors.editors.groups.reduce((m, g) => m + g.tabs.length, 0) ?? 0),
-      0,
-    );
+    const total = totalTabs();
     if (total > 0) everHadTabs = true;
     // 마지막 탭이 메인으로 돌아갔다 — 이 서브 창의 워크스페이스 저장을 지우고 닫는다
     else if (everHadTabs && !subLeaving) void forgetSubWorkspaces().then(destroyWindow);
@@ -556,11 +561,7 @@ async function onSessionRecall(p: { id: string; token: string; toWindow: string 
   await returnSessionTabs(p.id, p.toWindow);
   await invoke('forward', { toWindow: p.toWindow, event: 'session-recalled', payload: { token: p.token } });
   subLeaving = false;
-  const total = sessions.list.reduce(
-    (n, t) => n + (ctxs.get(t.id)?.editors.editors.groups.reduce((m, g) => m + g.tabs.length, 0) ?? 0),
-    0,
-  );
-  if (total === 0) destroyWindow();
+  if (totalTabs() === 0) destroyWindow();
 }
 
 const recallWaiters = new Map<string, () => void>();
@@ -670,8 +671,9 @@ function undoTabsHandoff(key: string, h: Extract<Handoff, { kind: 'tabs' }>, gro
   ctx.terminals.adoptTerminals(h.terminals, undefined, { groupId });
 }
 
-type TabsPick = { editorTab?: { groupId: number; tabId: string } };
 type TabPick = { groupId: number; tabId: string };
+/** 창 간 이동의 대상 — 편집기 그룹의 탭 하나 (터미널 탭도 편집기 그룹에 살아 같은 pick 이다) */
+type TabsPick = { editorTab: TabPick };
 
 /** 이 세션의 root — 에디터·터미널 탭 이동은 같은 root 사이에서만 (와이어 경로가 root 상대) */
 export function sessionRoot(id: string): string | null {
@@ -708,17 +710,17 @@ export function detachEditorTab(groupId: number, tabId: string, x: number, y: nu
 function detachTabs(pick: TabsPick, x: number, y: number): void {
   const from = sessions.activeId;
   const root = sessionRoot(from);
-  if (root === null || isRemoteEmpty(root) || !pick.editorTab) return;
+  if (root === null || isRemoteEmpty(root)) return;
   const handoff = tabsHandoff(from, [pick.editorTab]);
   if (!handoff) return;
   void invoke('detach_tabs', { root, x: Math.max(0, x), y: Math.max(0, y), handoff }).then((ok) => {
-    if (!ok) undoTabsHandoff(from, handoff, pick.editorTab?.groupId);
+    if (!ok) undoTabsHandoff(from, handoff, pick.editorTab.groupId);
   });
 }
 
 interface TabsMoveRequest {
   fromSession: string;
-  editorTab?: { groupId: number; tabId: string };
+  editorTab: TabPick;
   toWindow: string;
   toSession: string;
   toGroupId?: number;
@@ -731,7 +733,7 @@ interface TabsMoveRequest {
  *  만들어 붙인다 (요청 시점에 만들면 이동이 거절됐을 때 빈 그룹이 남는다) */
 export function requestTabsMove(
   fromWindow: string,
-  pick: { fromSession: string; editorTab?: { groupId: number; tabId: string } },
+  pick: { fromSession: string; editorTab: TabPick },
   to: { toGroupId?: number; toIndex?: number; toSplit?: SplitSide },
 ): void {
   const payload: TabsMoveRequest = { ...pick, toWindow: windowLabel ?? '', toSession: sessions.activeId, ...to };
@@ -740,7 +742,6 @@ export function requestTabsMove(
 
 /** 출처 창 — 탭을 떼어 핸드오프를 만들고 살아 있는 대상 창에 바로 보낸다 (native 는 중계만) */
 function onTabsMoveRequest(p: TabsMoveRequest): void {
-  if (!p.editorTab) return;
   const handoff = tabsHandoff(p.fromSession, [p.editorTab]);
   if (!handoff) return;
   handoff.toSession = p.toSession;
@@ -748,7 +749,7 @@ function onTabsMoveRequest(p: TabsMoveRequest): void {
   handoff.toIndex = p.toIndex;
   handoff.toSplit = p.toSplit;
   void invoke('forward', { toWindow: p.toWindow, event: 'tabs-handoff', payload: handoff }).then((ok) => {
-    if (!ok) undoTabsHandoff(p.fromSession, handoff, p.editorTab?.groupId);
+    if (!ok) undoTabsHandoff(p.fromSession, handoff, p.editorTab.groupId);
   });
 }
 

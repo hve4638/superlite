@@ -2,7 +2,8 @@ import type {
   DirEntry, FileContent, FileSearchResult, FileStat, GitLogItem, GitStatus, QuickOpenItem, QuickOpenResult, TerminalSession, ThinBackend, WorkspaceInfo, WriteResult,
 } from './types';
 
-// WHY: 이 픽스처는 tools/refspec/mock-workspace 와 파일/내용/git 상태가 1:1 이다.
+// WHY: 이 픽스처는 ws 워크스페이스(이 repo 밖, code-superlight-ws/tools/refspec/mock-workspace)와
+//      파일/내용/git 상태가 1:1 이다.
 //      레퍼런스(Code OSS)에 같은 폴더를 열어 두 구현을 differential 비교하기 위한 전제이므로,
 //      한쪽을 바꾸면 반드시 다른 쪽도 같이 바꿔야 한다.
 
@@ -198,12 +199,14 @@ export class MockBackend implements ThinBackend {
   }
 
   stat(path: string): Promise<FileStat> {
-    if (!(path in FILES)) return Promise.reject(new Error(`ENOENT: ${path}`));
+    if (!(Object.hasOwn(FILES, path))) return Promise.reject(new Error(`ENOENT: ${path}`));
     return delay({ etag: String(ETAGS.get(path) ?? 0), size: new TextEncoder().encode(FILES[path]).length });
   }
 
   // ponytail: mock 엔 외부 쓰기 주체가 없어 충돌이 생길 수 없다 — 검사 생략, etag 만 굴린다.
-  // encoding(base64)도 무시하고 그대로 저장 — mock 파일 맵은 문자열뿐이고 읽는 쪽도 에디터뿐이다
+  // encoding(base64)도 무시하고 그대로 저장 — mock 파일 맵은 문자열뿐이다. 이제 base64 로 읽는 쪽이
+  // 있어(이미지·hex·다운로드·폴더 미리보기) base64 로 쓴 파일을 base64 로 읽으면 이중 인코딩이 된다
+  // (mock 한정 — BACKLOG). 텍스트 왕복만 맞다
   writeFile(path: string, content: string, _etag?: string, _encoding?: 'base64', append?: boolean): Promise<WriteResult> {
     FILES[path] = append ? (FILES[path] ?? '') + content : content;
     const v = (ETAGS.get(path) ?? 0) + 1;
@@ -212,7 +215,7 @@ export class MockBackend implements ThinBackend {
   }
 
   createFile(path: string): Promise<void> {
-    if (path in FILES || isDirPath(path)) return Promise.reject(new Error(`이미 존재: ${path}`));
+    if (Object.hasOwn(FILES, path) || isDirPath(path)) return Promise.reject(new Error(`이미 존재: ${path}`));
     FILES[path] = '';
     ETAGS.set(path, (ETAGS.get(path) ?? 0) + 1);
     return delay(undefined);
@@ -220,14 +223,14 @@ export class MockBackend implements ThinBackend {
 
   createDir(path: string): Promise<void> {
     // 배타적 생성 (데몬 계약과 동일 — undo 의 전제 보호)
-    if (path in FILES || isDirPath(path)) return Promise.reject(new Error(`이미 존재: ${path}`));
+    if (Object.hasOwn(FILES, path) || isDirPath(path)) return Promise.reject(new Error(`이미 존재: ${path}`));
     DIRS.add(path);
     return delay(undefined);
   }
 
   rename(from: string, to: string): Promise<void> {
-    if (to in FILES || isDirPath(to)) return Promise.reject(new Error(`이미 존재: ${to}`));
-    if (!isDirPath(from) && !(from in FILES)) return Promise.reject(new Error(`ENOENT: ${from}`));
+    if (Object.hasOwn(FILES, to) || isDirPath(to)) return Promise.reject(new Error(`이미 존재: ${to}`));
+    if (!isDirPath(from) && !(Object.hasOwn(FILES, from))) return Promise.reject(new Error(`ENOENT: ${from}`));
     const move = (p: string) => (p === from ? to : `${to}${p.slice(from.length)}`);
     for (const f of Object.keys(FILES)) {
       if (f !== from && !f.startsWith(`${from}/`)) continue;
@@ -248,8 +251,8 @@ export class MockBackend implements ThinBackend {
   }
 
   copy(from: string, to: string): Promise<void> {
-    if (to in FILES || isDirPath(to)) return Promise.reject(new Error(`이미 존재: ${to}`));
-    if (!isDirPath(from) && !(from in FILES)) return Promise.reject(new Error(`ENOENT: ${from}`));
+    if (Object.hasOwn(FILES, to) || isDirPath(to)) return Promise.reject(new Error(`이미 존재: ${to}`));
+    if (!isDirPath(from) && !(Object.hasOwn(FILES, from))) return Promise.reject(new Error(`ENOENT: ${from}`));
     if (to === from || to.startsWith(`${from}/`)) return Promise.reject(new Error(`자기 자신 안으로는 복사할 수 없다: ${to}`));
     const move = (p: string) => (p === from ? to : `${to}${p.slice(from.length)}`);
     for (const f of Object.keys(FILES)) {
@@ -263,7 +266,7 @@ export class MockBackend implements ThinBackend {
 
   delete(path: string): Promise<void> {
     // 없는 경로는 에러 (데몬의 symlink_metadata 실패와 동일 계약)
-    if (!(path in FILES) && !isDirPath(path)) return Promise.reject(new Error(`ENOENT: ${path}`));
+    if (!(Object.hasOwn(FILES, path)) && !isDirPath(path)) return Promise.reject(new Error(`ENOENT: ${path}`));
     for (const f of Object.keys(FILES)) {
       if (f !== path && !f.startsWith(`${path}/`)) continue;
       delete FILES[f];
@@ -358,7 +361,7 @@ export class MockBackend implements ThinBackend {
 
   gitStage(_repo: string, paths: string[]): Promise<void> {
     for (const p of paths) {
-      if (p in FILES) INDEX[p] = FILES[p];
+      if (Object.hasOwn(FILES, p)) INDEX[p] = FILES[p];
       else delete INDEX[p];
     }
     return delay(undefined);

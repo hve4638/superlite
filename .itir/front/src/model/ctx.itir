@@ -1,4 +1,4 @@
-role: 활성 세션 컨텍스트 (leaf) — 페이지 하나가 세션(워크스페이스) 컨텍스트를 여럿 들 수 있고 (세션 탭), UI·커맨드는 활성 컨텍스트 하나만 본다. 세션 전환 = activeCtx(shallowRef) 교체 — shim 을 읽던 모든 effect 가 새 세션 상태로 재실행된다. 각 model 모듈의 shim 은 여기만 import 해 모듈 순환을 끊는다 (조립은 session.ts)
+role: 활성 세션 컨텍스트 (leaf) — 페이지 하나가 세션(워크스페이스) 컨텍스트를 여럿 들 수 있고 (세션 탭), UI·커맨드는 활성 컨텍스트 하나만 본다. 세션 전환 = activeCtx(shallowRef) 교체 — shim 을 읽던 모든 effect 가 새 세션 상태로 재실행된다. 각 model 모듈의 shim 은 여기만 import 해 모듈 순환을 끊는다 (조립은 session.ts — SessionCtx 는 타입 전용 import 라 런타임 의존이 없고 leaf 가 유지된다)
 
 export val activeCtx
 

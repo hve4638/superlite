@@ -11,7 +11,7 @@ import { tauri } from './tauri';
  *
  * 저장소 (decision/state-persistence.md): 앱은 native state.json 의 workspaces (root 키, native 소유 —
  * 여기는 get/set_workspace_state invoke 만, root 는 native 가 세션 id 로 안다), 웹은 localStorage
- * 'superlight.state'.workspaces[root]. 같은 root 의 두 번째 세션(탭 분리 detach_tabs)은 native 가
+ * 'superlite.state'.workspaces[root] (recents.ts 와 같은 키 — 서로의 필드를 보존하며 저장한다). 같은 root 의 두 번째 세션(탭 분리 detach_tabs)은 native 가
  * get/set 을 거절한다 — 첫 세션만 저장·복원한다.
  *
  * 저장 시점: 탭·그룹·배치·펼침이 바뀌면 1초 디바운스, 세션 닫기·창 닫기는 flush 로 즉시. 커서·스크롤
@@ -39,7 +39,7 @@ export interface WorkspaceState {
 }
 
 const DEBOUNCE_MS = 1000;
-const WEB_KEY = 'superlight.state';
+const WEB_KEY = 'superlite.state';
 
 export type StoreKind = 'app' | 'web' | 'mock';
 

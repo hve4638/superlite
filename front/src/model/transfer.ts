@@ -41,12 +41,16 @@ export interface TransferProgress {
 /** 진행 중인 전송 (없으면 null) — 상태바가 라벨·퍼센트를 그린다 */
 export const transfer = reactive({ active: null as TransferProgress | null });
 
+/** 전송 중이면 경고를 띄우고 true — run 과 uploadDropped(대화상자 전 선행 검사)가 같은 문구를 낸다 */
+function rejectIfBusy(): boolean {
+  if (!transfer.active) return false;
+  notify('warning', `A transfer is already in progress: ${transfer.active.label}`);
+  return true;
+}
+
 /** 전송 하나를 상태바에 걸고 실행 — 동시에 둘은 거절, 실패는 notify. 성공 여부 반환 */
 async function run(label: string, body: (progress: (done: number, total: number) => void) => Promise<void>): Promise<boolean> {
-  if (transfer.active) {
-    notify('warning', `A transfer is already in progress: ${transfer.active.label}`);
-    return false;
-  }
+  if (rejectIfBusy()) return false;
   transfer.active = { label, done: 0, total: 0 };
   try {
     await body((done, total) => {
@@ -267,10 +271,7 @@ export async function uploadDropped(
   confirmReplace: (names: string[]) => Promise<boolean>,
 ): Promise<void> {
   if (entries.length === 0) return;
-  if (transfer.active) {
-    notify('warning', `A transfer is already in progress: ${transfer.active.label}`);
-    return;
-  }
+  if (rejectIfBusy()) return;
   const { backend, files: filesM, workbench: wbM } = ctx();
   const where = dir === '' ? wbM.workbench.workspaceName : dir;
   let dupes: string[];

@@ -39,7 +39,7 @@ export interface HexTab {
   preview: boolean;
 }
 
-/** HTML 프리뷰 탭 — 같은 path 의 doc.content 를 렌더한다 (편집 버퍼 실시간 반영). 편집 없음 */
+/** HTML 프리뷰 탭 — 같은 path 의 doc 을 공유하되 savedContent(저장분)만 그린다 (편집 버퍼는 반영하지 않는다). 편집 없음 */
 export interface PreviewTab {
   kind: 'preview';
   /** 'preview:'+path */
@@ -784,13 +784,13 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
 
   /** 탐색기 드래그 드롭 — 파일을 refGroupId 의 상하좌우(side) 새 그룹에 연다 */
   async function openFileSplit(path: string, refGroupId: number, side: SplitSide): Promise<void> {
-    const ref = editors.groups.find((g) => g.id === refGroupId);
-    if (!ref) return;
-    const group: EditorGroup = { id: nextGroupId++, tabs: [], activeTabId: null };
-    editors.groups.splice(editors.groups.indexOf(ref) + 1, 0, group);
-    insertIntoLayout(refGroupId, group.id, side);
+    const groupId = addGroupBeside(refGroupId, side);
+    if (groupId === null) return;
     // 읽기 실패 시 빈 그룹 잔재를 남기지 않는다 (잠금과 무관 — 사용자가 만든 빈 그룹이 아니다)
-    if (!(await openFile(path, { groupId: group.id }))) removeGroup(group);
+    if (!(await openFile(path, { groupId }))) {
+      const group = editors.groups.find((g) => g.id === groupId);
+      if (group) removeGroup(group);
+    }
   }
 
   /** 그룹에서 탭을 떼어낸다 — 활성 탭이었으면 이웃(같은 인덱스, 없으면 왼쪽)으로 활성 이동 */
@@ -1400,7 +1400,6 @@ export const setFolderSort = (groupId: number, tabId: string, key: FolderSortKey
   ctx().editors.setFolderSort(groupId, tabId, key);
 export const ensureHex = (path: string): Promise<void> => ctx().editors.ensureHex(path);
 export const loadHexChunk = (path: string, idx: number): Promise<void> => ctx().editors.loadHexChunk(path, idx);
-export const openHtmlPreview = (path: string): Promise<void> => ctx().editors.openHtmlPreview(path);
 export const toggleHtmlPreview = (groupId: number, tabId: string): void => ctx().editors.toggleHtmlPreview(groupId, tabId);
 export const setActiveTab = (groupId: number, tabId: string): void =>
   ctx().editors.setActiveTab(groupId, tabId);

@@ -59,7 +59,7 @@ export interface CredentialRequest {
 export interface PromptAnswer {
   username: string;
   secret: string;
-  /** localStorage 에 기억 (git 이 store 를 보낸 뒤에) — 아니면 이번 명령이 끝날 때까지만 (transient) */
+  /** relay 저장소(OS 키체인)에 기억 (git 이 store 를 보낸 뒤 addCredential) — 아니면 이번 명령이 끝날 때까지만 (transient) */
   remember: boolean;
 }
 
@@ -108,10 +108,6 @@ export async function refreshCredentials(): Promise<void> {
   }
 }
 
-export function credentialFor(host: string): GitCredentialInfo | undefined {
-  return gitAuth.credentials.find((c) => c.host === host);
-}
-
 /** 호스트의 토큰까지 — git 이 물을 때만 받는다 (메모리 밖에 남기지 않는다) */
 async function fetchSecret(host: string): Promise<GitCredential | null> {
   const url = api({ host });
@@ -156,7 +152,7 @@ let queue: Promise<unknown> = Promise.resolve();
 /**
  * git credential 요청 하나에 답한다. get: 저장·임시 자격이 있으면 대화상자 없이, 없으면 SCM 뷰를 열고
  * 대화상자로 묻는다 (취소는 null — git 은 다음 수단으로: 터미널이면 자기 프롬프트, 데몬 실행이면 실패).
- * store: 대화상자 답이 성공했다는 뜻 — remember 면 localStorage 에. erase: 그 자격이 거부됐다 — 저장·
+ * store: 대화상자 답이 성공했다는 뜻 — remember 면 relay 저장소(addCredential)에. erase: 그 자격이 거부됐다 — 저장·
  * 임시 모두 지우고 알린다 (다음 시도는 다시 묻는다). 대화상자는 한 번에 하나 — 동시 요청은 줄 세운다
  */
 export function credential(req: CredentialRequest): Promise<{ username: string; password: string } | null> {

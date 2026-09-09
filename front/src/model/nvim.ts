@@ -221,7 +221,17 @@ export function inputText(text: string): void {
 }
 
 // ---- :명령 가로채기 — nvim 은 acwrite 버퍼라 디스크를 안 쓰고, :q 는 마지막 창이라 nvim 자체가 끝난다 ----
-const EX_INTERCEPT = /^\s*(w|write|q|quit|wq|x|xit|exit|qa|qall|wqa|xa|wa|wall)(!?)\s*$/;
+// 명령 표 하나에서 세 판정(가로채기·저장·닫기)을 만든다 — 명령을 더 받을 때 한 곳만 고친다
+const EX_COMMANDS: { name: string; write: boolean; quit: boolean }[] = [
+  { name: 'w', write: true, quit: false }, { name: 'write', write: true, quit: false },
+  { name: 'wa', write: true, quit: false }, { name: 'wall', write: true, quit: false },
+  { name: 'q', write: false, quit: true }, { name: 'quit', write: false, quit: true },
+  { name: 'qa', write: false, quit: true }, { name: 'qall', write: false, quit: true },
+  { name: 'wq', write: true, quit: true }, { name: 'x', write: true, quit: true },
+  { name: 'xit', write: true, quit: true }, { name: 'exit', write: true, quit: true },
+  { name: 'wqa', write: true, quit: true }, { name: 'xa', write: true, quit: true },
+];
+const EX_INTERCEPT = new RegExp(`^\\s*(${EX_COMMANDS.map((c) => c.name).join('|')})(!?)\\s*$`);
 
 export async function runEx(cmd: string): Promise<void> {
   const m = EX_INTERCEPT.exec(cmd);
@@ -231,8 +241,9 @@ export async function runEx(cmd: string): Promise<void> {
   // WHY: :wa·:qa·:wqa·:xa 도 활성 탭 하나만 — vim 은 오로지 그 편집기에만 작용하고 다른 탭을
   //      저장하거나 닫지 않는다 (사용자 결정 2026-09-09, editor-close-vim). nvim 에 넘기면
   //      acwrite 버퍼라 아무 일도 없거나 에러라 가로채기 목록에는 남긴다
-  const write = /^(w|write|wq|x|xit|exit|wqa|xa|wa|wall)$/.test(name);
-  const quit = /^(q|quit|wq|x|xit|exit|qa|qall|wqa|xa)$/.test(name);
+  const spec = EX_COMMANDS.find((c) => c.name === name);
+  const write = spec?.write === true;
+  const quit = spec?.quit === true;
   if (write) await saveActive().then(refreshScm);
   if (quit) {
     const g = activeGroup();

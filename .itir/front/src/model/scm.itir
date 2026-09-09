@@ -1,6 +1,6 @@
 import { ctx, viewOf } from './ctx'
 import { createEditors } from './editors'
-import { notify } from './notifications'
+import { notify, errText } from './notifications'
 import { DirEntry, GitChangeKind, GitLogItem, ThinBackend } from '../backend/types'
 
 role: SCM 뷰 상태 — 저장소 목록(루트·하위·중첩, 각각 ScmRepo)·선택 저장소와 저장소별 git 변경 목록(staged/unstaged 분리), 스테이징·discard·커밋, 최근 커밋 로그, 브랜치 전환, 트리·탭 장식(색/문자). 저장소는 자동 탐색(gitRepos) + 트리 펼침(readDir repo 표식) + 재탐색의 합집합. 변경 항목은 워크스페이스 경로(path)와 저장소 상대 경로(rel)를 함께 가진다. 세션별 팩토리(createScm) + 활성 세션 전달 shim

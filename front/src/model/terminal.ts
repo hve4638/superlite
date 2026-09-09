@@ -11,7 +11,7 @@ export interface TerminalInstance {
   id: number;
   title: string;
   session: TerminalSession;
-  /** 다른 창에서 넘어온 xterm 버퍼(직렬화) — TerminalPane 이 xterm 을 열 때 먼저 그린다 */
+  /** 다른 창에서 넘어온 xterm 버퍼(직렬화) — TerminalView 가 xterm 을 열 때 먼저 그린다 */
   restoreBuffer?: string;
   /** 붙어 있는 tmux 세션 (와이어 v17 termTmux) — 없으면 plain 터미널 (탭 닫기가 곧 종료) */
   tmux?: { id: string; name: string };
@@ -24,29 +24,30 @@ export interface TerminalSnapshot {
   buffer: string;
 }
 
-// xterm 버퍼 직렬화 seam — TerminalPane 이 등록한다 (model 은 xterm 을 모른다).
+// xterm 버퍼 직렬화 seam — terminalHost 가 등록한다 (model 은 xterm 을 모른다).
 // 세션 공용 슬롯 — 능력이지 세션 상태가 아니다 (editors 의 applyExternalEdit 과 같은 성격)
 let serializeBuffer: ((id: number) => string | null) | null = null;
 export function setTerminalSerializer(fn: (id: number) => string | null): void {
   serializeBuffer = fn;
 }
 
-// WHY: 페이지 전역 카운터 — 터미널 id 가 세션을 넘어 유일해야 TerminalPane 의 xterm
+// WHY: 페이지 전역 카운터 — 터미널 id 가 세션을 넘어 유일해야 terminalHost 의 xterm
 //      바인딩 맵(id 키, 세션 전환에도 살아남는다)이 세션 간에 충돌하지 않는다
 let nextId = 1;
 
 /** 탭을 열 자리 — 그룹·index (창 간 드롭 위치). 없으면 활성 그룹 끝 */
 export type TerminalTabAt = { groupId?: number; index?: number };
 
-/** 세션별 터미널 모듈 — 목록·배압 상태와 backend 이벤트 구독이 세션에 묶인다.
- *  터미널은 편집기 탭에 산다 — 등록이 탭을 열고, 정리가 탭을 닫고, 탭 × 는 훅으로 여기 온다 */
 // 강제 종료 확인창의 "다시 묻지 않기" — 창·세션 무관 전역이라 localStorage
 const KILL_NO_CONFIRM_KEY = 'superlite.terminalKillNoConfirm';
+
+/** 세션별 터미널 모듈 — 목록·배압 상태와 backend 이벤트 구독이 세션에 묶인다.
+ *  터미널은 편집기 탭에 산다 — 등록이 탭을 열고, 정리가 탭을 닫고, 탭 × 는 훅으로 여기 온다 */
 export function createTerminals(backend: ThinBackend, editorsM: ReturnType<typeof createEditors>) {
   const terminals = reactive({
-    // WHY: session 객체는 반응성이 필요 없고 xterm 이 직접 잡는 외부 핸들이라
-    //      reactive 프록시로 감싸지 않도록 markRaw 성격의 shallow 구조를 유지한다.
-    //      (list 는 push/splice 만 추적하면 충분)
+    // 주의: 깊은 reactive 라 list 의 인스턴스와 그 session 핸들도 프록시로 감싸인다. session 은
+    //      메서드만 있는 순수 인터페이스라 프록시 경유 호출이 지금은 무해하다 — daemon.ts 처럼
+    //      shallowReactive 로 바꾸는 것은 반응성 범위가 달라지므로 별건 (BACKLOG)
     list: [] as TerminalInstance[],
   });
 

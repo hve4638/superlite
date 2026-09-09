@@ -4,6 +4,8 @@ import { ctx, viewOf } from './ctx';
 import { subWindow } from './window';
 
 export type ViewletId = 'explorer' | 'search' | 'scm' | 'remote' | 'terminals';
+/** 퀵인풋 모드 — 파일 퀵오픈 / 커맨드 팔레트 / 폴더 경로 입력 */
+export type QuickInputMode = 'files' | 'commands' | 'folder';
 
 /** 창 이동 핸드오프의 레이아웃 몫 — 부위 크기·표시 여부만 (오버레이는 나르지 않는다) */
 export interface WorkbenchSnapshot {
@@ -39,7 +41,7 @@ export function createWorkbench(backend: ThinBackend) {
 
     quickInput: {
       open: false,
-      mode: 'files' as 'files' | 'commands' | 'folder',
+      mode: 'files' as QuickInputMode,
     },
 
     contextMenu: {
@@ -73,7 +75,7 @@ export function createWorkbench(backend: ThinBackend) {
     workbench.sideBarVisible = true;
   }
 
-  function openQuickInput(mode: 'files' | 'commands' | 'folder'): void {
+  function openQuickInput(mode: QuickInputMode): void {
     workbench.quickInput.open = true;
     workbench.quickInput.mode = mode;
   }
@@ -146,7 +148,7 @@ export function showViewlet(id: ViewletId, toggle = false): void {
   wb.activeViewlet = id;
   subShell.sideBarVisible = true;
 }
-export const openQuickInput = (mode: 'files' | 'commands' | 'folder'): void =>
+export const openQuickInput = (mode: QuickInputMode): void =>
   ctx().workbench.openQuickInput(mode);
 export const closeQuickInput = (): void => ctx().workbench.closeQuickInput();
 export const openContextMenu = (x: number, y: number, items: ContextMenuItem[]): void =>

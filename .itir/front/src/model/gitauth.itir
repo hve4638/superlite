@@ -14,9 +14,6 @@ export type GitCredentialInfo
 export fn refreshCredentials() {
   role: 목록(토큰 없음)과 keychain 가용 여부를 relay 에서 다시 받는다 — SCM 뷰 마운트·저장/삭제 뒤
 }
-export fn credentialFor(host) -> GitCredentialInfo? {
-  role: 목록의 호스트 항목 (토큰 없음)
-}
 fn fetchSecret(host) -> GitCredential? {
   role: 호스트의 토큰까지 — git 이 물을 때만 relay 에서 받는다 (mock 은 메모리)
 }
@@ -28,7 +25,7 @@ export fn removeCredential(host) {
 }
 export type CredentialRequest
 export fn credential(req) -> answer? {
-  role: git credential 요청 하나 — get: 저장·임시 자격이 있으면 대화상자 없이 {username,password}, 없으면 SCM 뷰를 열고 대화상자(취소는 null → git 은 다음 수단: 터미널이면 자기 프롬프트, 데몬 실행이면 실패). store: 대화상자 답이 성공 — remember 면 localStorage 에. erase: 거부됨 — 저장·임시 삭제 + 알림, 다음 시도는 다시 묻는다. 한 번에 하나, 동시 요청은 줄 세운다
+  role: git credential 요청 하나 — get: 저장·임시 자격이 있으면 대화상자 없이 {username,password}, 없으면 SCM 뷰를 열고 대화상자(취소는 null → git 은 다음 수단: 터미널이면 자기 프롬프트, 데몬 실행이면 실패). store: 대화상자 답이 성공 — remember 면 relay 저장소(addCredential, OS 키체인)에. erase: 거부됨 — 저장·임시 삭제 + 알림, 다음 시도는 다시 묻는다. 한 번에 하나, 동시 요청은 줄 세운다
 }
 export fn answerPrompt(answer) {
   role: 대화상자 확정 — 대기 중 프롬프트의 resolve

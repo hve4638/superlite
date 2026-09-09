@@ -203,7 +203,7 @@ export function setupCommands(): void {
       id: 'workbench.action.nextSessionTab',
       title: 'View: Switch to Next Session Tab',
       keybinding: 'Ctrl+Shift+Tab',
-    skipShell: true,
+      skipShell: true,
       run: () => cycleSession(1),
     }, 'ctrl+shift+tab');
   }

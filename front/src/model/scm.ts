@@ -186,7 +186,7 @@ export function createScm(backend: ThinBackend, editorsM: ReturnType<typeof crea
     });
   }
 
-  /** 변경 파일 클릭 → diff (untracked 는 diff 대상이 없으므로 파일로, 삭제는 HEAD vs 빈 내용) */
+  /** 변경 파일 클릭 → diff (untracked 는 diff 대상이 없으므로 파일로, 삭제는 HEAD 내용 읽기 전용 보기 — openDiff deleted) */
   async function openChange(change: ScmChange): Promise<void> {
     if (change.kind === 'untracked' || change.kind === 'added') {
       await openFile(change.path, { preview: true });

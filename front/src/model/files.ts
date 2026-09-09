@@ -1,6 +1,7 @@
 import { reactive } from '@vue/reactivity';
 import type { DirEntry, QuickOpenResult, ThinBackend } from '../backend/types';
 import { ctx, viewOf } from './ctx';
+import { errText } from './notifications';
 
 export interface TreeNode {
   name: string;
@@ -177,7 +178,7 @@ export function createFiles(backend: ThinBackend) {
       const entries = await readDir(path);
       if (files.listing.has(path)) files.listing.set(path, { entries });
     } catch (e) {
-      if (files.listing.has(path)) files.listing.set(path, { entries: null, error: e instanceof Error ? e.message : String(e) });
+      if (files.listing.has(path)) files.listing.set(path, { entries: null, error: errText(e) });
     }
   }
 
@@ -205,7 +206,7 @@ export function createFiles(backend: ThinBackend) {
       entries = await readDir(path);
     } catch (e) {
       // 디렉터리가 사라진 경우 등 — 트리는 부모 리프레시가 노드를 지우고, 폴더 탭 열은 사유를 보인다
-      if (files.listing.has(path)) files.listing.set(path, { entries: null, error: e instanceof Error ? e.message : String(e) });
+      if (files.listing.has(path)) files.listing.set(path, { entries: null, error: errText(e) });
       return;
     }
     if (files.listing.has(path)) files.listing.set(path, { entries });
@@ -221,7 +222,8 @@ export function createFiles(backend: ThinBackend) {
         ? prev
         : { name: e.name, path: e.path, kind: e.kind, depth, children: null };
     });
-    // 사라진 직계 엔트리의 펼침 상태 정리 (심층 잔재는 ponytail: 방치 — 무해)
+    // 사라진 직계 엔트리의 펼침 상태 정리 (심층 잔재는 ponytail: 방치 — 화면에는 무해. workspaceState 가
+    // expanded 를 통째로 직렬화하므로 저장본에는 실리지만, 없는 경로는 복원 때 펼칠 대상이 없어 무시된다)
     for (const n of oldNodes) {
       if (!next.includes(n)) files.expanded.delete(n.path);
     }
@@ -258,7 +260,6 @@ export function createFiles(backend: ThinBackend) {
     files.expanded.clear();
   }
 
-  /** 현재 펼침 상태 기준 flat 목록 (가상 스크롤 없이 단순 렌더) */
   /** 경로를 트리에 드러낸다 — 조상 디렉토리를 차례로 로드·펼치고 선택한다 (VS Code explorer.autoReveal).
    *  트리에 없는 경로(files.exclude·워크스페이스 밖)는 닿는 데까지만 펼치고 만다 */
   async function revealPath(path: string): Promise<void> {
@@ -330,6 +331,7 @@ export function createFiles(backend: ThinBackend) {
     return visibleNodes().filter((n) => files.selected.has(n.path));
   }
 
+  /** 현재 펼침 상태 기준 flat 목록 (가상 스크롤 없이 단순 렌더) */
   function visibleNodes(): TreeNode[] {
     const out: TreeNode[] = [];
     const walk = (nodes: TreeNode[]) => {

@@ -1,4 +1,4 @@
-role: ThinBackend 계약 — 와이어 프로토콜(백엔드 /ws JSON-RPC, v6 부터 대형 readFile 응답은 바이너리 payload 프레임 — 계약 표면(content=string)은 불변, 복원은 ws.ts 몫. v10 adoptTerminal — 세션 간 터미널 이동. v11 readFile 범위 읽기 offset + stat size — hex 뷰어 청크. v12 listFiles → quickOpen: 빠른 열기 목록을 나르지 않고 데몬 캐시에서 검색. v14 writeFile append — 청크 업로드. v15 readDir 절대 경로 — 폴더 탭의 워크스페이스 밖 탐색. v17 내장 tmux — createTerminal attach·listTerminals·killTerminal·renameTerminal·applyTmuxConf·onTerminalMode·TerminalSession.onTmux. v19 copy — 탐색기 드래그 복사)의 TS 사영. 와이어 쪽 대응은 daemon/src 참조
+role: ThinBackend 계약 — 와이어 프로토콜(백엔드 /ws JSON-RPC, v6 부터 대형 readFile 응답은 바이너리 payload 프레임 — 계약 표면(content=string)은 불변, 복원은 ws.ts 몫. v10 adoptTerminal — 세션 간 터미널 이동. v11 readFile 범위 읽기 offset + stat size — hex 뷰어 청크. v12 listFiles → quickOpen: 빠른 열기 목록을 나르지 않고 데몬 캐시에서 검색. v14 writeFile append — 청크 업로드. v16 readDir 절대 경로 + 항목 mtime·size — 폴더 탭의 워크스페이스 밖 탐색·자세히 보기 (v15 는 폐기된 termd 분리 빌드가 소켓 충돌 방지로 건너뛴 번호). v17 내장 tmux — createTerminal attach·listTerminals·killTerminal·renameTerminal·applyTmuxConf·onTerminalMode·TerminalSession.onTmux. v19 copy — 탐색기 드래그 복사)의 TS 사영. 와이어 쪽 대응은 daemon/src 참조
 
 export class TerminalMode {
   role: 데몬의 터미널 방식 (attach 응답, 와이어 v17) — 'tmux'(내장 tmux 서버) | 'plain'(unix 인데 tmux 를 못 써 PTY 직접 — 경고 배지) | 'unsupported'(Windows — 아이콘 없음)
@@ -13,12 +13,12 @@ export class ConnectStage {
 
 port ThinBackend {
   role: 워크스페이스 파일·검색·git·터미널 접근 계약. 구현체 선택은 model/host 조립 지점 한 곳
-  impls: { MockBackend, WsBackend }
+  impls: { MockBackend, WsBackend, EmptyBackend }
   fn workspace() -> WorkspaceInfo {
     role: 워크스페이스 이름·루트 경로
   }
   fn readDir(path) -> DirEntry[] {
-    role: 디렉토리 1층 나열 (트리 lazy 로드 단위). files.exclude 기본값(.git 등 VCS 메타)은 숨긴다 — node_modules 는 보인다. 자식 .git 을 가진 디렉토리 항목은 repo=true (와이어 v13) — 트리 펼침이 곧 하위 저장소 인식. 절대 경로(와이어 v18)면 워크스페이스 밖도 나열 — 항목 path 는 절대('/' 구분), repo 표식 없음 (git RPC 는 루트 상대). 폴더 탭 전용. 항목에 mtime(ms)·size(파일만) 동봉(v15) — 폴더 탭 자세히 보기의 열·정렬
+    role: 디렉토리 1층 나열 (트리 lazy 로드 단위). files.exclude 기본값(.git 등 VCS 메타)은 숨긴다 — node_modules 는 보인다. 자식 .git 을 가진 디렉토리 항목은 repo=true (와이어 v13) — 트리 펼침이 곧 하위 저장소 인식. 절대 경로(와이어 v16)면 워크스페이스 밖도 나열 — 항목 path 는 절대('/' 구분), repo 표식 없음 (git RPC 는 루트 상대). 폴더 탭 전용. 항목에 mtime(ms)·size(파일만) 동봉(v16) — 폴더 탭 자세히 보기의 열·정렬
   }
   fn readFile(path, maxBytes?, encoding?, offset?) -> FileContent {
     role: 파일 내용 + 그 시점 디스크 etag. 크기 초과(maxBytes 또는 데몬 기본 상한 50MB)·이진/비 UTF-8 은 에러가 아니라 unopenable(사유 kind·실측 size)로 반환 — 탭은 열리고 편집기 자리에 안내 화면이 뜬다 (etag 는 이때도 온다 — orphan 재검증·재로드용). 실존하지 않는 경로 등 실제 실패만 에러. maxBytes 는 undo 캡처 등 호출측 상한 (초과 파일을 읽어 나르지 않는다). encoding='base64' 면 UTF-8 검증 없이 바이트를 base64 content 로 나른다 (이미지 뷰어 등 — writeFile 이진 통로와 대칭, binary unopenable 은 안 생기고 크기 상한만 남는다). offset 이 있으면(base64 전용, 와이어 v11) 범위 읽기 — 크기 상한 없이 offset 부터 maxBytes 만큼, EOF 넘어가면 짧게 (hex 뷰어 청크). 루트 상대 외에 절대 경로도 허용 — 워크스페이스 밖 파일 열기 (OS 드롭, VS Code 파리티)
@@ -130,6 +130,9 @@ port ThinBackend {
   }
   fn onSessionLost(cb) {
     role: 재연결됐지만 데몬 세션이 회수된 경우(장기 끊김) 구독 (옵셔널). cb 는 죽은 터미널의 TerminalSession.id 목록을 받는다 — 끊김 중에 만들어진 터미널은 새 세션에 살아 있으므로 전체가 아니라 명단만 정리해야 한다
+  }
+  fn dispose() {
+    role: 연결·핸들 정리 (세션 닫기·창 회수). 옵셔널 — WsBackend(소켓 닫기·재연결 중단)·MockBackend(타이머)만, EmptyBackend 는 없다. 호출은 sessions 의 세션 제거·서브 창 회수
   }
   fn onRequest(cb) {
     role: 데몬 소켓 요청자(셸 심 등, ticket cli-open-command)가 이 세션에 보낸 요청 구독 (와이어 v9, 옵셔널 — mock·빈 세션은 요청자가 없다). 데몬은 method·params 를 해석하지 않는 범용 통로 — 어떤 요청이 있는지는 구독자(host.ts 조립 지점)의 몫. cb 반환값이 요청자에게 result 로, throw 는 error 로 돌아간다 (왕복). 구독 부재는 구현체가 에러로 답한다

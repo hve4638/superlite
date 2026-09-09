@@ -9,7 +9,7 @@ export fn createSearch(backend) {
   role: 세션별 검색 모듈 생성 — 질의·결과·디바운스 타이머·시퀀스 토큰이 세션에 묶인다
 }
 export fn setQuery(q) {
-  role: 질의 갱신 (디바운스 실행은 뷰 쪽)
+  role: 질의 갱신 — 200ms 디바운스 뒤 실행 (뷰는 값만 넘긴다)
 }
 export fn runSearch() {
   role: 검색 실행 — 결과와 접힘 상태 초기화

@@ -1,8 +1,10 @@
 /**
  * WsBackend — 백엔드(backend/)의 /ws 에 붙는 ThinBackend 구현. 백엔드가 데몬으로 중계한다.
  *
- * 프로토콜(임시 v0): {id,method,params} 요청/응답 + termData/termExit 이벤트.
- * 와이어 계약 확정은 보류 중 (_docs/decisions.md) — 확정되면 이 파일과 backend/daemon 만 바뀐다.
+ * 프로토콜: {id,method,params} 요청/응답 (JSON, 대형 readFile 응답은 바이너리 payload 프레임) +
+ * 이벤트 프레임 {event,…} — connectStage·fsChanges·request·termData·termTmux·termInputAck·termExit.
+ * 와이어 버전은 backend/common WIRE_VERSION (소켓 경로에 박혀 불일치 자체가 막힌다) — 메서드 목록의
+ * TS 사영은 ./types.ts 의 ThinBackend, rust 쪽은 backend/daemon/src.
  *
  * 재연결: 끊기면 1초 간격으로 무한 재시도. WS URL 의 session id 로 데몬이 같은 세션
  * (터미널·끊김 중 출력 버퍼)을 이어 붙인다. 끊김 중 요청은 큐에 남아 재연결 후 전송되고,
@@ -205,13 +207,7 @@ export class WsBackend implements ThinBackend {
         // WHY: 콜백을 정리보다 먼저 — dispose(사용자 kill)가 지운 뒤 도착한 termExit 는
         //      맵에 없어 조용히 끝난다 (자연 종료에만 발화하는 계약)
         const onExit = this.termExitHandlers.get(msg.term);
-        this.termHandlers.delete(msg.term);
-        this.termExitHandlers.delete(msg.term);
-        this.termTmuxHandlers.delete(msg.term);
-        this.termRecv.delete(msg.term);
-        this.termEpoch.delete(msg.term);
-        this.termSent.delete(msg.term);
-        this.termInputQueue.delete(msg.term);
+        this.forgetTerm(msg.term);
         // code 부재 = 비정상 종료(spawn 실패 등) — null 로 구분해 전달
         onExit?.(typeof msg.code === 'number' ? msg.code : null);
         return;
@@ -487,9 +483,7 @@ export class WsBackend implements ThinBackend {
   createTerminal(cols: number, rows: number, attach?: string): TerminalSession {
     // WHY: 계약이 동기 반환이라 term id 는 클라이언트가 발급하고 생성은 fire-and-forget
     const term = this.nextTerm++;
-    // 끊김 중 생성분은 다음 연결에서 데몬에 전달된다 — 그 세대로 기록해야
-    // 세션 회수 재연결에서 산 터미널로 분류된다
-    this.termEpoch.set(term, this.opened ? this.connEpoch : this.connEpoch + 1);
+    this.markTermEpoch(term);
     // attach 가 undefined 면 JSON.stringify 가 키를 떨군다 — 데몬은 새 세션으로 본다
     this.send({ method: 'createTerminal', params: { term, cols, rows, attach } });
     return this.termHandle(term);
@@ -512,17 +506,26 @@ export class WsBackend implements ThinBackend {
     this.terminalModeHandler = cb;
   }
 
+  /** 터미널 하나의 로컬 상태 전부 정리 — termExit 수신·dispose·release 가 같은 집합을 지운다 */
+  private forgetTerm(term: number): void {
+    this.termHandlers.delete(term);
+    this.termExitHandlers.delete(term);
+    this.termTmuxHandlers.delete(term);
+    this.termRecv.delete(term);
+    this.termEpoch.delete(term);
+    this.termSent.delete(term);
+    this.termInputQueue.delete(term);
+  }
+
+  /** 새 터미널의 연결 세대 기록 — 끊김 중 생성분은 다음 연결에서 데몬에 전달되므로 다음 세대로
+   *  기록해야 세션 회수 재연결에서 산 터미널로 분류된다 */
+  private markTermEpoch(term: number): void {
+    this.termEpoch.set(term, this.opened ? this.connEpoch : this.connEpoch + 1);
+  }
+
   /** 로컬 핸들 — createTerminal·adoptTerminal 이 공유한다 (id 만 다르다) */
   private termHandle(term: number): TerminalSession {
-    const forget = () => {
-      this.termHandlers.delete(term);
-      this.termExitHandlers.delete(term);
-      this.termTmuxHandlers.delete(term);
-      this.termRecv.delete(term);
-      this.termEpoch.delete(term);
-      this.termSent.delete(term);
-      this.termInputQueue.delete(term);
-    };
+    const forget = () => this.forgetTerm(term);
     return {
       id: term,
       write: (data) => this.writeTerm(term, data),
@@ -544,14 +547,14 @@ export class WsBackend implements ThinBackend {
     if (opts.from === undefined) {
       const term = opts.term ?? this.nextTerm;
       this.nextTerm = Math.max(this.nextTerm, term + 1);
-      this.termEpoch.set(term, this.opened ? this.connEpoch : this.connEpoch + 1);
+      this.markTermEpoch(term);
       return this.termHandle(term);
     }
     // 다른 세션(같은 root)의 터미널 — 데몬이 소유를 옮긴다 (와이어 v10). 새 로컬 id 를 발급해
     // 이 세션의 기존 id 와 충돌하지 않게 한다. 실패(출처 세션 회수·root 불일치)는 onExit(null)
     // 로 드러내 탭이 에러 상태로 남게 한다 (spawn 실패와 같은 표현)
     const term = this.nextTerm++;
-    this.termEpoch.set(term, this.opened ? this.connEpoch : this.connEpoch + 1);
+    this.markTermEpoch(term);
     const handle = this.termHandle(term);
     void this.call('adoptTerminal', { from: opts.from.session, fromTerm: opts.from.term, term }).catch((e) => {
       this.termHandlers.get(term)?.(`\r\n[superlite: 터미널 이동 실패 — ${String((e as Error).message ?? e)}]\r\n`);

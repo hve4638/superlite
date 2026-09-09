@@ -1,9 +1,10 @@
 /**
  * ThinBackend — 프론트가 원격(또는 mock)에 요구하는 전체 계약.
  *
- * WHY: 이 인터페이스가 프론트와 백엔드 사이의 유일한 seam 이다. 지금은 MockBackend 가
- *      구현하지만, 계약이 안정되면 Rust core(SSH/SFTP/git/rg/PTY)로 구현체만 교체한다.
+ * WHY: 이 인터페이스가 프론트와 백엔드 사이의 유일한 seam 이다. 구현체는 셋 — WsBackend(백엔드 /ws
+ *      JSON-RPC 로 rust 데몬에 중계, 주 경로)·MockBackend(브라우저 단독 데모)·EmptyBackend(빈 세션).
  *      여기에 UI 개념(탭, 뷰 상태 등)을 넣지 않는다 — 순수하게 워크스페이스 자원만 다룬다.
+ *      와이어 버전 표기(v11 등)는 backend/common WIRE_VERSION 의 bump 시점이다.
  */
 
 export interface WorkspaceInfo {
@@ -20,9 +21,9 @@ export interface DirEntry {
   kind: 'file' | 'directory';
   /** 디렉토리가 git 저장소 루트(.git 보유)면 true (와이어 v13) — 트리 펼침이 곧 하위 저장소 인식 */
   repo?: boolean;
-  /** 수정 시각(ms epoch, 와이어 v18) — 폴더 탭 자세히 보기. metadata 실패면 없다 */
+  /** 수정 시각(ms epoch, 와이어 v16) — 폴더 탭 자세히 보기. metadata 실패면 없다 */
   mtime?: number;
-  /** 바이트 크기(파일만, 와이어 v18) */
+  /** 바이트 크기(파일만, 와이어 v16) */
   size?: number;
 }
 
@@ -94,7 +95,7 @@ export type WriteResult =
   | { etag: string; conflict?: undefined }
   | { etag?: undefined; conflict: true };
 
-/** mock PTY 세션. 실제 백엔드에서는 원격 PTY 로 대체된다. */
+/** PTY 세션 핸들 — 세 구현체 공용 계약 (WsBackend 는 데몬 PTY, mock 은 가짜 셸, empty 는 만들지 않는다). */
 export interface TerminalSession {
   /** 백엔드 구현이 발급하는 식별자 — onSessionLost 의 죽은 터미널 명단과 대조하는 용도 */
   readonly id: number;
@@ -150,7 +151,7 @@ export interface QuickOpenResult {
 
 export interface ThinBackend {
   workspace(): Promise<WorkspaceInfo>;
-  /** path 디렉토리의 직계 엔트리. 정렬은 호출자 책임. 절대 경로(와이어 v18)면 워크스페이스 밖도
+  /** path 디렉토리의 직계 엔트리. 정렬은 호출자 책임. 절대 경로(와이어 v16)면 워크스페이스 밖도
    *  나열한다 — 항목 path 는 절대('/' 구분), repo 표식 없음 (폴더 탭의 밖 탐색) */
   readDir(path: string): Promise<DirEntry[]>;
   /** 크기 초과(maxBytes 또는 백엔드 기본 상한)·이진/미지원 인코딩은 reject 가 아니라
@@ -159,16 +160,17 @@ export interface ThinBackend {
    *  encoding: 'base64' 면 UTF-8 검증 없이 바이트를 base64 content 로 나른다 (이미지 뷰어 등 —
    *  writeFile 이진 통로와 대칭). binary unopenable 은 안 생기고 크기 상한(large)만 남는다.
    *  offset 이 있으면(base64 전용, 와이어 v11) 범위 읽기 — 크기 상한 없이 offset 부터 maxBytes
-   *  만큼, EOF 를 넘으면 짧게 온다 (hex 뷰어 청크). */
+   *  만큼, EOF 를 넘으면 짧게 온다 (hex 뷰어 청크). path 는 루트 상대 외에 절대 경로도 받는다
+   *  (폴더 탭의 밖 탐색 — 데몬은 '..' 만 거부). */
   readFile(path: string, opts?: { maxBytes?: number; encoding?: 'base64'; offset?: number }): Promise<FileContent>;
-  /** 내용 없이 실존·변경만 확인하는 경량 검사 — 정규 파일 전용(디렉토리는 reject). orphan 재검증용 */
+  /** 내용 없이 실존·변경만 확인하는 경량 검사 — 정규 파일 전용(디렉토리는 reject). orphan 재검증용. 절대 경로 허용 */
   stat(path: string): Promise<FileStat>;
   /**
    * etag 를 주면 낙관적 충돌 검사 — 불일치(+내용 상이) 시 쓰지 않고 conflict. 생략 시 무조건 쓴다.
    * encoding: 'base64' 면 content 를 이진으로 디코드해 쓴다 (클립보드 이미지 저장 등) —
    * JSON 텍스트 와이어의 이진 통로. 생략 시 UTF-8 텍스트 그대로.
    * append (와이어 v14): true 면 etag 검사 없이 기존 파일 끝에 덧붙인다 — 청크 업로드의 후속
-   * 조각 (첫 조각은 append 없이 써 파일을 새로 만든다).
+   * 조각 (첫 조각은 append 없이 써 파일을 새로 만든다). path 는 절대 경로도 받는다.
    */
   writeFile(path: string, content: string, etag?: string, encoding?: 'base64', append?: boolean): Promise<WriteResult>;
   /** 빈 파일 배타적 생성 — 중간 디렉토리 자동 생성, 이미 존재하면 reject (기존 내용 보호) */
@@ -253,8 +255,8 @@ export interface ThinBackend {
   /**
    * 연결 상태 변화 구독 (mock 은 끊길 일이 없어 미구현). 재연결 시 true — 끊김 중 놓친
    * 변경은 복구할 수 없으므로 구독자가 전체 리프레시로 재동기화해야 한다.
+   * error: 재시도 무의미한 영구 실패의 사유 (원격 ssh 접속 실패 등) — 이때 connected=false 고정
    */
-  /** error: 재시도 무의미한 영구 실패의 사유 (원격 ssh 접속 실패 등) — 이때 connected=false 고정 */
   onConnection?(cb: (connected: boolean, error?: string) => void): void;
   /** 원격 접속 단계 구독 (옵셔널 — WsBackend 만, 로컬 세션은 발화하지 않는다). null = 접속 완료
    *  (attach 응답 도달). 실패(onConnection 의 error)는 마지막으로 받은 단계에서 난 것이다 —
@@ -282,4 +284,6 @@ export interface ThinBackend {
    * 구독이 없으면 구현체가 에러로 답한다.
    */
   onRequest?(cb: (method: string, params: unknown) => Promise<unknown>): void;
+  /** 연결·핸들 정리 (세션 닫기·창 회수). 옵셔널 — WsBackend(소켓 닫기)·MockBackend(타이머)만, empty 는 없다 */
+  dispose?(): void;
 }

@@ -1,4 +1,5 @@
 import { ctx, viewOf } from './ctx'
+import { errText } from './notifications'
 import { DirEntry, QuickOpenResult, ThinBackend } from '../backend/types'
 
 role: 탐색기 파일 트리 — lazy 디렉토리 로드, 외부 변경 시 로드된 디렉토리만 병합 리프레시. 세션별 팩토리(createFiles) + 활성 세션 전달 shim — UI 는 종전 이름 그대로 활성 세션에 작용한다
@@ -16,7 +17,7 @@ export fn isAbsPath(path) -> Bool {
   role: 절대 경로 판별 (unix '/'·Windows 드라이브 접두) — 폴더 탭이 워크스페이스 밖에 있을 때의 path 꼴. 순수 함수
 }
 export fn folderParent(path, rootPath) -> path? {
-  role: 폴더 탭의 상위 폴더 — 루트('')의 위는 rootPath 의 절대 부모(와이어 v15 readDir 절대 경로로 나열), 절대 경로는 한 단계 위, 파일시스템 꼭대기('/'·'D:')는 null. 절대 경로가 다시 워크스페이스 안을 가리키면 toWorkspacePath 로 루트 상대로 되돌린다. 순수 함수
+  role: 폴더 탭의 상위 폴더 — 루트('')의 위는 rootPath 의 절대 부모(와이어 v16 readDir 절대 경로로 나열), 절대 경로는 한 단계 위, 파일시스템 꼭대기('/'·'D:')는 null. 절대 경로가 다시 워크스페이스 안을 가리키면 toWorkspacePath 로 루트 상대로 되돌린다. 순수 함수
 }
 export fn toAbsPath(path, rootPath) -> abs {
   role: 루트 상대(또는 이미 절대) 경로를 절대 경로로 — 탐색기·폴더 탭의 'Open in New Session' 이 host.openFolder 에 넘길 root. 순수 함수
