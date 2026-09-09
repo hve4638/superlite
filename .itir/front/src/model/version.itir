@@ -1,6 +1,6 @@
 import { backendApiUrl } from './host'
 
-role: 빌드 정보 — relay GET /version(버전·채널·커밋·빌드 시각·WIRE_VERSION·데몬 경로)의 프론트 캐시 + About 다이얼로그 열림 상태. 데몬 와이어 밖 HTTP 라 웹·앱이 같은 경로, WIRE_VERSION 불변 (release-versioning). mock 은 backendApiUrl null 이라 info 가 영영 null — 표기 자리는 비운다
+role: 빌드 정보 — relay GET /version(버전·채널·커밋·빌드 시각·데몬 빌드 식별·데몬 경로)의 프론트 캐시 + About 다이얼로그 열림 상태. 데몬 와이어 밖 HTTP 라 웹·앱이 같은 경로 (release-versioning). mock 은 backendApiUrl null 이라 info 가 영영 null — 표기 자리는 비운다
 
 export type VersionInfo
 export val version
@@ -12,7 +12,7 @@ export fn shortVersion() -> string? {
   role: 시작 페이지 하단 한 줄 "0.1.0 (8700a11)" (dev 채널은 "0.1.0 dev (8700a11)") — info 없으면 null
 }
 export fn aboutText() -> string {
-  role: About 본문 (Version/Channel/Commit/Built/Wire/Daemon 줄) — 다이얼로그 표시와 클립보드 복사가 같은 문자열. info 없으면 사유 한 줄
+  role: About 본문 (Version/Channel/Commit/Built/Daemon build/Daemon 줄) — 다이얼로그 표시와 클립보드 복사가 같은 문자열. info 없으면 사유 한 줄
 }
 export fn showAbout() {
   role: 팔레트 'Help: About' — 조회 시작 + 다이얼로그 열기

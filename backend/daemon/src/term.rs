@@ -396,7 +396,7 @@ fn program(root: &Path, session: Option<&str>, attach: Option<&str>) -> Program 
     // SUPERLITE_SOCK 은 common 의 우회 변수와 같은 이름 — 셸 안에서 띄운 백엔드·심이 socket_path()
     // 만으로 이 데몬(격리 인스턴스 포함)에 붙는다. 원격에서는 원격 데몬이 만드니 자연히 원격 소켓
     let mut env: Vec<(&str, String)> =
-        vec![("SUPERLITE_SOCK", superlite_common::socket_path().to_string_lossy().into_owned())];
+        vec![("SUPERLITE_SOCK", crate::sock().to_string_lossy().into_owned())];
     if let Some(sid) = session {
         env.push(("SUPERLITE_SESSION", sid.to_string()));
     }

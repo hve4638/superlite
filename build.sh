@@ -11,7 +11,7 @@
 # 데몬은 앱 옆 daemon/<os>-<arch>[.exe] 한 규칙으로 찾는다 (backend/relay lib.rs
 # daemon_bin_for — 이름은 rust std::env::consts::OS·ARCH 값 그대로). tmux 는 daemon/tmux-<os>-<arch>
 # (relay tmux_bin_for — 원격 업로드용. 데몬 자신은 자기 옆의 tmux / tmux-<os>-<arch> / PATH 순으로 찾는다).
-# 어느 빌드인지(버전·커밋·와이어)는 끝의 echo 로 — 방금 만든 데몬 자신의 --version.
+# 어느 빌드인지(버전·커밋·빌드 시각)는 끝의 echo 로 — 방금 만든 데몬 자신의 --version.
 # 사전 준비: rustup target add x86_64-pc-windows-gnu x86_64-unknown-linux-musl
 #           cargo install tauri-cli --version '^2' --locked ; apt install nsis (리눅스 makensis 로 cross 생성)
 # main 은 워크스페이스 루트의 build/ 에, 다른 브랜치는 build/<워크트리 폴더명>/ 에

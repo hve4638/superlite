@@ -1,23 +1,31 @@
-role: 데몬·백엔드 공유 규약 — IPC 주소(unix socket / Windows named pipe)와 락 파일 경로, 빌드 정보(버전·커밋·빌드 시각·채널 — build.rs 가 굽는다, 세 바이너리가 같은 값). 릴리스 채널(release-channel): SUPERLITE_CHANNEL 로 구운 CHANNEL 과 이름 줄기 SLUG(superlite / superlite-<channel>)가 이름이 고정된 자원(IPC 폴더·파이프·캐시·relay 의 설정 폴더·원격 헬퍼 폴더)을 채널별로 갈라 dev·stable 설치본이 한 PC 에 공존한다
+role: 데몬·백엔드 공유 규약 — IPC 주소(unix socket / Windows named pipe, 데몬 빌드 식별로 갈린다)와 락 파일 경로, 빌드 정보(버전·커밋·빌드 시각·채널 — build.rs 가 굽는다, 세 바이너리가 같은 값). 릴리스 채널(release-channel): SUPERLITE_CHANNEL 로 구운 CHANNEL 과 이름 줄기 SLUG(superlite / superlite-<channel>)가 이름이 고정된 자원(IPC 폴더·파이프·캐시·relay 의 설정 폴더·원격 헬퍼 폴더)을 채널별로 갈라 dev·stable 설치본이 한 PC 에 공존한다
 
-// 와이어 버전 이력(무엇이 어느 번호에서 바뀌었는지, 15 건너뜀 포함)의 단일 출처는 lib.rs WIRE_VERSION 의 doc 주석이다 — 여기에 사본을 두지 않는다
-export val WIRE_VERSION
+// WIRE_VERSION(프로토콜 번호, 마지막 19)은 2026-09-10 폐지 (ticket update-compat) — 실행 시 용도가 IPC 주소뿐이었고, 프로토콜이 그대로인 데몬 수정이 상주 데몬 때문에 배포되지 않는 원인이었다. 주소는 build_id 로 갈린다. 이력 주석은 그 시점 git 의 lib.rs
 export val VERSION
 export val COMMIT
 export val BUILT_AT
 export val CHANNEL
 export val SLUG
 export fn version_line(bin) -> String {
-  role: `--version` 한 줄 "superlite-daemon 0.1.0 (8700a11, built <UTC>, wire 13)" (dev 채널은 버전 뒤에 " dev") — 데몬·백엔드 CLI 가 같은 표기. 버전은 루트 Cargo.toml [workspace.package] 하나에서 상속(CARGO_PKG_VERSION), 커밋은 짧은 해시(미커밋 변경 -dirty, git 부재 unknown). build.rs 재실행 조건은 HEAD·ref 변경뿐이라 dirty 는 마지막 실행 시점 값 — build.sh 가 touch 로 강제한다 (ponytail)
+  role: `--version` 한 줄 "superlite-daemon 0.1.0 (8700a11, built <UTC>)" (dev 채널은 버전 뒤에 " dev") — 데몬·백엔드 CLI 가 같은 표기. 버전은 루트 Cargo.toml [workspace.package] 하나에서 상속(CARGO_PKG_VERSION), 커밋은 짧은 해시(미커밋 변경 -dirty, git 부재 unknown). build.rs 재실행 조건은 HEAD·ref 변경뿐이라 dirty 는 마지막 실행 시점 값 — build.sh 가 touch 로 강제한다 (ponytail)
 }
-export fn socket_path() -> PathBuf {
-  role: 데몬 IPC 주소 — unix 는 사용자 전용(0700) 런타임 디렉토리(<SLUG>-<user>) 밑 소켓, Windows 는 사용자별 named pipe 이름(<SLUG>-<user>-<wire>). 채널이 다르면 주소가 달라 dev 앱이 stable 데몬에 붙지 않는다. 두 프로세스가 같은 주소를 계산하는 것이 접속 규약. 주소에 와이어 버전(WIRE_VERSION)을 넣어 와이어가 다른 빌드의 백엔드가 구버전 상주 데몬에 조용히 붙지 않게 한다 — 데몬 메서드 추가·의미 변경 시 버전을 올린다 (v11: readFile 범위 읽기 offset + stat size). 같은 이름의 env 를 데몬이 PTY 에 주입해(와이어 v9) 셸 심이 socket_path() 만으로 제 데몬을 찾는다
+export fn socket_path(build) -> PathBuf {
+  role: 데몬 IPC 주소 — unix 는 ipc_dir 밑 daemon-<build>.sock, Windows 는 사용자별 named pipe 이름(<SLUG>-<user>-<build>). build 는 데몬 빌드 식별(build_id) — 백엔드는 항상 제 빌드의 데몬에만 붙고, 빌드가 다른 상주 데몬은 제 주소에서 기존 클라이언트를 섬기다 수명 규칙대로 자진 종료한다 (죽이는 절차 없음, tmux 서버는 데몬 밖이라 터미널은 이어진다 — ticket update-compat). 채널이 다르면 주소가 달라 dev 앱이 stable 데몬에 붙지 않는다. 두 프로세스가 같은 주소를 계산하는 것이 접속 규약. SUPERLITE_SOCK 우회가 먼저(테스트·격리 인스턴스) — 같은 이름의 env 를 데몬이 PTY 에 주입해(와이어 v9) 셸 심이 제 데몬을 찾는다
+}
+export fn build_id(bin) -> String {
+  role: 데몬 빌드 식별 — 데몬 바이너리 내용의 fnv64 (16진 16자). 원격 헬퍼 폴더 $HOME/.cache/<SLUG>/bin/<id>/ 이름과 같은 값이라 IPC 주소·락·헬퍼 캐시가 키 하나로 묶인다. 커밋 해시(-dirty 가 전부 같다)·빌드 시각(build.rs 는 HEAD 변경 때만 돈다)이 아니라 내용 해시인 이유. 데몬은 자기 실행 파일로, 백엔드는 spawn 할 데몬 바이너리로 계산
+}
+export fn fnv64(data) -> u64 {
+  role: FNV-1a 64 — build_id·원격 배치 디렉터리 키. 비적대적 용도라 충분, 의존성 없음
+}
+export fn ipc_dir() -> PathBuf {
+  role: (unix) 0700 전용 IPC 디렉터리 <runtime>/<SLUG>-<user> — 데몬 소켓·락·pid 와 relay 의 ssh ControlMaster 소켓이 산다. /tmp fallback 의 권한 이상은 assert 로 죽는다 (소켓 하이재킹 방지). SUPERLITE_SOCK 우회 시 그 파일의 디렉터리
 }
 export fn lock_path(sock) -> PathBuf {
   role: 데몬 단독 보장용 락 파일 경로 — IPC 주소에서 파생해 SUPERLITE_SOCK 우회(격리 인스턴스)가 락에도 전파된다. Windows 의 pipe 이름은 파일 경로가 아니라 평탄화해 %TEMP% 밑에 둔다
 }
 export fn pid_path(sock) -> PathBuf {
-  role: 락 보유 데몬의 pid 파일 경로 — 락 파일과 나란히 (daemon-<N>.pid). 락을 쥔 쪽만 쓴다. 락 파일 자체에 적지 않는 이유: Windows 배타 락은 다른 프로세스의 읽기까지 막아 --clean 이 보유자를 알 수 없다
+  role: 락 보유 데몬의 pid 파일 경로 — 락 파일과 나란히 (daemon-<build>.pid). 락을 쥔 쪽만 쓴다. 락 파일 자체에 적지 않는 이유: Windows 배타 락은 다른 프로세스의 읽기까지 막아 --clean 이 보유자를 알 수 없다
 }
 export fn open_lock_file(path) -> File {
   role: 락 파일 열기 — 데몬 기동(acquire_lock)과 --clean 의 보유자 탐지(try_lock)가 같은 규칙. truncate(false) 가 계약 — 락을 쥐지 못한 쪽이 열기만으로 내용을 비우면 안 된다

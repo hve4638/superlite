@@ -72,7 +72,7 @@ try {
   // relay 자체 HTTP(/version)도 같은 인증 — 오답 403, 정답은 버전 JSON (release-versioning)
   assert.strictEqual((await fetch('http://127.0.0.1:18794/version?tkn=check-secret-2')).status, 403, '/version 오답 거부');
   const ver = await (await fetch(`http://127.0.0.1:18794/version?tkn=${TOKEN}`)).json();
-  assert.ok(/^\d+\.\d+\.\d+$/.test(ver.version) && typeof ver.wire === 'number', '/version 응답 형태');
+  assert.ok(/^\d+\.\d+\.\d+$/.test(ver.version) && typeof ver.daemonBuild === 'string', '/version 응답 형태');
 
   // 계약의 나머지 절반: 토큰 미설정이면 무토큰 연결이 여전히 붙는다 (로컬 기본 회귀 방지)
   const envNoToken = { ...env, SUPERLITE_HTTP: '127.0.0.1:18791' };

@@ -3,70 +3,41 @@
 
 use std::path::{Path, PathBuf};
 
-/// 데몬 IPC 주소 — unix 는 unix socket 경로, Windows 는 named pipe 이름.
-pub fn socket_path() -> PathBuf {
+/// 데몬 IPC 주소 — unix 는 unix socket 경로, Windows 는 named pipe 이름. `build` 는 데몬 빌드 식별
+/// (build_id) — 주소에 들어가므로 백엔드는 항상 제 빌드의 데몬에만 붙고, 빌드가 다른 상주 데몬은
+/// 제 주소에서 기존 클라이언트를 계속 섬기다 수명 규칙대로 자진 종료한다 (ticket update-compat).
+/// 죽이는 절차는 없다 — tmux 서버는 데몬 밖이라 터미널은 빌드가 바뀌어도 이어진다.
+pub fn socket_path(build: &str) -> PathBuf {
     if let Ok(p) = std::env::var("SUPERLITE_SOCK") {
         return PathBuf::from(p); // 테스트·개발용 우회 — 검증 없음
     }
-    ipc_path()
+    ipc_path(build)
 }
 
-/// 데몬 와이어 버전 — 데몬 메서드 추가·의미 변경 시 올린다. IPC 주소에 들어가므로 와이어가
-/// 다른 빌드의 백엔드는 구버전 상주 데몬에 붙지 못하고 제 빌드의 데몬을 띄운다 (구 데몬은
-/// 제 주소에서 기존 백엔드를 계속 섬기다 수명 규칙대로 자진 종료).
-/// 2: browseDir 추가 — 구버전 상주 데몬이 unknown method 를 돌려줘 웹 폴더 열기 자동완성이
-///    조용히 빈 결과("No matching results")로 빠졌다.
-/// 3: readFile 이 크기 초과·이진(비 UTF-8)을 에러 대신 구조화된 unopenable 로 반환 —
-///    구버전 프론트는 content 없는 성공 응답을 텍스트로 오해하므로 의미 변경이다.
-/// 4: writeFile 에 encoding='base64' 추가 — 구버전 데몬은 미지 파라미터를 무시하고 base64
-///    문자열을 텍스트로 그대로 써서 이미지 저장이 조용히 깨진다.
-/// 5: readFile 에 encoding='base64' 추가 (writeFile 과 대칭) — 구버전 데몬은 미지 파라미터를
-///    무시하고 UTF-8 검증으로 이진을 unopenable 로 돌려줘 이미지 뷰어가 조용히 안내 화면으로
-///    빠진다.
-/// 6: 대형 payload 바이너리 프레임 — daemon→relay 에 0x00 매직+길이 접두 프레임 추가,
-///    relay 가 WS 바이너리로 재프레이밍, readFile 대형 응답이 JSON 대신 이 통로를 탄다
-///    (텍스트는 deflate-raw 압축). 구버전 relay 는 0x00 프레임을 줄로 오독해 연결이 깨진다.
-/// 7: attach 에 watch=false 추가 (탐색 전용 attach — 재귀 워처 생략). 구버전 데몬은 미지
-///    파라미터를 무시하고 원격 홈 전체에 워처를 걸어 빈 원격 세션이 조용히 무거워진다.
-/// 8: SCM 스테이징 — gitStage/gitUnstage/gitDiscard/gitLog/gitBranches/gitCheckout 추가,
-///    gitCommit 이 인덱스만 커밋, gitStatus 항목에 staged 플래그. 구버전 데몬은 새 메서드를
-///    unknown 으로 삼키고 gitCommit 이 전체 스테이징으로 동작해 부분 커밋이 조용히 깨진다.
-/// 9: 데몬→프론트 요청 통로 — 소켓 요청자의 frontRequest 를 세션 프론트에 request 이벤트로
-///    전달하고 requestReply 로 응답을 되돌린다 + PTY 에 SUPERLITE_SOCK·SUPERLITE_SESSION 주입.
-///    구버전 데몬은 frontRequest 를 attach 전 요청으로 거부하고 환경변수도 없어 셸 심이 조용히
-///    실패한다.
-/// 10: adoptTerminal 추가 — 같은 root 의 다른 세션이 소유한 터미널을 이 세션으로 옮긴다
-///    (탭을 다른 창으로 끌어 옮기기). 구버전 데몬은 미지 메서드를 일반 경로로 넘겨 에러로
-///    응답하므로 이동이 조용히 실패한다.
-/// 11: readFile 범위 읽기(offset, encoding=base64 전용 — 크기 상한을 타지 않고 offset 부터
-///    maxBytes 만큼) + stat 응답에 size. hex 뷰어가 GB 파일을 청크로 본다. 구버전 데몬은
-///    offset 을 무시하고 파일 전체(또는 large)를 돌려줘 뷰가 조용히 어긋난다.
-/// 12: listFiles 제거, quickOpen(pattern, fresh) 추가 — 빠른 열기 목록은 데몬이 세션 캐시로
-///    들고 프론트는 패턴별 상위 결과만 받는다 (VS Code 방식). 종전엔 init 이 목록 전체(홈
-///    디렉터리 5만 파일 4MB)를 날라 저속 링크에서 뒤따르는 readDir 응답을 수 초 막았다.
-///    구버전 데몬은 quickOpen 을 모르는 메서드로 에러 응답해 Ctrl+P 가 비어 보인다.
-/// 13: gitRepos(저장소 자동 탐색) + readDir 디렉토리 항목 repo 표식 + git* 전부 repo 파라미터
-///    (루트 상대 디렉토리, 생략은 루트). 하위 폴더·중첩 저장소를 SCM 이 저장소별로 다룬다.
-///    구버전 데몬은 gitRepos 를 모르는 메서드로 에러 응답해 SCM 뷰가 비어 보인다.
-/// 14: writeFile 에 append(base64 청크 업로드의 후속 조각 — etag 검사 없이 끝에 덧붙인다).
-///    탐색기 업로드(ticket explorer-download)가 큰 파일을 4MB 조각으로 나른다. 구버전 데몬은
-///    append 를 무시하고 매 조각으로 파일을 덮어써 마지막 조각만 남는다.
-/// 15: (폐기) 터미널 데몬 분리 — main d29046f 에서 터미널 메서드를 termd 소켓으로 뺐다가 같은 날
-///    tmux 내장 결정으로 되돌렸다. 번호는 건너뛴다 (그 빌드의 daemon-15 소켓과 충돌 방지).
-/// 16: readDir 절대 경로(폴더 탭의 워크스페이스 밖 탐색 — 항목 path 절대, repo 표식 없음) + 항목
-///    mtime(ms)·size(파일만) (ticket explorer-folder-tab).
-/// 17: 내장 tmux (ticket term-list-reconnect) — createTerminal 에 attach(tmux session id),
-///    listTerminals·killTerminal·renameTerminal·tmuxConf 추가, attach 응답에 terminal{mode,error},
-///    이벤트 termTmux{term, id, name | error}. 구버전 데몬은 새 메서드를 모르는 메서드로 에러 응답해
-///    사이드바 터미널 목록이 비어 보인다.
-/// 18: gitFetch/gitPull/gitPush 추가 — 인증은 그 머신의 credential helper 가 먼저, 그 뒤에 덧붙인
-///    데몬 자신의 helper 모드(--credential)가 frontRequest("credential") 로 프론트의 저장 자격을
-///    받는다 (데몬이 띄운 git·터미널 git 공통, ticket scm-subrepo-credential). frontRequest 는 params.tty
-///    로 대상 세션을 해석한다. 구버전 데몬은 세 메서드를 모르는 메서드로
-///    에러 응답한다.
-/// 19: copy(from, to) 추가 — 파일·디렉토리(재귀) 복사, 대상 존재·자기 하위로의 복사는 에러. 탐색기
-///    Ctrl+드래그 복사(ticket explorer-multiselect-dnd). 구버전 데몬은 모르는 메서드로 에러 응답한다.
-pub const WIRE_VERSION: u32 = 19;
+/// 데몬 빌드 식별 — 데몬 바이너리 내용의 FNV-1a 64 (16진 16자). 원격 헬퍼 폴더
+/// `$HOME/.cache/<SLUG>/bin/<id>/` 의 이름과 같은 값이라 "어느 빌드가 도는가" 의 키 하나로 IPC
+/// 주소·락·헬퍼 캐시가 묶인다. 커밋 해시(-dirty 가 전부 같다)·빌드 시각(build.rs 는 HEAD 변경 때만
+/// 다시 돈다)이 아니라 내용 해시인 이유다. 데몬은 자기 실행 파일로, 백엔드는 spawn 할 데몬
+/// 바이너리로 계산한다 — 두 값이 같아야 접속이 된다.
+///
+/// 종전(~2026-09-09)에는 주소가 WIRE_VERSION(프로토콜 번호, 마지막 19)으로만 갈렸다 — 프로토콜이
+/// 그대로인 데몬 수정은 상주 데몬이 살아 있는 한 배포되지 않았다 (0.2.2 실사용 사고). 와이어
+/// 이력 주석은 그 시점 git 이력의 이 파일에 있다. 프론트·백엔드·데몬은 한 빌드로 배포되므로
+/// 프로토콜 번호를 대조할 상대가 없어 상수 자체를 없앴다.
+pub fn build_id(bin: &Path) -> std::io::Result<String> {
+    Ok(format!("{:016x}", fnv64(&std::fs::read(bin)?)))
+}
+
+/// FNV-1a 64 — 빌드 식별·배치 디렉터리 키용 내용 해시. 비적대적 용도(캐시 무효화)라 충분하고
+/// 의존성이 없다
+pub fn fnv64(data: &[u8]) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    for &b in data {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x100_0000_01b3);
+    }
+    h
+}
 
 /// 릴리스 버전 — 루트 Cargo.toml `[workspace.package] version` 하나에서 온다 (crate 4개가 상속).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -84,17 +55,21 @@ pub const CHANNEL: &str = env!("SUPERLITE_CHANNEL");
 pub const SLUG: &str = env!("SUPERLITE_SLUG");
 
 /// `--version` 한 줄 — 데몬·백엔드가 같은 표기를 쓴다 (헬퍼 업로드 로그·버그 리포트용).
-/// 예: `superlite-daemon 0.1.0 (8700a11f2, built 2026-09-06T05:00:00Z, wire 13)`,
+/// 예: `superlite-daemon 0.1.0 (8700a11f2, built 2026-09-06T05:00:00Z)`,
 /// dev 채널은 `superlite-daemon 0.1.0 dev (…)`
 pub fn version_line(bin: &str) -> String {
     let ch = if CHANNEL.is_empty() { String::new() } else { format!(" {CHANNEL}") };
-    format!("{bin} {VERSION}{ch} ({COMMIT}, built {BUILT_AT}, wire {WIRE_VERSION})")
+    format!("{bin} {VERSION}{ch} ({COMMIT}, built {BUILT_AT})")
 }
 
-/// 0700 전용 디렉터리를 만들어 그 안에 소켓을 둔다.
+/// 0700 전용 IPC 디렉터리 `<runtime>/<SLUG>-<user>` — 데몬 소켓·락·pid 파일과 relay 의 ssh
+/// ControlMaster 소켓이 산다. SUPERLITE_SOCK 우회 시 그 파일의 디렉터리
 #[cfg(unix)]
-fn ipc_path() -> PathBuf {
+pub fn ipc_dir() -> PathBuf {
     use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    if let Ok(p) = std::env::var("SUPERLITE_SOCK") {
+        return PathBuf::from(p).parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("/tmp"));
+    }
     let base = std::env::var("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| std::env::temp_dir());
@@ -107,9 +82,14 @@ fn ipc_path() -> PathBuf {
     //      (가짜 데몬에 파일·터미널 전부 노출)이 가능하다. 조용히 넘어가지 않고 죽는다.
     let mode = std::fs::metadata(&dir).map(|m| m.permissions().mode()).unwrap_or(0);
     assert!(mode & 0o077 == 0, "IPC 디렉터리 권한 이상 (0700 이어야 한다): {}", dir.display());
-    // 파일명 줄기 "daemon" 은 daemon clean.rs(clean_old_versions)가 옛 버전 락 파일을 고르는
-    // 접두이기도 하다 — 바꾸면 그쪽도 같이.
-    dir.join(format!("daemon-{WIRE_VERSION}.sock"))
+    dir
+}
+
+/// 소켓 파일은 IPC 디렉터리 밑 `daemon-<build>.sock`. 파일명 줄기 "daemon" 은 daemon
+/// clean.rs(clean_other_builds)가 다른 빌드의 락 파일을 고르는 접두이기도 하다 — 바꾸면 그쪽도 같이.
+#[cfg(unix)]
+fn ipc_path(build: &str) -> PathBuf {
+    ipc_dir().join(format!("daemon-{build}.sock"))
 }
 
 /// named pipe 는 파일시스템 밖 네임스페이스 — 디렉터리·권한 준비가 없다.
@@ -118,9 +98,9 @@ fn ipc_path() -> PathBuf {
 ///           단일 사용자 PC 전제로 수용한다. 공유 머신 대응 시 relay 접속부에 서버 프로세스
 ///           SID 검증(GetNamedPipeServerProcessId)을 추가한다.
 #[cfg(windows)]
-fn ipc_path() -> PathBuf {
+fn ipc_path(build: &str) -> PathBuf {
     let user = std::env::var("USERNAME").unwrap_or_else(|_| "default".into());
-    PathBuf::from(format!(r"\\.\pipe\{SLUG}-{user}-{WIRE_VERSION}"))
+    PathBuf::from(format!(r"\\.\pipe\{SLUG}-{user}-{build}"))
 }
 
 /// 데몬 단독 보장용 락 파일 경로 — IPC 주소에서 파생해 SUPERLITE_SOCK 우회가 락에도
@@ -171,7 +151,7 @@ pub fn daemon_log_file() -> Option<std::fs::File> {
     std::fs::OpenOptions::new().append(true).create(true).open(dir.join("daemon.log")).ok()
 }
 
-/// 락 보유 데몬의 pid 파일 — 락 파일과 나란히 (`daemon-<N>.pid`). 락을 쥔 쪽만 쓴다.
+/// 락 보유 데몬의 pid 파일 — 락 파일과 나란히 (`daemon-<build>.pid`). 락을 쥔 쪽만 쓴다.
 /// WHY: 락 파일 자체에 pid 를 적지 않는다 — Windows 의 배타 락(LockFileEx)은 다른 프로세스의
 ///      읽기까지 막아 `--clean` 이 보유자를 알 수 없고, unix 는 락 없이 열어도 되지만 두
 ///      플랫폼이 한 규칙을 쓰는 쪽이 낫다. 락 없이 열리는 별도 파일이면 어느 쪽에서든 읽힌다

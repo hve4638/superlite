@@ -192,7 +192,7 @@ async fn pipe(ws: WebSocket) {
     use futures_util::{SinkExt, StreamExt};
     let (mut ws_tx, mut ws_rx) = ws.split();
     // 내려받아야 하면 먼저 텍스트 프레임 하나 — 프론트(model/nvim.ts)가 "내려받는 중" 알림을
-    // 띄운다. 이 뒤로는 바이너리(nvim RPC)만 흐른다. 데몬 와이어 밖이라 WIRE_VERSION 무관
+    // 띄운다. 이 뒤로는 바이너리(nvim RPC)만 흐른다. 데몬 와이어 밖
     if nvim_bin().is_none() {
         if let Some((_, _, mb)) = ASSET {
             let _ = ws_tx.send(Message::Text(format!("downloading {NVIM_VERSION} {mb}").into())).await;

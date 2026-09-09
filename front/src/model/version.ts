@@ -1,6 +1,6 @@
 /**
- * 빌드 정보 — relay 의 GET /version (버전·커밋·빌드 시각·WIRE_VERSION·데몬 경로). 데몬 와이어
- * 밖 HTTP 라 웹·앱이 같은 경로를 타고 WIRE_VERSION 은 불변 (ticket release-versioning).
+ * 빌드 정보 — relay 의 GET /version (버전·커밋·빌드 시각·데몬 빌드 식별·데몬 경로). 데몬 와이어
+ * 밖 HTTP 라 웹·앱이 같은 경로를 탄다 (ticket release-versioning).
  * 명령 팔레트 "Help: About" 다이얼로그와 시작 페이지 하단 표기가 쓴다. mock(backendApiUrl null)
  * 은 info 가 영영 null — 표기 자리는 비운다.
  */
@@ -13,7 +13,8 @@ export interface VersionInfo {
   channel: string;
   commit: string;
   builtAt: string;
-  wire: number;
+  /** 로컬 데몬 빌드 식별 — 바이너리 내용 해시, IPC 주소의 키 (update-compat). 데몬 부재면 오류 문자열 */
+  daemonBuild: string;
   daemonBin: string;
 }
 
@@ -57,7 +58,7 @@ export function aboutText(): string {
     `Channel: ${v.channel || 'stable'}`,
     `Commit: ${v.commit}`,
     `Built: ${v.builtAt}`,
-    `Wire: ${v.wire}`,
+    `Daemon build: ${v.daemonBuild}`,
     `Daemon: ${v.daemonBin}`,
   ].join('\n');
 }

@@ -760,7 +760,7 @@ pub(crate) async fn git_sync(method: &str, p: &Value, root: &Path, session: Opti
         .current_dir(&dir)
         .stdin(std::process::Stdio::null())
         .env("GIT_TERMINAL_PROMPT", "0")
-        .env("SUPERLITE_SOCK", superlite_common::socket_path().as_os_str());
+        .env("SUPERLITE_SOCK", crate::sock().as_os_str());
     if let Some(sid) = session {
         cmd.env("SUPERLITE_SESSION", sid);
     }

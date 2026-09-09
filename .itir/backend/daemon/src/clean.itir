@@ -1,9 +1,9 @@
-role: `--clean` 문제 데몬 정리 — 사용자가 앱에서 명시적으로 승인했을 때만 relay 가 부른다 (로컬 직접·원격 ssh exec, 자동 호출 없음 — 사용자 결정 2026-09-04). 결과는 stdout 한 줄씩 (relay 가 프론트에 그대로 보인다). 와이어 버전이 다른 데몬의 공존은 정상 — 살아 있는 옛 데몬은 건드리지 않는다 (연결이 없으면 수명 규칙대로 스스로 죽는다)
+role: `--clean` 문제 데몬 정리 — 사용자가 앱에서 명시적으로 승인했을 때만 relay 가 부른다 (로컬 직접·원격 ssh exec, 자동 호출 없음 — 사용자 결정 2026-09-04). 결과는 stdout 한 줄씩 (relay 가 프론트에 그대로 보인다). 빌드가 다른 데몬의 공존은 정상 — 살아 있는 다른 빌드의 데몬은 건드리지 않는다 (연결이 없으면 수명 규칙대로 스스로 죽는다)
 
 import { socket_path, lock_path, pid_path } from '../../common/src'
 
 export fn clean_main() {
-  role: 현재 버전(clean_current) → 옛 버전 잔재(clean_old_versions, unix) → 헬퍼 캐시(clean_bin_cache) 순
+  role: 현재 빌드(clean_current) → 다른 빌드 잔재(clean_other_builds, unix) → 헬퍼 캐시(clean_bin_cache, 지운 수를 stdout 에) 순
 }
 fn try_lock(lock) -> File? {
   role: 락 시도 — Some 이면 보유자 없음(이 프로세스가 쥠), None 이면 남이 쥐고 있다. truncate 없이 연다
@@ -15,13 +15,13 @@ fn connectable(sock) -> bool {
   role: 소켓(unix)·named pipe(Windows) 접속 가능 여부 — 산 데몬 판정
 }
 fn clean_current(sock) {
-  role: 현재 와이어 버전 — 락 보유자 없음이면 잔재 파일만 정리. 보유자가 있고 소켓이 응답하면 손대지 않음. 보유자가 있는데 소켓에 붙을 수 없으면 좀비 — pid 파일의 pid 를 kill 하고 락이 풀릴 때까지(3초) 기다린 뒤 파일 정리. pid 파일이 없으면(구 빌드 데몬) 정리 불가 보고
+  role: 현재 빌드 — 락 보유자 없음이면 잔재 파일만 정리. 보유자가 있고 소켓이 응답하면 손대지 않음. 보유자가 있는데 소켓에 붙을 수 없으면 좀비 — pid 파일의 pid 를 kill 하고 락이 풀릴 때까지(3초) 기다린 뒤 파일 정리. pid 파일이 없으면 정리 불가 보고
 }
-fn clean_old_versions(sock) {
-  role: 같은 IPC 디렉터리의 daemon*.lock 중 현재 것이 아닌 파일 — 락 보유자가 없는 것만 소켓·락·pid 삭제, 보유자가 있으면 '살아 있음 — 손대지 않음' 보고. unix 만 (Windows named pipe 는 프로세스와 함께 사라진다)
+fn clean_other_builds(sock) {
+  role: 같은 IPC 디렉터리의 daemon*.lock 중 현재 것이 아닌 파일(다른 빌드) — 락 보유자가 없는 것만 소켓·락·pid 삭제, 보유자가 있으면 '살아 있음 — 손대지 않음' 보고. unix 만 (Windows named pipe 는 프로세스와 함께 사라진다)
 }
-fn clean_bin_cache() {
-  role: $HOME/.cache/superlite/bin/<hash>/ 중 자기 실행 파일이 든 디렉터리 외 전부 삭제 — 다음 접속이 다시 올린다. 자기 자신이 캐시 밖(로컬 빌드)에서 실행됐으면 무동작 — 이 머신이 남의 원격일 때 올라온 헬퍼는 로컬 정리 대상이 아니다
+export fn clean_bin_cache() -> usize {
+  role: $HOME/.cache/<SLUG>/bin/<build>/ 중 데몬이 돌고 있는 빌드 폴더만 남긴다 — 폴더 이름이 곧 build_id 라 그 빌드의 락(daemon-<build>.lock) 보유 여부로 판정(락 파일 없음 = 뜬 적 없음, 안 잡힘 = 죽음). 자기 폴더는 항상 남기고, 최근 60초 안에 바뀐 폴더는 건너뛴다(다른 백엔드의 업로드 진행 중일 수 있다). 자기 자신이 캐시 밖(로컬 빌드)에서 실행됐으면 무동작 — 이 머신이 남의 원격일 때 올라온 헬퍼는 로컬 정리 대상이 아니다. 데몬 기동 직후(main)와 --clean 이 같이 쓴다, 지운 수 반환
 }
 fn kill(pid) {
   role: unix SIGKILL(libc) / Windows taskkill /F — 멈춘 프로세스에도 듣는 강제 종료

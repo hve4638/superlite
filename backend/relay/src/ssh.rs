@@ -441,8 +441,7 @@ fn ssh_cmd(host: &str, opts: &[String]) -> Command {
     #[cfg(unix)]
     {
         // 마스터 소켓은 데몬 IPC 와 같은 0700 디렉터리 — 타 사용자 탈취 방지가 이미 돼 있다
-        let dir = superlite_common::socket_path();
-        let dir = dir.parent().unwrap_or(std::path::Path::new("/tmp"));
+        let dir = superlite_common::ipc_dir();
         c.arg("-o").arg("ControlMaster=auto");
         c.arg("-o").arg(format!("ControlPath={}/ssh-%C", dir.display()));
         c.arg("-o").arg("ControlPersist=60");
@@ -557,8 +556,8 @@ fn remote_daemon_bin(info: &RemoteInfo) -> Result<PathBuf, String> {
 }
 
 /// 원격 헬퍼(=데몬 바이너리) 배치 보장 — 없으면 로컬 산출물을 ssh stdin 으로 업로드.
-/// 디렉터리 키는 버전이 아니라 바이너리 내용 해시 — 개발 중 재빌드가 곧 재배포이고,
-/// 다른 빌드끼리 섞이지 않는다 (와이어 버전 대조가 필요 없어진다).
+/// 디렉터리 키는 버전이 아니라 바이너리 내용 해시(common build_id — 원격 데몬의 IPC 주소 키와 같은
+/// 값) — 개발 중 재빌드가 곧 재배포이고, 다른 빌드끼리 섞이지 않는다.
 /// 반환: 원격 셸이 해석할 경로 식 ("$HOME/..." — 원격 홈 경로를 이쪽에서 모른다).
 /// 올리는 바이너리는 원격 OS·아키텍처에 맞춘다 (remote_daemon_bin).
 pub async fn ensure_remote_bin(
@@ -570,7 +569,7 @@ pub async fn ensure_remote_bin(
     let bin = remote_daemon_bin(info)?;
     let data = std::fs::read(&bin)
         .map_err(|e| format!("데몬 바이너리 읽기 실패 {}: {e}", bin.display()))?;
-    let dir = format!("$HOME/.cache/{}/bin/{:016x}", superlite_common::SLUG, fnv64(&data));
+    let dir = format!("$HOME/.cache/{}/bin/{:016x}", superlite_common::SLUG, superlite_common::fnv64(&data));
     let target = format!("{dir}/superlite-daemon");
     // 동봉 tmux (와이어 v17) 도 같은 폴더에 `tmux` 로 — 데몬이 자기 옆에서 먼저 찾는다. 동봉본이
     // 없으면 원격의 tmux 에 맡긴다
@@ -776,15 +775,4 @@ pub async fn clean_remote(host: &str) -> Result<String, String> {
         return Err(format!("원격 정리 실패: {}", ssh_err(&out)));
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-}
-
-/// FNV-1a 64 — 배치 디렉터리 키용 내용 해시. 비적대적 용도(캐시 무효화)라 충분하고
-/// 의존성이 없다
-fn fnv64(data: &[u8]) -> u64 {
-    let mut h = 0xcbf2_9ce4_8422_2325u64;
-    for &b in data {
-        h ^= u64::from(b);
-        h = h.wrapping_mul(0x100_0000_01b3);
-    }
-    h
 }

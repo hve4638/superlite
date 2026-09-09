@@ -3,8 +3,9 @@
  *
  * 프로토콜: {id,method,params} 요청/응답 (JSON, 대형 readFile 응답은 바이너리 payload 프레임) +
  * 이벤트 프레임 {event,…} — connectStage·fsChanges·request·termData·termTmux·termInputAck·termExit.
- * 와이어 버전은 backend/common WIRE_VERSION (소켓 경로에 박혀 불일치 자체가 막힌다) — 메서드 목록의
- * TS 사영은 ./types.ts 의 ThinBackend, rust 쪽은 backend/daemon/src.
+ * 프론트·relay·데몬은 한 빌드로 배포되고 데몬 IPC 주소가 데몬 빌드 해시로 갈려 빌드 불일치 자체가
+ * 막힌다 (backend/common socket_path) — 메서드 목록의 TS 사영은 ./types.ts 의 ThinBackend, rust
+ * 쪽은 backend/daemon/src.
  *
  * 재연결: 끊기면 1초 간격으로 무한 재시도. WS URL 의 session id 로 데몬이 같은 세션
  * (터미널·끊김 중 출력 버퍼)을 이어 붙인다. 끊김 중 요청은 큐에 남아 재연결 후 전송되고,

@@ -4,7 +4,8 @@
 //! (ws docs/decision/process-topology.md). 프레이밍은 개행 구분 JSON 한 줄:
 //! {"id","method","params"} 요청 → {"id","result"|"error"} 응답, 터미널 출력은
 //! {"event":"termData","term","data"} 푸시. 연결마다 첫 요청은 attach(root) 여야 하고
-//! 이후 요청은 그 root 를 쓴다. 와이어 계약의 이력·버전은 superlite_common::WIRE_VERSION.
+//! 이후 요청은 그 root 를 쓴다. IPC 주소는 데몬 빌드 식별(build)로 갈린다 — 백엔드는 제 빌드의
+//! 데몬에만 붙는다 (superlite_common::socket_path, ticket update-compat).
 //!
 //! 수명(tmux 방식): 백엔드가 접속 실패 시 이 바이너리를 spawn 한다. 연결 0 인 상태가
 //! grace(기본 3초) 지속되면 소켓을 지우고 스스로 종료한다.
@@ -34,7 +35,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -119,6 +120,25 @@ fn err<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
 
+/// 이 데몬 빌드의 식별 — 자기 실행 파일의 내용 해시 (common build_id). IPC 주소·락·pid 파일의 키라
+/// 모든 모드(본체·--pipe·--clean·--credential)가 같은 값을 쓴다. 한 번 계산. 자기 실행 파일을 읽지
+/// 못하면 주소를 정할 수 없다 — 즉시 종료 (백엔드는 접속 실패 → 재시도로 드러낸다)
+fn build() -> &'static str {
+    static BUILD: OnceLock<String> = OnceLock::new();
+    BUILD.get_or_init(|| {
+        let r = std::env::current_exe().and_then(|p| superlite_common::build_id(&p));
+        r.unwrap_or_else(|e| {
+            eprintln!("superlite-daemon: 자기 실행 파일을 읽을 수 없어 빌드 식별 불가: {e}");
+            std::process::exit(1);
+        })
+    })
+}
+
+/// 이 빌드의 데몬 IPC 주소 (socket_path(build)) — PTY env 주입·credential helper 도 이걸 쓴다
+pub(crate) fn sock() -> PathBuf {
+    superlite_common::socket_path(build())
+}
+
 /// 와이어의 상대 경로는 '/' 구분이 계약이다 — Windows 가 산출한 경로의 '\' 를 정규화한다.
 /// unix 에선 '\' 가 파일명에 올 수 있는 문자라 치환하지 않는다.
 fn wire_rel(s: &str) -> String {
@@ -132,7 +152,7 @@ async fn main() {
     // 내장 tmux 서버 조작이 사용자의 바깥 tmux 서버와 섞인다. 프로세스 시작에서 지운다 (와이어 v17).
     std::env::remove_var("TMUX");
     std::env::remove_var("TMUX_PANE");
-    // --version: 버전·커밋·와이어 한 줄 (버그 리포트·헬퍼 업로드 로그용) — 데몬을 띄우지 않는다
+    // --version: 버전·커밋·빌드 시각 한 줄 (버그 리포트·헬퍼 업로드 로그용) — 데몬을 띄우지 않는다
     if std::env::args().any(|a| a == "--version") {
         println!("{}", superlite_common::version_line("superlite-daemon"));
         return;
@@ -155,13 +175,19 @@ async fn main() {
             std::process::exit(credential_main(&args[2]).await);
         }
     }
-    let sock = superlite_common::socket_path();
+    let sock = sock();
     // WHY: 단독 보장은 파일 락으로 — connect 검사→unlink→bind 순서는 원자적이지 않아
     //      동시 기동 시 산 데몬의 소켓 파일을 다른 데몬이 지우는 race 가 있다.
     //      락을 쥔 쪽만 소켓 파일을 만들고 지운다. 락은 프로세스 종료와 함께 풀린다.
     let Some(_lock) = acquire_lock(&sock) else {
         return; // 다른 데몬이 이미 있다(또는 기동 중) — 조용히 물러난다
     };
+    // 헬퍼 캐시의 다른 빌드 폴더 정리 — 락을 쥔 지금이 "내 빌드는 돈다" 가 확실한 시점이다.
+    // 다른 빌드는 그 빌드의 락 보유 여부로 가린다 (clean.rs). 캐시 밖 실행(로컬 빌드)이면 무동작
+    let n = clean::clean_bin_cache();
+    if n > 0 {
+        log_line(&format!("superlite-daemon: 헬퍼 캐시의 다른 빌드 {n}개 삭제"));
+    }
     #[cfg(unix)]
     let listener = {
         let _ = std::fs::remove_file(&sock); // 락을 쥐었으니 기존 소켓은 crash 잔재다
@@ -314,7 +340,7 @@ fn log_line(s: &str) {
 /// ssh 가 죽으면(네트워크 단절·창 닫기) stdin EOF → 종료. 데몬 쪽 연결 drop 이 세션을
 /// detach 로 돌리고, 세션 grace 안의 재접속(새 헬퍼)이 터미널을 이어받는다.
 async fn pipe_main() {
-    let sock = superlite_common::socket_path();
+    let sock = sock();
     let mut stream = None;
     for i in 0..50 {
         #[cfg(unix)]
@@ -390,7 +416,7 @@ async fn credential_main(action: &str) -> i32 {
         eprintln!("superlite-daemon credential: 세션 좌표 없음 (SUPERLITE_SESSION·tty 둘 다 없음)");
         return 0;
     }
-    let sock = superlite_common::socket_path();
+    let sock = sock();
     #[cfg(unix)]
     let conn = tokio::net::UnixStream::connect(&sock).await;
     #[cfg(windows)]

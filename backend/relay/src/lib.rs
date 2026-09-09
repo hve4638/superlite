@@ -8,7 +8,7 @@
 //! Tauri 앱(app/)은 front 를 자산으로 번들하므로 dist 없이 in-process 로 serve 를 부른다.
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 /// 데몬 연결 생존 신호 — 데몬의 read timeout(daemon main.rs, 600초)보다 충분히 짧아야 한다.
@@ -116,11 +116,26 @@ pub async fn serve(listener: TcpListener, roots: SessionRoots, token: Option<Str
 
 // ---------------------------------------------------------------- daemon
 
+/// 로컬 데몬의 빌드 식별 — spawn 할 데몬 바이너리(daemon_bin_path)의 내용 해시 (common build_id).
+/// 데몬은 자기 실행 파일로 같은 값을 내므로 두 프로세스가 같은 IPC 주소를 계산한다. 한 번 계산 —
+/// 백엔드 수명 동안 데몬 바이너리는 바뀌지 않는다 (바뀌면 앱 재시작이 곧 새 빌드 접속이다).
+/// 바이너리가 없거나 못 읽으면 주소도 없다 — 접속 실패 사유로 그대로 나간다
+fn daemon_build() -> Result<&'static str, String> {
+    static BUILD: OnceLock<Result<String, String>> = OnceLock::new();
+    BUILD
+        .get_or_init(|| {
+            let bin = daemon_bin_path()?;
+            superlite_common::build_id(&bin).map_err(|e| format!("데몬 바이너리 읽기 실패 {}: {e}", bin.display()))
+        })
+        .as_deref()
+        .map_err(Clone::clone)
+}
+
 /// 데몬 연결 확보. spawn 은 제어 루프에서만 — relay 까지 spawn 하면 백엔드 하나가
 /// 데몬을 두 번 띄우는 race 가 생긴다. 데몬 부재 시 제어 루프가 곧 재기동하므로
 /// relay 는 재시도만으로 충분하다.
 async fn daemon_conn(spawn: bool) -> Result<DaemonStream, String> {
-    let sock = superlite_common::socket_path();
+    let sock = superlite_common::socket_path(daemon_build()?);
     for i in 0..50 {
         #[cfg(unix)]
         let conn = DaemonStream::connect(&sock).await;
@@ -403,10 +418,10 @@ async fn clean_handler(
     })
 }
 
-/// GET /version — 이 백엔드 빌드의 버전·채널(빈 문자열 = stable)·커밋·빌드 시각·WIRE_VERSION·
-/// 로컬 데몬 경로·tmuxBin(이 OS·arch 의 tmux 배치 경로, 프론트 미소비 — 진단용) (JSON).
-/// 프론트의 About·시작 페이지가 쓴다. 데몬 와이어(/ws) 밖 relay 자체 응답이라 WIRE_VERSION 은
-/// 불변이고, 웹·앱이 같은 경로를 탄다 (ticket release-versioning). 데몬 경로는 배치 규칙
+/// GET /version — 이 백엔드 빌드의 버전·채널(빈 문자열 = stable)·커밋·빌드 시각·daemonBuild(로컬
+/// 데몬 빌드 식별 = IPC 주소 키, 부재면 오류 문자열)·로컬 데몬 경로·tmuxBin(이 OS·arch 의 tmux 배치
+/// 경로, 프론트 미소비 — 진단용) (JSON). 프론트의 About·시작 페이지가 쓴다. 데몬 와이어(/ws) 밖
+/// relay 자체 응답이라 웹·앱이 같은 경로를 탄다 (ticket release-versioning). 데몬 경로는 배치 규칙
 /// (daemon_bin_for)의 결과 — 부재면 그 오류 문자열을 그대로 보인다
 async fn version_handler(
     State(app): State<App>,
@@ -423,7 +438,7 @@ async fn version_handler(
             "channel": superlite_common::CHANNEL,
             "commit": superlite_common::COMMIT,
             "builtAt": superlite_common::BUILT_AT,
-            "wire": superlite_common::WIRE_VERSION,
+            "daemonBuild": daemon_build().map(str::to_string).unwrap_or_else(|e| e),
             "daemonBin": daemon,
             "tmuxBin": tmux_bin_for(std::env::consts::OS, std::env::consts::ARCH),
         }))
@@ -436,7 +451,7 @@ async fn version_handler(
 /// (ticket scm-subrepo-credential). 프론트가 직접 부르지 못하는 이유: github.com 의 로그인 끝점은
 /// CORS 헤더가 없어 브라우저·webview 가 응답을 버린다. 인자를 본문이 아니라 query 로 받는 이유:
 /// 본문 없는 POST 는 단순 요청이라 preflight 가 없다 (/ssh/* 와 같은 cors() 로 충분).
-/// 데몬 와이어 밖 relay 자체 응답 — WIRE_VERSION 불변. 토큰은 응답으로 프론트에만 간다 —
+/// 데몬 와이어 밖 relay 자체 응답. 토큰은 응답으로 프론트에만 간다 —
 /// relay 는 저장하지 않는다. path 는 둘만 허용 — 임의 GitHub 경로 중계기가 되지 않게
 async fn github_oauth_handler(
     State(app): State<App>,
@@ -694,7 +709,7 @@ struct RemoteConn {
 /// 원격 접속: 예비 파이프(ssh::Spares)가 있으면 exec 없이 바로, 없거나 죽었으면 원격 정보
 /// 조회 → 헬퍼 배치 → 파이프 spawn. 접속 단계를 프론트에 흘린다 —
 /// {"event":"connectStage","stage":ssh|helper|upload|daemon} (데몬 와이어 밖 relay 자체
-/// 이벤트, WIRE_VERSION 불변). 접속은 별도 태스크 — 그동안 프론트 Close 를 감지해 긴 업로드
+/// 이벤트). 접속은 별도 태스크 — 그동안 프론트 Close 를 감지해 긴 업로드
 /// 중 탭 닫기가 ssh 를 바로 끊게 하고(태스크 abort = child drop = kill), 프론트 Text 요청은
 /// attach 뒤에 보내도록 모아 둔다. 실패는 close 4502(사유)로 프론트에 알린 뒤 None —
 /// 재시도는 사용자 몫(탭 다시 접속), 상세는 로그로. 프론트가 먼저 끊어도 None

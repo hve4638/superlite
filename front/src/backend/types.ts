@@ -4,7 +4,8 @@
  * WHY: 이 인터페이스가 프론트와 백엔드 사이의 유일한 seam 이다. 구현체는 셋 — WsBackend(백엔드 /ws
  *      JSON-RPC 로 rust 데몬에 중계, 주 경로)·MockBackend(브라우저 단독 데모)·EmptyBackend(빈 세션).
  *      여기에 UI 개념(탭, 뷰 상태 등)을 넣지 않는다 — 순수하게 워크스페이스 자원만 다룬다.
- *      와이어 버전 표기(v11 등)는 backend/common WIRE_VERSION 의 bump 시점이다.
+ *      와이어 버전 표기(v11 등)는 종전 backend/common WIRE_VERSION(2026-09-10 폐지 — IPC 주소가
+ *      데몬 빌드 해시로 갈린다, ticket update-compat)의 bump 시점 — 이력 표식으로만 남는다.
  */
 
 export interface WorkspaceInfo {

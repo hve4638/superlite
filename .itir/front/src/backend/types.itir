@@ -120,7 +120,7 @@ port ThinBackend {
     role: 연결 상태 변화 구독 (옵셔널 — mock 은 끊길 일이 없다). 재연결 시 true — 구독자가 전체 리프레시로 재동기화한다. error 동반 false = 영구 실패(원격 ssh 접속 실패, close 4502) — 재연결하지 않는다
   }
   fn onConnectStage(cb) {
-    role: 원격 접속 단계 구독 (옵셔널 — WsBackend 만; relay 의 connectStage 이벤트 ssh→helper→upload(bytes)→daemon, 데몬 와이어 밖이라 WIRE_VERSION 불변). attach 응답 도달 시 null(완료). 실패(onConnection error)는 마지막 단계에서 난 것
+    role: 원격 접속 단계 구독 (옵셔널 — WsBackend 만; relay 의 connectStage 이벤트 ssh→helper→upload(bytes)→daemon, 데몬 와이어 밖). attach 응답 도달 시 null(완료). 실패(onConnection error)는 마지막 단계에서 난 것
   }
   fn reconnect() {
     role: 영구 실패(4403·4502) 뒤 사용자 주도 재접속 (옵셔널 — WsBackend 만). 실패하지 않은 연결에는 무동작
