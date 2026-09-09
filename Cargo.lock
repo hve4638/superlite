@@ -4364,7 +4364,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "superlite"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64 0.22.1",
  "getrandom 0.3.4",
@@ -4384,7 +4384,7 @@ dependencies = [
 
 [[package]]
 name = "superlite-backend"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "axum",
  "futures-util",
@@ -4399,11 +4399,11 @@ dependencies = [
 
 [[package]]
 name = "superlite-common"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "superlite-daemon"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64 0.22.1",
  "flate2",
