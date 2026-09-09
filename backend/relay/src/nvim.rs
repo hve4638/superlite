@@ -13,6 +13,10 @@
 //! 사용자 설정·플러그인은 읽지 않는다 (`--clean`): headless 임베드에서 TUI 전제 플러그인은
 //! 창을 만들거나 디스크를 직접 쓰는 등 이상 동작한다. 같은 이유로 PATH 의 nvim 도 보지
 //! 않는다 — 아래 nvim_bin 의 절대경로 규칙만.
+//!
+//! nvim 은 설치본에 동봉하지 않고 vim 모드를 처음 켤 때 GitHub 릴리스에서 캐시 폴더로 내려받는다
+//! (ticket nvim-on-demand — 동봉하면 설치 시간의 대부분이 nvim 41 MB·2천 파일 압축 해제였다).
+//! 확인 없이 자동으로 받고, 프론트에는 텍스트 프레임 하나로 알려 알림만 띄운다.
 
 use std::path::PathBuf;
 
@@ -24,30 +28,33 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::{authed, close_with, App};
 
-/// 동봉·다운로드하는 Neovim 버전 (stable 고정). 올릴 때는 아래 해시와 build.sh 의 값을 함께.
+/// 내려받는 Neovim 버전 (stable 고정). 올릴 때는 아래 ASSET 의 URL·해시·크기를 함께.
 pub const NVIM_VERSION: &str = "0.12.5";
-const LINUX_X86_64_URL: &str =
-    "https://github.com/neovim/neovim/releases/download/v0.12.5/nvim-linux-x86_64.tar.gz";
-const LINUX_X86_64_SHA256: &str = "bce0f56eda1f1b1db6eee8f4133d7a38813ea07933837dd1777411ca384c6875";
+/// 이 플랫폼의 GitHub 릴리스 자산 — (URL, sha256, 내려받는 크기 MB — 알림 문구용). None 이면
+/// 이 플랫폼엔 자동 다운로드가 없다 (SUPERLITE_NVIM_BIN 만). 미러·fallback 은 두지 않는다
+/// (2026-09-09 사용자 결정 — 실패는 close 4503 사유로 보이고 다시 켜면 재시도).
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const ASSET: Option<(&str, &str, u32)> = Some((
+    "https://github.com/neovim/neovim/releases/download/v0.12.5/nvim-linux-x86_64.tar.gz",
+    "bce0f56eda1f1b1db6eee8f4133d7a38813ea07933837dd1777411ca384c6875",
+    11,
+));
+#[cfg(all(windows, target_arch = "x86_64"))]
+const ASSET: Option<(&str, &str, u32)> = Some((
+    "https://github.com/neovim/neovim/releases/download/v0.12.5/nvim-win64.zip",
+    "de8625ba8cf65ebf40eb80a388ba1ec8e9c15b30218821e2c639119b05920de1",
+    13,
+));
+#[cfg(not(any(all(target_os = "linux", target_arch = "x86_64"), all(windows, target_arch = "x86_64"))))]
+const ASSET: Option<(&str, &str, u32)> = None;
 
 /// nvim 실행 파일 위치 규칙 — 데몬(daemon_bin_for)과 같은 자세, PATH 는 보지 않는다.
 /// 1. SUPERLITE_NVIM_BIN (개발·check 하니스 우회)
-/// 2. 실행 파일 옆 nvim/<os>-<arch>/bin/nvim[.exe] — 앱 설치본 동봉 (build.sh)
-/// 3. $HOME/.cache/<SLUG>/nvim/<버전>/bin/nvim — 웹 모드(relay bin)가 내려받는 자리
+/// 2. $HOME/.cache/<SLUG>/nvim/<버전>/bin/nvim[.exe] — ensure_nvim 이 내려받는 자리.
+/// 설치본에는 동봉하지 않는다 (ticket nvim-on-demand — 설치 시간의 대부분이 nvim 압축 해제였다).
 fn nvim_bin() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("SUPERLITE_NVIM_BIN") {
         return Some(PathBuf::from(p));
-    }
-    let exe_name = if cfg!(windows) { "nvim.exe" } else { "nvim" };
-    if let Ok(exe) = std::env::current_exe() {
-        let p = exe
-            .with_file_name("nvim")
-            .join(format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH))
-            .join("bin")
-            .join(exe_name);
-        if p.is_file() {
-            return Some(p);
-        }
     }
     let p = cache_bin()?;
     p.is_file().then_some(p)
@@ -61,9 +68,9 @@ fn cache_bin() -> Option<PathBuf> {
 /// 다운로드 직렬화 — 창 둘이 동시에 vim 모드를 켜도 한 번만 받는다
 static DOWNLOAD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// nvim 을 확보한다 — 있으면 그 경로, 없으면 linux x86_64 에 한해 캐시 폴더에 내려받는다
-/// (curl + sha256sum + tar 는 unix 기본 도구). 그 밖의 OS 는 동봉본이 없으면 실패 — 앱은
-/// build.sh 가 동봉하므로 웹 모드의 linux 서버만 이 경로를 탄다.
+/// nvim 을 확보한다 — 있으면 그 경로, 없으면 GitHub 릴리스(ASSET)를 캐시 폴더에 내려받는다:
+/// reqwest 로 받아 sha256 대조 → 임시 폴더에 풀고(linux 는 tar, Windows 는 zip crate — 둘 다
+/// 최상위 폴더 하나를 벗긴다) rename. 완료 후 옛 버전 폴더는 지운다.
 async fn ensure_nvim() -> Result<PathBuf, String> {
     if let Some(p) = nvim_bin() {
         return Ok(p);
@@ -72,43 +79,98 @@ async fn ensure_nvim() -> Result<PathBuf, String> {
     if let Some(p) = nvim_bin() {
         return Ok(p); // 기다리는 동안 다른 연결이 받아 놓았다
     }
-    if std::env::consts::OS != "linux" || std::env::consts::ARCH != "x86_64" {
-        return Err(format!(
-            "nvim {NVIM_VERSION} 없음 — 앱 옆 nvim/{}-{}/bin/ 에 동봉되어야 한다",
-            std::env::consts::OS,
-            std::env::consts::ARCH
-        ));
-    }
+    let (url, sha, _) = ASSET.ok_or_else(|| {
+        format!("nvim {NVIM_VERSION} 없음 — {}-{} 는 자동 다운로드 대상이 아니다", std::env::consts::OS, std::env::consts::ARCH)
+    })?;
     let bin = cache_bin().ok_or("HOME 없음 — 캐시 폴더를 정할 수 없다")?;
     let dir = bin.parent().and_then(|p| p.parent()).ok_or("캐시 경로 오류")?.to_path_buf();
-    let tmp = dir.with_extension("download");
+    // with_extension 은 버전의 ".5" 를 확장자로 보고 바꿔 버린다 — 이름을 직접 붙인다
+    let tmp = dir.with_file_name(format!("{NVIM_VERSION}.download"));
     let _ = tokio::fs::remove_dir_all(&tmp).await;
     tokio::fs::create_dir_all(&tmp).await.map_err(|e| format!("캐시 폴더 생성 실패: {e}"))?;
-    let tgz = tmp.join("nvim.tar.gz");
     eprintln!("backend: nvim {NVIM_VERSION} 다운로드 → {}", dir.display());
-    run("curl", &["-fsSL", "-o", &tgz.to_string_lossy(), LINUX_X86_64_URL]).await.map_err(|e| format!("nvim 다운로드 실패: {e}"))?;
-    let sum = run("sha256sum", &[&tgz.to_string_lossy()]).await.map_err(|e| format!("sha256sum 실패: {e}"))?;
-    let got = sum.split_whitespace().next().unwrap_or("");
-    if got != LINUX_X86_64_SHA256 {
+    if let Err(e) = download_into(url, sha, &tmp, &dir).await {
         let _ = tokio::fs::remove_dir_all(&tmp).await;
-        return Err(format!("nvim 압축본 해시 불일치 ({got})"));
+        return Err(e);
     }
-    run("tar", &["xzf", &tgz.to_string_lossy(), "-C", &tmp.to_string_lossy(), "--strip-components=1"])
-        .await
-        .map_err(|e| format!("nvim 압축 해제 실패: {e}"))?;
-    let _ = tokio::fs::remove_file(&tgz).await;
-    let _ = tokio::fs::remove_dir_all(&dir).await;
-    tokio::fs::rename(&tmp, &dir).await.map_err(|e| format!("캐시 배치 실패: {e}"))?;
+    // 옛 버전 정리 — nvim/ 아래 이 버전 폴더만 남긴다
+    if let Ok(mut rd) = tokio::fs::read_dir(dir.parent().unwrap()).await {
+        while let Ok(Some(ent)) = rd.next_entry().await {
+            if ent.file_name() != NVIM_VERSION.as_ref() as &std::ffi::OsStr {
+                let _ = tokio::fs::remove_dir_all(ent.path()).await;
+            }
+        }
+    }
     nvim_bin().ok_or_else(|| "다운로드 후에도 nvim 이 없다".to_string())
 }
 
-async fn run(cmd: &str, args: &[&str]) -> Result<String, String> {
-    let out = tokio::process::Command::new(cmd).args(args).output().await.map_err(|e| format!("{cmd}: {e}"))?;
+/// 받아서 검증하고 tmp 에 푼 뒤 dir 로 rename — 실패는 호출측이 tmp 를 지운다.
+/// 오류 문구에 URL 은 넣지 않는다 (close 사유 123B 한도 — 사유가 먼저 보여야 한다)
+async fn download_into(url: &str, sha: &str, tmp: &PathBuf, dir: &PathBuf) -> Result<(), String> {
+    let bytes = reqwest::get(url)
+        .await
+        .and_then(|r| r.error_for_status())
+        .map_err(|e| format!("nvim 다운로드 실패: {}", e.without_url()))?
+        .bytes()
+        .await
+        .map_err(|e| format!("nvim 다운로드 실패: {}", e.without_url()))?
+        .to_vec();
+    let got = format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(&bytes));
+    if got != sha {
+        return Err(format!("nvim 압축본 해시 불일치 ({got})"));
+    }
+    extract(bytes, tmp.clone()).await?;
+    let _ = tokio::fs::remove_dir_all(dir).await;
+    tokio::fs::rename(tmp, dir).await.map_err(|e| format!("캐시 배치 실패: {e}"))
+}
+
+/// 압축본을 tmp 에 푼다 — 최상위 폴더(nvim-linux-x86_64/·nvim-win64/) 하나를 벗겨 bin/·share/ 가 바로 놓이게
+#[cfg(not(windows))]
+async fn extract(bytes: Vec<u8>, tmp: PathBuf) -> Result<(), String> {
+    let tgz = tmp.join("nvim.tar.gz");
+    tokio::fs::write(&tgz, &bytes).await.map_err(|e| format!("압축본 저장 실패: {e}"))?;
+    let out = tokio::process::Command::new("tar")
+        .args(["xzf", &tgz.to_string_lossy(), "-C", &tmp.to_string_lossy(), "--strip-components=1"])
+        .output()
+        .await
+        .map_err(|e| format!("tar: {e}"))?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
-        return Err(format!("{cmd} 종료 {}: {}", out.status, err.lines().last().unwrap_or("")));
+        return Err(format!("nvim 압축 해제 실패: tar 종료 {}: {}", out.status, err.lines().last().unwrap_or("")));
     }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    let _ = tokio::fs::remove_file(&tgz).await;
+    Ok(())
+}
+
+#[cfg(windows)]
+async fn extract(bytes: Vec<u8>, tmp: PathBuf) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| format!("zip 열기 실패: {e}"))?;
+        for i in 0..zip.len() {
+            let mut entry = zip.by_index(i).map_err(|e| format!("zip 항목 {i}: {e}"))?;
+            let Some(name) = entry.enclosed_name() else { continue };
+            let mut comps = name.components();
+            comps.next(); // 최상위 폴더
+            let rel = comps.as_path();
+            if rel.as_os_str().is_empty() {
+                continue;
+            }
+            let dst = tmp.join(rel);
+            if entry.is_dir() {
+                std::fs::create_dir_all(&dst).map_err(|e| format!("{}: {e}", dst.display()))?;
+                continue;
+            }
+            if let Some(parent) = dst.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+            }
+            let mut f = std::fs::File::create(&dst).map_err(|e| format!("{}: {e}", dst.display()))?;
+            std::io::copy(&mut entry, &mut f).map_err(|e| format!("{}: {e}", dst.display()))?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("압축 해제 태스크 실패: {e}"))?
+    .map_err(|e| format!("nvim 압축 해제 실패: {e}"))
 }
 
 /// GET /nvim (WebSocket) — 인증은 /ws 와 같다. 연결마다 nvim 프로세스 하나 (창 하나에 하나 —
@@ -129,6 +191,13 @@ pub(crate) async fn nvim_handler(
 async fn pipe(ws: WebSocket) {
     use futures_util::{SinkExt, StreamExt};
     let (mut ws_tx, mut ws_rx) = ws.split();
+    // 내려받아야 하면 먼저 텍스트 프레임 하나 — 프론트(model/nvim.ts)가 "내려받는 중" 알림을
+    // 띄운다. 이 뒤로는 바이너리(nvim RPC)만 흐른다. 데몬 와이어 밖이라 WIRE_VERSION 무관
+    if nvim_bin().is_none() {
+        if let Some((_, _, mb)) = ASSET {
+            let _ = ws_tx.send(Message::Text(format!("downloading {NVIM_VERSION} {mb}").into())).await;
+        }
+    }
     let bin = match ensure_nvim().await {
         Ok(b) => b,
         Err(e) => {

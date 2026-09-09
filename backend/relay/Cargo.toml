@@ -12,4 +12,9 @@ serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 futures-util = "0.3"
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+sha2 = "0.10"
 keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native", "async-secret-service", "tokio", "crypto-rust"] }
+
+[target.'cfg(windows)'.dependencies]
+# nvim-win64.zip 압축 해제 (nvim.rs ensure_nvim) — 외부 도구 없이. deflate 만, zlib-rs(순수 rust) 백엔드
+zip = { version = "8", default-features = false, features = ["deflate-flate2-zlib-rs"] }

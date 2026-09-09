@@ -9,6 +9,8 @@
  * 페이지(창)당 nvim 프로세스 하나. 켜기는 사용자 설정(localStorage, 기본 꺼짐) — 켜면 접속·
  * 초기화까지 status 가 starting→ready, 실패(바이너리 없음 close 4503·프로세스 종료)는 알림을
  * 띄우고 설정을 끈 상태로 되돌린다 — 편집기는 평소대로 남는다.
+ * nvim 이 아직 없으면 relay 가 GitHub 릴리스에서 내려받는데(ticket nvim-on-demand), 그때는 바이너리에
+ * 앞서 텍스트 프레임 `downloading <버전> <MB>` 하나가 온다 — 알림만 띄우고 기다린다 (진행률 없음).
  */
 import { reactive } from '@vue/reactivity';
 import { Encoder, ExtensionCodec, decode, decodeMultiStream } from '@msgpack/msgpack';
@@ -95,9 +97,15 @@ export function setVimMode(on: boolean): void {
 function start(): void {
   if (client || url === null) return;
   vimMode.status = 'starting';
+  let downloading = false;
   client = new NvimClient(url, {
+    onDownloading: (version, mb) => {
+      downloading = true;
+      notify('info', `Downloading Neovim ${version} (~${mb} MB)…`);
+    },
     onReady: () => {
       vimMode.status = 'ready';
+      if (downloading) notify('info', 'Neovim downloaded — vim mode is on');
     },
     onClose: (reason) => {
       const wasOn = vimMode.enabled;
@@ -275,6 +283,8 @@ type Handler = (args: unknown[]) => void;
 type RequestHandler = (args: unknown[]) => unknown | Promise<unknown>;
 
 interface ClientEvents {
+  /** relay 가 nvim 을 내려받기 시작 (바이너리 프레임에 앞선 텍스트 프레임) */
+  onDownloading: (version: string, mb: string) => void;
   onReady: () => void;
   onClose: (reason: string) => void;
 }
@@ -311,6 +321,9 @@ export class NvimClient {
       if (ev.data instanceof ArrayBuffer) {
         this.chunks.push(new Uint8Array(ev.data));
         this.wake?.();
+      } else if (typeof ev.data === 'string' && ev.data.startsWith('downloading ')) {
+        const [, version, mb] = ev.data.split(' ');
+        this.events.onDownloading(version, mb);
       }
     };
     this.ws.onclose = (ev) => {

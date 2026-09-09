@@ -6,7 +6,6 @@
 #   superlite.exe, WebView2Loader.dll
 #   daemon/windows-x86_64.exe   앱이 로컬에서 띄우는 데몬
 #   daemon/linux-x86_64         musl 정적 linux 데몬 — linux 원격(ssh)에 올려 실행
-#   nvim/windows-x86_64/        편집기 vim 모드용 Neovim (고정 버전, 릴리스 zip 그대로 — bin/·share/)
 #   daemon/tmux-linux-x86_64    musl 정적 tmux (고정 버전 릴리스 바이너리) — 내장 터미널 서버, 데몬과 함께
 #                               원격에 올린다 (ticket term-list-reconnect). Windows 는 tmux 없음 (터미널 보존 없음)
 # 데몬은 앱 옆 daemon/<os>-<arch>[.exe] 한 규칙으로 찾는다 (backend/relay lib.rs
@@ -93,22 +92,8 @@ fi
 
 (cd front && npm run build)
 
-# 편집기 vim 모드(ticket editor-vim-mode)의 Neovim — 고정 버전 릴리스 zip 을 받아 sha256 검증 후
-# target/nvim/windows-x86_64/ 에 풀어 리소스로 동봉한다 (앱은 실행 파일 옆 nvim/<os>-<arch>/bin/nvim.exe
-# 를 찾는다 — backend/relay nvim.rs nvim_bin). 버전을 올릴 때는 nvim.rs 의 NVIM_VERSION·해시와 함께.
-nvim_ver=0.12.5
-nvim_sha=de8625ba8cf65ebf40eb80a388ba1ec8e9c15b30218821e2c639119b05920de1
-nvim_zip=target/nvim-win64-$nvim_ver.zip
-nvim_dir=target/nvim/windows-x86_64
-if [ ! -f "$nvim_dir/bin/nvim.exe" ]; then
-    [ -f "$nvim_zip" ] || curl -fsSL -o "$nvim_zip" "https://github.com/neovim/neovim/releases/download/v$nvim_ver/nvim-win64.zip"
-    echo "$nvim_sha  $nvim_zip" | sha256sum -c - >/dev/null || { echo "nvim-win64.zip 해시 불일치" >&2; rm -f "$nvim_zip"; exit 2; }
-    rm -rf "$nvim_dir" target/nvim-win64
-    mkdir -p target/nvim
-    unzip -q "$nvim_zip" -d target/nvim-win64
-    mv target/nvim-win64/nvim-win64 "$nvim_dir"
-    rmdir target/nvim-win64
-fi
+# Neovim 은 동봉하지 않는다 — vim 모드를 처음 켤 때 relay 가 GitHub 릴리스에서 캐시 폴더로
+# 내려받는다 (backend/relay nvim.rs ensure_nvim, ticket nvim-on-demand).
 # 빌드 정보(커밋·dirty·시각)는 common 의 build.rs 가 굽는다 — 재실행 조건이 HEAD 변경뿐이라
 # 배포 빌드는 touch 로 강제 재실행해 현재 트리 상태를 정확히 박는다
 touch backend/common/build.rs
