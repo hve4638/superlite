@@ -85,7 +85,7 @@ export function reloadWindow(): void {
   });
 }
 
-/** 앱 전체 웹뷰 줌 — 레벨·저장·모든 창 적용은 native (set_zoom) 몫. 웹은 브라우저 줌이 있어 무동작 */
+/** 이 창의 웹뷰 줌 — 레벨·저장·적용은 native (set_zoom) 몫, 부른 창에만 적용된다 (ticket zoom-per-window). 웹은 브라우저 줌이 있어 무동작 */
 export function zoomWindow(action: 'in' | 'out' | 'reset'): void {
   void tauri?.core.invoke('set_zoom', { action });
 }

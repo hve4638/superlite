@@ -214,20 +214,28 @@ export function toggleViewerAutoReload(kind: keyof typeof viewerAutoReload): voi
 export const EDITOR_ZOOM_MIN = 50;
 export const EDITOR_ZOOM_MAX = 200;
 export const EDITOR_ZOOM_STEP = 10;
-// editorView 초기화가 loadEditorZoom 을 부르므로 이 셋은 그보다 위에 있어야 한다 (const TDZ — vite dev 는 모듈 순서 그대로라 부팅이 깨졌다)
+// editorView 초기화가 loadWindowZoom 을 부르므로 이 셋은 그보다 위에 있어야 한다 (const TDZ — vite dev 는 모듈 순서 그대로라 부팅이 깨졌다)
 const EDITOR_ZOOM_KEY = 'superlite.editorZoom';
 function clampZoom(percent: number): number {
   const snapped = Math.round(percent / EDITOR_ZOOM_STEP) * EDITOR_ZOOM_STEP;
   return Math.min(EDITOR_ZOOM_MAX, Math.max(EDITOR_ZOOM_MIN, snapped));
 }
-function loadEditorZoom(): number {
-  const n = Number(localStorage.getItem(EDITOR_ZOOM_KEY));
+/** 배율 저장 (편집기·터미널 공용, ticket zoom-per-window — 배율은 창마다 따로다). 창의 값은 sessionStorage 에
+ *  둔다 — 창(웹뷰)마다 별도라 다른 창에 번지지 않고, 새로고침에는 남고, 창이 닫히면 사라진다. localStorage 는
+ *  마지막으로 조절한 값의 사본 — 재시작 첫 창·두 번째 실행 창처럼 물려받을 부모가 없는 창의 시작값이다.
+ *  분리로 생긴 새 창은 핸드오프(fontZoom)로 출처 창 값을 물려받은 뒤 독립한다 (2026-09-09 사용자 결정) */
+export function loadWindowZoom(key: string): number {
+  const n = Number(sessionStorage.getItem(key) ?? localStorage.getItem(key));
   return Number.isFinite(n) && n > 0 ? clampZoom(n) : 100;
 }
+export function saveWindowZoom(key: string, percent: number): void {
+  sessionStorage.setItem(key, String(percent));
+  localStorage.setItem(key, String(percent));
+}
 /** 자동 줄바꿈 — 전 에디터 공통 뷰 상태 (VS Code Alt+Z 와 같이 세션 안에서만, 영속화 없음).
- *  zoom 은 편집기 전용 줌(퍼센트) — 웹뷰 줌(Ctrl+=, 앱 전체)과 별개로 Monaco 글꼴 크기만 바꾼다.
- *  세션 무관 전역이라 localStorage 에 기억한다 (viewerAutoReload 와 같은 방식) */
-export const editorView = reactive({ wordWrap: false, zoom: loadEditorZoom() });
+ *  zoom 은 편집기 전용 줌(퍼센트) — 웹뷰 줌(Ctrl+Shift+=, 창 단위)과 별개로 Monaco 글꼴 크기만 바꾼다.
+ *  세션 무관·창 단위라 loadWindowZoom 으로 기억한다 */
+export const editorView = reactive({ wordWrap: false, zoom: loadWindowZoom(EDITOR_ZOOM_KEY) });
 export function toggleWordWrap(): void {
   editorView.wordWrap = !editorView.wordWrap;
 }
@@ -256,15 +264,11 @@ export function toggleFolderPreviewPane(): void {
 /** 편집기 줌 설정 — 10 단위 스냅·50~200 클램프 후 저장. MonacoHost 가 지켜보다 fontSize 갱신 */
 export function setEditorZoom(percent: number): void {
   editorView.zoom = clampZoom(percent);
-  localStorage.setItem(EDITOR_ZOOM_KEY, String(editorView.zoom));
+  saveWindowZoom(EDITOR_ZOOM_KEY, editorView.zoom);
 }
 export function stepEditorZoom(dir: 1 | -1): void {
   setEditorZoom(editorView.zoom + dir * EDITOR_ZOOM_STEP);
 }
-// 다른 창(앱 다중 창 = 같은 origin)이 바꾼 값을 따라온다 — 자기 창의 setItem 은 이 이벤트가 오지 않는다
-window.addEventListener('storage', (e) => {
-  if (e.key === EDITOR_ZOOM_KEY) editorView.zoom = loadEditorZoom();
-});
 
 /** 프리뷰 수동 갱신 신호 — path 별 tick. 자동 갱신 off 인 프리뷰가 이걸 보고 iframe 을 다시 만든다 */
 export const previewReloadTick = reactive(new Map<string, number>());

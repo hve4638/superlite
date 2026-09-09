@@ -172,8 +172,14 @@ export fn toggleWordWrap() {
 export val EDITOR_ZOOM_MIN
 export val EDITOR_ZOOM_MAX
 export val EDITOR_ZOOM_STEP
+export fn loadWindowZoom(key) {
+  role: 배율 읽기 (편집기·터미널 공용, ticket zoom-per-window — 배율은 창마다 따로, 2026-09-09 사용자 결정). sessionStorage(창마다 별도 — 다른 창에 번지지 않고 새로고침엔 남고 창이 닫히면 사라진다) 우선, 없으면 localStorage(마지막으로 조절한 값 — 재시작 첫 창·두 번째 실행 창처럼 물려받을 부모가 없는 창의 시작값). 분리로 생긴 새 창은 핸드오프(terminal.fontZoom)로 출처 창 값을 물려받은 뒤 독립한다
+}
+export fn saveWindowZoom(key, percent) {
+  role: 배율 저장 — sessionStorage(이 창)와 localStorage(마지막 값) 둘 다
+}
 export fn setEditorZoom(percent) {
-  role: 편집기 전용 줌(editorView.zoom, 퍼센트) — 웹뷰 줌(Ctrl+=, 앱 전체)과 별개로 Monaco 글꼴 크기만 바꾼다 (사이드바·탭·터미널은 그대로). 50~200 을 10 단위로 스냅·클램프. 세션 무관 전역이라 localStorage 에 기억하고, 다른 창의 변경은 storage 이벤트로 따라온다 (앱 다중 창 = 같은 origin). MonacoHost 가 지켜보다 fontSize 를 updateOptions (ticket convenience-features, 2026-09-07)
+  role: 편집기 전용 줌(editorView.zoom, 퍼센트) — 웹뷰 줌(Ctrl+Shift+=, 창 단위)과 별개로 Monaco 글꼴 크기만 바꾼다 (사이드바·탭·터미널은 그대로). 50~200 을 10 단위로 스냅·클램프. 세션 무관·창 단위라 saveWindowZoom 으로 기억한다 (종전의 storage 이벤트 추종은 폐지 — 다른 창을 따라가지 않는다). MonacoHost 가 지켜보다 fontSize 를 updateOptions (ticket convenience-features, 2026-09-07)
 }
 export fn stepEditorZoom(dir) {
   role: 한 단계(EDITOR_ZOOM_STEP) 확대·축소 — 팔레트 'View: Editor Font Zoom In/Out' 용

@@ -16,7 +16,7 @@ export fn toggleMaximizeWindow() {
   role: 최대화/복원 토글
 }
 export fn zoomWindow(action) {
-  role: 앱 전체 웹뷰 줌 — native set_zoom 커맨드 호출 ('in'·'out'·'reset'). 레벨·저장·모든 창 적용은 native 몫 (app/src/main set_zoom). 웹은 무동작
+  role: 이 창의 웹뷰 줌 — native set_zoom 커맨드 호출 ('in'·'out'·'reset'). 레벨·저장·적용은 native 몫이고 부른 창에만 적용된다 (app/src/main set_zoom, ticket zoom-per-window). 웹은 무동작
 }
 export fn destroyWindow() {
   role: 창 파괴 — 닫기 요청 훅 없이. 서브 창이 탭을 되돌린 뒤 스스로 닫을 때

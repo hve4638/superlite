@@ -4,7 +4,7 @@ import { ctx, viewOf } from './ctx';
 import { errText, notify } from './notifications';
 import { backendApiUrl } from './host';
 import { allSessionCtxs } from './sessions';
-import { EDITOR_ZOOM_MAX, EDITOR_ZOOM_MIN, EDITOR_ZOOM_STEP } from './editors';
+import { EDITOR_ZOOM_MAX, EDITOR_ZOOM_MIN, EDITOR_ZOOM_STEP, editorView, loadWindowZoom, saveWindowZoom, setEditorZoom } from './editors';
 import type { createEditors } from './editors';
 
 export interface TerminalInstance {
@@ -302,28 +302,32 @@ export async function saveTmuxConf(content: string): Promise<void> {
 }
 
 // ---- 터미널 줌 — 편집기 줌과 별개의 값(사용자 결정 2026-09-08: 터미널 개별 배율). 범위·단위는
-//      편집기와 같고, 세션·창 무관 전역이라 localStorage 에 기억한다. terminalHost 가 지켜보다
-//      열려 있는 모든 xterm 의 fontSize 를 바꾸고 fit 한다
+//      편집기와 같고, 세션 무관·창 단위라 편집기와 같은 방식(loadWindowZoom)으로 기억한다. terminalHost 가
+//      지켜보다 열려 있는 모든 xterm 의 fontSize 를 바꾸고 fit 한다
 const TERMINAL_ZOOM_KEY = 'superlite.terminalZoom';
 function clampTerminalZoom(percent: number): number {
   const snapped = Math.round(percent / EDITOR_ZOOM_STEP) * EDITOR_ZOOM_STEP;
   return Math.min(EDITOR_ZOOM_MAX, Math.max(EDITOR_ZOOM_MIN, snapped));
 }
-function loadTerminalZoom(): number {
-  const n = Number(localStorage.getItem(TERMINAL_ZOOM_KEY));
-  return Number.isFinite(n) && n > 0 ? clampTerminalZoom(n) : 100;
-}
-export const terminalView = reactive({ zoom: loadTerminalZoom() });
+export const terminalView = reactive({ zoom: loadWindowZoom(TERMINAL_ZOOM_KEY) });
 export function setTerminalZoom(percent: number): void {
   terminalView.zoom = clampTerminalZoom(percent);
-  localStorage.setItem(TERMINAL_ZOOM_KEY, String(terminalView.zoom));
+  saveWindowZoom(TERMINAL_ZOOM_KEY, terminalView.zoom);
 }
 export function stepTerminalZoom(dir: 1 | -1): void {
   setTerminalZoom(terminalView.zoom + dir * EDITOR_ZOOM_STEP);
 }
-window.addEventListener('storage', (e) => {
-  if (e.key === TERMINAL_ZOOM_KEY) terminalView.zoom = loadTerminalZoom();
-});
+
+/** 창 배율 핸드오프 (ticket zoom-per-window) — 새 창(세션 분리·탭 분리·보조창 복원)이 출처 창의 편집기·터미널
+ *  배율을 물려받는 데 쓴다. 출처가 fontZoom() 으로 만들어 핸드오프에 싣고, 새 창이 applyFontZoom 으로 받는다 */
+export type FontZoom = { editor: number; terminal: number };
+export function fontZoom(): FontZoom {
+  return { editor: editorView.zoom, terminal: terminalView.zoom };
+}
+export function applyFontZoom(z: FontZoom): void {
+  setEditorZoom(z.editor);
+  setTerminalZoom(z.terminal);
+}
 
 // ---- 활성 세션 전달 shim
 

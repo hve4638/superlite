@@ -291,8 +291,8 @@ export function setupCommands(): void {
 
   // 키 배정(사용자 확정, VS Code 기본과 다름): 편집기 글꼴 줌이 1차 기능이라 Ctrl+= / Ctrl+- / Ctrl+0,
   // UI 포함 전역(웹뷰) 줌은 Shift 를 얹어 Ctrl+Shift+= / Ctrl+Shift+- / Ctrl+Shift+0. 숫자패드 +/- 도 같은 규칙.
-  // 전역 줌은 앱 전용 — 웹은 같은 키가 브라우저 줌이라 등록하지 않는다. 배율은 앱 전체 공통이고
-  // native 가 레벨을 소유·저장한다 (app/src/main set_zoom)
+  // 전역 줌은 앱 전용 — 웹은 같은 키가 브라우저 줌이라 등록하지 않는다. 배율은 창 단위이고
+  // native 가 창별 레벨을 소유·저장한다 (app/src/main set_zoom, ticket zoom-per-window)
   if (inApp) {
     register({
       id: 'workbench.action.zoomIn',

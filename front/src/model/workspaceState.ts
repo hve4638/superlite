@@ -3,6 +3,7 @@ import type { EditorGroup, LayoutNode } from './editors';
 import { notify } from './notifications';
 import type { SessionCtx } from './session';
 import { tauri } from './tauri';
+import { fontZoom, type FontZoom } from './terminal';
 
 /**
  * 워크스페이스별 상태 기억 (ticket workspace-state-restore) — 같은 root 를 다시 열면 그 아래에서
@@ -43,10 +44,14 @@ const WEB_KEY = 'superlite.state';
 
 export type StoreKind = 'app' | 'web' | 'mock';
 
-/** 보조창 하나의 저장 — 스냅샷 + 창 위치·크기(논리 px, native 가 저장 시점에 읽는다) */
-export type SubWorkspaceState = WorkspaceState & { x: number; y: number; w: number; h: number };
+/** 보조창의 스냅샷 — 창 단위 배율(편집기·터미널, ticket zoom-per-window)을 함께 싣는다. 메인 창 몫(root 별)엔
+ *  없다 — 메인의 배율은 창 저장소(editors.loadWindowZoom)가 기억한다 */
+type SubSnapshot = WorkspaceState & { fontZoom?: FontZoom };
 
-function serialize(ctx: SessionCtx): WorkspaceState {
+/** 보조창 하나의 저장 — 스냅샷 + 창 위치·크기(논리 px)·웹뷰 줌 레벨(zoom, native 가 저장 시점에 읽는다) */
+export type SubWorkspaceState = SubSnapshot & { x: number; y: number; w: number; h: number; zoom?: number };
+
+function serialize(ctx: SessionCtx, sub: boolean): SubSnapshot {
   const s = ctx.editors.snapshot();
   const terminals: WorkspaceState['terminals'] = [];
   for (const g of s.groups) {
@@ -68,6 +73,7 @@ function serialize(ctx: SessionCtx): WorkspaceState {
     expanded: [...ctx.files.files.expanded],
     views: [...ctx.editors.editors.viewStates].filter(([p]) => open.has(p)),
     terminals,
+    ...(sub ? { fontZoom: fontZoom() } : {}),
   };
 }
 
@@ -104,7 +110,7 @@ async function load(kind: StoreKind, id: string, root: string): Promise<Loaded> 
 }
 
 /** sub: 서브 창의 미러 세션 id — 그 창의 몫으로 저장된다. null 스냅샷은 그 서브를 잊는 것 */
-function persist(kind: StoreKind, id: string, root: string, s: WorkspaceState | null, sub?: string): Promise<void> {
+function persist(kind: StoreKind, id: string, root: string, s: SubSnapshot | null, sub?: string): Promise<void> {
   if (kind === 'app') {
     const call = sub
       ? tauri?.core.invoke('set_workspace_sub_state', { id: sub, snapshot: s })
@@ -138,9 +144,9 @@ export async function restoreWorkspace(kind: StoreKind, id: string, root: string
   // 보조창 — 저장된 자리·크기에 서브 창을 만들고 'restore' 핸드오프로 채운다 (sessions.applyHandoff).
   // fromSession 은 이 세션(원본) — native 가 미러 세션을 만들고 toSession 을 채운다
   for (const sub of loaded.subs) {
-    const { x, y, w, h, ...state } = sub;
+    const { x, y, w, h, zoom, fontZoom: fz, ...state } = sub;
     tasks.push(
-      tauri?.core.invoke('detach_tabs', { root, x, y, size: [w, h], handoff: { kind: 'restore', fromSession: id, state } })
+      tauri?.core.invoke('detach_tabs', { root, x, y, size: [w, h], zoom, handoff: { kind: 'restore', fromSession: id, state, fontZoom: fz } })
         .catch((e: unknown) => notify('warning', `Could not restore a detached window: ${String(e)}`)) ?? Promise.resolve(),
     );
   }
@@ -210,7 +216,7 @@ interface Tracked {
 }
 const tracked = new Map<string, Tracked>();
 
-/** 복원이 끝난 세션의 변경을 따라가며 저장한다 — 구조(탭·그룹·배치·펼침) 변경만 트리거 (effect 가
+/** 복원이 끝난 세션의 변경을 따라가며 저장한다 — 구조(탭·그룹·배치·펼침, 서브 창은 배율도) 변경만 트리거 (effect 가
  *  직렬화 중 읽은 반응형 값을 추적한다), 첫 실행은 저장하지 않는다 (복원 직후 같은 내용) */
 export function trackWorkspace(kind: StoreKind, id: string, root: string, ctx: SessionCtx, sub?: string): void {
   if (kind === 'mock' || tracked.has(id)) return;
@@ -221,7 +227,7 @@ export function trackWorkspace(kind: StoreKind, id: string, root: string, ctx: S
       clearTimeout(t.timer);
       t.timer = null;
     }
-    const s = serialize(ctx);
+    const s = serialize(ctx, sub !== undefined);
     const json = JSON.stringify({ ...s, views: undefined });
     last = json;
     // 탭이 하나도 없는 서브 창은 기억할 것이 없다 — null 로 잊는다 (마지막 탭이 메인으로 돌아간 경우)
@@ -239,7 +245,7 @@ export function trackWorkspace(kind: StoreKind, id: string, root: string, ctx: S
   const entry: Tracked = { runner: null, timer: null, save, forget: () => persist(kind, id, root, null, sub) };
   tracked.set(id, entry);
   entry.runner = effect(() => {
-    const json = JSON.stringify({ ...serialize(ctx), views: undefined });
+    const json = JSON.stringify({ ...serialize(ctx, sub !== undefined), views: undefined });
     if (first) {
       first = false;
       last = json;

@@ -32,8 +32,9 @@
 //! (2026-09-02 사용자 결정, ticket app-empty-session). 명시 argv 로 준 폴더만 연다.
 //! 대신 state.json(app_data_dir, version 2 — decision/state-persistence.md)에 최근 연 폴더
 //! MRU 와 사용자가 고정한 그룹(pinned, ticket start-page-redesign — 종전 세션 묶음 이력을 대체)을
-//! 남기고, 시작 페이지가 그 목록을 보여 사용자가 명시적으로 다시 연다 (ticket start-page-recents). 같은 파일에 앱 전체 줌
-//! 레벨(zoom)도 둔다 — 배율은 창별이 아니라 VS Code window.zoomLevel 처럼 앱 공통 (set_zoom).
+//! 남기고, 시작 페이지가 그 목록을 보여 사용자가 명시적으로 다시 연다 (ticket start-page-recents). 같은 파일에 웹뷰 줌
+//! 레벨(zoom)도 둔다 — 배율은 창마다 따로고(zooms, set_zoom — 2026-09-09 사용자 결정, ticket zoom-per-window)
+//! 저장값은 마지막으로 조절한 레벨로 부모 없는 창(첫 창·두 번째 실행 창)의 시작값이다.
 //!
 //! 실행: superlite [워크스페이스루트]  (인자 없으면 빈 세션으로 시작)
 
@@ -105,7 +106,7 @@ fn drop_mirrors_of(
 
 /// 락 순서 규약 (교착 방지 — 중첩해 잡을 때는 반드시 이 순서로):
 ///   sessions → windows → groups → persisted
-/// handoffs 는 다른 락을 모두 놓은 뒤 단독으로만 잡는다 (다른 락 안에서 잡지 않는다).
+/// handoffs·zooms 는 다른 락을 모두 놓은 뒤 단독으로만 잡는다 (다른 락 안에서 잡지 않는다).
 /// 중첩이 실제로 성립하는 곳: sessions→windows→groups 는 세션 등록·제거 블록(drop_mirrors_of 호출부),
 /// sessions→windows→persisted 는 setup 의 초기 등록(remember_recent) 한 곳. `if` 조건식 안의 임시
 /// guard 는 조건 평가가 끝나면 풀리므로 겹치지 않지만, 바인딩으로 바꾸면 이 규약을 따라야 한다
@@ -120,6 +121,8 @@ struct AppState {
     handoffs: Mutex<HashMap<String, Vec<serde_json::Value>>>,
     /// 메인·서브 창 묶음
     groups: Mutex<Groups>,
+    /// 창 label → 웹뷰 줌 레벨 (창마다 따로, ticket zoom-per-window). 창 생성 때 넣고(build_window) 파괴 때 지운다
+    zooms: Mutex<HashMap<String, i32>>,
     next_window: AtomicUsize,
     /// 최근 폴더·고정 그룹 — state.json 의 메모리 사본
     persisted: Mutex<Persisted>,
@@ -137,8 +140,9 @@ const ZOOM_MAX: i32 = 8;
 /// recents 는 개별 root 의 MRU(앞이 최신) — 고정된 root 는 들어오지 않는다. pinned 는 사용자가
 /// 시작 페이지에 고정한 그룹 목록(순서 = 표시 순서, 그룹의 roots 순서 = 열 때 탭 순서;
 /// 2026-09-07 start-page-redesign — 종전 bundles(세션 묶음 이력)를 대체, 옛 파일의 bundles 는
-/// 무시). 빈 세션(root 없음·경로 없는 ssh://host)은 제외. zoom 은 앱 전체 웹뷰 줌 레벨(0 = 100%,
-/// 배율 1.2^zoom) — 필드 추가는 version 을 올리지 않는다 (없으면 기본값, reader 는 모르는 필드를 무시)
+/// 무시). 빈 세션(root 없음·경로 없는 ssh://host)은 제외. zoom 은 마지막으로 조절한 웹뷰 줌 레벨(0 = 100%,
+/// 배율 1.2^zoom) — 창별 레벨(zooms)의 시작값으로만 쓰인다. 필드 추가는 version 을 올리지 않는다 (없으면
+/// 기본값, reader 는 모르는 필드를 무시)
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 struct Persisted {
     version: u32,
@@ -164,7 +168,7 @@ struct WorkspaceEntry {
     subs: Vec<SubWorkspaceEntry>,
 }
 
-/// 서브 창 하나의 저장 — front 스냅샷 + 창 위치·크기(논리 px, 저장 시점에 native 가 읽는다)
+/// 서브 창 하나의 저장 — front 스냅샷 + 창 위치·크기(논리 px)·웹뷰 줌 레벨(저장 시점에 native 가 읽는다)
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct SubWorkspaceEntry {
     label: String,
@@ -172,6 +176,8 @@ struct SubWorkspaceEntry {
     y: f64,
     w: f64,
     h: f64,
+    #[serde(default)]
+    zoom: i32,
     state: serde_json::Value,
 }
 
@@ -384,6 +390,13 @@ fn drop_window(app: &tauri::AppHandle, state: &AppState, label: &str) {
         }
     }
     state.handoffs.lock().unwrap().remove(label);
+    state.zooms.lock().unwrap().remove(label);
+}
+
+/// 창의 웹뷰 줌 레벨 — 모르는 창(부팅 전·웹)은 저장된 시작값
+fn zoom_of(state: &AppState, label: &str) -> i32 {
+    let known = state.zooms.lock().unwrap().get(label).copied();
+    known.unwrap_or_else(|| state.persisted.lock().unwrap().zoom)
 }
 
 fn rand_hex() -> String {
@@ -451,7 +464,8 @@ fn default_open_root() -> String {
 }
 
 /// 창 생성 — 첫 창(setup)과 분리로 생기는 창이 같은 빌더를 쓴다. 주입 목록은 그 창 소속
-/// 세션만 (호출 전에 소속 배정이 끝나 있어야 한다). pos 는 논리 좌표 (드롭 지점).
+/// 세션만 (호출 전에 소속 배정이 끝나 있어야 한다). pos 는 논리 좌표 (드롭 지점). zoom 은 이 창의
+/// 웹뷰 줌 레벨 — 분리 창은 출처 창 값, 부모 없는 창은 저장된 마지막 값 (ticket zoom-per-window).
 /// WHY: 창을 만드는 커맨드는 반드시 async fn — 동기 커맨드는 메인 스레드에서 돌고, Windows 는
 ///      그 안의 build() 가 이벤트 루프를 기다리며 교착한다 (Tauri 문서 주의). 실측: 새 창이
 ///      로드되지 않고 출처 창의 IPC 까지 멈춰 닫기·탭 추가가 전부 먹통이 됐다
@@ -461,6 +475,7 @@ fn build_window(
     label: &str,
     pos: Option<(f64, f64)>,
     size: Option<(f64, f64)>,
+    zoom: i32,
 ) -> tauri::Result<tauri::WebviewWindow> {
     // 주입 스크립트는 프론트 코드 실행 전에 평가된다 (host.ts 가 값을 읽는다).
     // WHY: 숨김 기동(visible false → load 후 show)은 쓰지 않는다 — WebView2 가 숨김
@@ -497,8 +512,8 @@ fn build_window(
         b = b.position(x, y);
     }
     let window = b.build()?;
-    // 앱 전체 공통 배율 — 새 창도 저장된 레벨로 뜬다 (0 이면 기본 배율이라 호출 불요)
-    let zoom = state.persisted.lock().unwrap().zoom;
+    // 창별 배율 — 물려받은 레벨로 뜬다 (0 이면 기본 배율이라 호출 불요)
+    state.zooms.lock().unwrap().insert(label.to_string(), zoom);
     if zoom != 0 {
         if let Err(e) = window.set_zoom(zoom_factor(zoom)) {
             eprintln!("superlite: 줌 적용 실패 ({label}): {e}");
@@ -553,23 +568,27 @@ mod win_icon {
     }
 }
 
-/// 웹뷰 줌 — action 은 "in"·"out"·"reset". 배율은 창별이 아니라 앱 전체 공통(VS Code
-/// window.zoomLevel)이라 레벨은 native 가 소유하고 모든 창에 적용·state.json 에 저장한다.
+/// 웹뷰 줌 — action 은 "in"·"out"·"reset". 배율은 창마다 따로다 (2026-09-09 사용자 결정, ticket zoom-per-window —
+/// 종전엔 VS Code window.zoomLevel 처럼 앱 공통): 부른 창의 레벨(zooms)만 옮기고 그 창에만 적용한다. 결과는
+/// state.json(persisted.zoom)에 마지막 값으로 저장해 재시작 첫 창·두 번째 실행 창의 시작값이 된다.
 /// front 의 'View: Zoom In/Out/Reset Zoom'(Ctrl+Shift+= / Ctrl+Shift+- / Ctrl+Shift+0 — Shift 없는 키는 편집기 글꼴 줌)이 부른다 — 웹은 브라우저
 /// 줌이 있어 등록하지 않는다 (ticket convenience-features)
 #[tauri::command]
-fn set_zoom(app: tauri::AppHandle, state: tauri::State<AppState>, action: String) {
+fn set_zoom(window: tauri::WebviewWindow, state: tauri::State<AppState>, action: String) {
+    let label = window.label().to_string();
     let level = {
-        let mut p = state.persisted.lock().unwrap();
-        p.zoom = step_zoom(p.zoom, &action);
-        save_state(state.state_file.as_deref(), &p);
-        p.zoom
+        let mut zooms = state.zooms.lock().unwrap();
+        let level = step_zoom(zooms.get(&label).copied().unwrap_or(0), &action);
+        zooms.insert(label.clone(), level);
+        level
     };
-    let factor = zoom_factor(level);
-    for (label, w) in app.webview_windows() {
-        if let Err(e) = w.set_zoom(factor) {
-            eprintln!("superlite: 줌 적용 실패 ({label}): {e}");
-        }
+    {
+        let mut p = state.persisted.lock().unwrap();
+        p.zoom = level;
+        save_state(state.state_file.as_deref(), &p);
+    }
+    if let Err(e) = window.set_zoom(zoom_factor(level)) {
+        eprintln!("superlite: 줌 적용 실패 ({label}): {e}");
     }
 }
 
@@ -888,7 +907,7 @@ async fn detach_session(
         windows.insert(id.clone(), label.clone());
     }
     deliver_handoff(&app, &state, &label, handoff);
-    match build_window(&app, &state, &label, Some((x, y)), None) {
+    match build_window(&app, &state, &label, Some((x, y)), None, zoom_of(&state, &from)) {
         Err(e) => {
             // 롤백 — 생기지 않은 창 소속으로 세션이 사라지지 않게 되돌린다
             {
@@ -970,7 +989,8 @@ async fn move_session_to_window(
 /// 건너뛴다 (같은 워크스페이스의 두 번째 세션이 목적). 핸드오프 toSession 은 원본 id — 서브 창
 /// front 는 세션을 원본 id 로 키잡는다. 터미널은 새 창이 adoptTerminal(와이어 v10)로 출처 세션
 /// (fromSession, 데몬 세션 id)에서 가져간다. root 인자는 출처가 아는 root — 레지스트리의
-/// 원본 root 가 우선이다
+/// 원본 root 가 우선이다. zoom 은 보조창 복원(workspaceState.restoreWorkspace)이 저장된 웹뷰 줌 레벨을
+/// 넘기는 자리 — 없으면 출처 창 값을 물려받는다 (ticket zoom-per-window)
 #[tauri::command]
 async fn detach_tabs(
     app: tauri::AppHandle,
@@ -979,6 +999,7 @@ async fn detach_tabs(
     x: f64,
     y: f64,
     size: Option<(f64, f64)>,
+    zoom: Option<i32>,
     mut handoff: serde_json::Value,
 ) -> Result<(), String> {
     let root = parse_root(&root)?;
@@ -1006,7 +1027,9 @@ async fn detach_tabs(
     };
     obj.insert("toSession".into(), serde_json::Value::String(origin));
     deliver_handoff(&app, &state, &label, handoff);
-    match build_window(&app, &state, &label, Some((x, y)), size) {
+    // 보조창 복원은 저장된 레벨(±ZOOM_MAX 클램프), 그 외는 출처 창 값을 물려받는다
+    let zoom = zoom.map_or_else(|| zoom_of(&state, window.label()), |z| z.clamp(-ZOOM_MAX, ZOOM_MAX));
+    match build_window(&app, &state, &label, Some((x, y)), size, zoom) {
         Err(e) => {
             // 롤백 — 생기지 않은 창의 세션·미러·핸드오프를 지운다 (front 는 실패를 받아 탭을 되돌린다)
             {
@@ -1241,6 +1264,7 @@ async fn get_workspace_state(
                 o.insert("y".into(), s.y.into());
                 o.insert("w".into(), s.w.into());
                 o.insert("h".into(), s.h.into());
+                o.insert("zoom".into(), s.zoom.into());
             }
             v
         })
@@ -1328,6 +1352,8 @@ async fn set_workspace_sub_state(
         let size = window.inner_size().map(|s| s.to_logical::<f64>(scale)).unwrap_or(tauri::LogicalSize::new(1200.0, 800.0));
         (pos.x, pos.y, size.width, size.height)
     });
+    // 창의 웹뷰 줌 레벨도 함께 — 복원 때 detach_tabs 의 zoom 으로 돌아온다 (persisted 락 밖에서 읽는다)
+    let zoom = zoom_of(&state, &label);
     let mut p = state.persisted.lock().unwrap();
     let i = match p.workspaces.iter().position(|w| w.root == root) {
         Some(i) => i,
@@ -1343,7 +1369,7 @@ async fn set_workspace_sub_state(
     let subs = &mut p.workspaces[i].subs;
     subs.retain(|s| s.label != label);
     if let (Some(st), Some((x, y, w, h))) = (snapshot, geom) {
-        subs.push(SubWorkspaceEntry { label, x, y, w, h, state: st });
+        subs.push(SubWorkspaceEntry { label, x, y, w, h, zoom, state: st });
     }
     save_state(state.state_file.as_deref(), &p);
     Ok(())
@@ -1473,7 +1499,7 @@ fn open_group_in(app: &tauri::AppHandle, state: &AppState, from: &str, roots: &[
         (label, added)
     };
     if label != from {
-        if let Err(e) = build_window(app, state, &label, None, None) {
+        if let Err(e) = build_window(app, state, &label, None, None, zoom_of(state, &from)) {
             // 롤백 — 생기지 않은 창 소속으로 세션이 남지 않게
             let mut list = state.sessions.lock().unwrap();
             let mut windows = state.windows.lock().unwrap();
@@ -1727,7 +1753,8 @@ fn open_second_instance(app: &tauri::AppHandle, argv: Vec<String>, cwd: String) 
             push_session(&mut list, &mut windows, &label, root);
             label
         };
-        match build_window(&app, &state, &label, None, None) {
+        let zoom = state.persisted.lock().unwrap().zoom;
+        match build_window(&app, &state, &label, None, None, zoom) {
             Ok(w) => {
                 let _ = w.set_focus();
             }
@@ -1847,6 +1874,7 @@ fn main() {
                 windows: Mutex::default(),
                 handoffs: Mutex::default(),
                 groups: Mutex::default(),
+                zooms: Mutex::default(),
                 next_window: AtomicUsize::new(0),
                 persisted: Mutex::new(persisted),
                 state_file,
@@ -1866,7 +1894,8 @@ fn main() {
                     push_session(&mut list, &mut windows, MAIN_WINDOW, None);
                 }
             }
-            build_window(app.handle(), &state, MAIN_WINDOW, None, None)?;
+            let zoom = state.persisted.lock().unwrap().zoom;
+            build_window(app.handle(), &state, MAIN_WINDOW, None, None, zoom)?;
             Ok(())
         })
         .run(tauri::generate_context!())

@@ -4,7 +4,7 @@ import { activeCtx } from './ctx';
 import type { SplitSide, TabHandoff } from './editors';
 import { notify } from './notifications';
 import { createSessionCtx, type SessionCtx, type SessionSnapshot } from './session';
-import type { TerminalInstance, TerminalSnapshot } from './terminal';
+import { applyFontZoom, fontZoom, type FontZoom, type TerminalInstance, type TerminalSnapshot } from './terminal';
 import { destroyWindow, onWindowCloseRequested, ownerWindow, subWindow, windowLabel } from './window';
 import { tauri } from './tauri';
 import { applyWorkspaceState, flushWorkspace, forgetWorkspace, restoreSubWorkspace, restoreWorkspace, trackWorkspace, untrackWorkspace, type WorkspaceState } from './workspaceState';
@@ -36,12 +36,14 @@ import { applyWorkspaceState, flushWorkspace, forgetWorkspace, restoreSubWorkspa
 
 /** 창 이동 핸드오프 — native 를 경유하는 JSON. session: 세션 탭 통째 (같은 session id 로
  *  새 창이 재-attach), tabs: 에디터·터미널 탭 일부 (같은 root 의 다른 세션으로 — 터미널은
- *  데몬 adoptTerminal, toSession 은 detach_tabs 때 native 가 채운다) */
+ *  데몬 adoptTerminal, toSession 은 detach_tabs 때 native 가 채운다).
+ *  fontZoom 은 새 창을 만드는 경로(detach_session·detach_tabs·보조창 복원)에만 실린다 — 새 창이 출처 창의
+ *  편집기·터미널 배율을 물려받는다 (ticket zoom-per-window). 살아 있는 창으로 가는 이동(move·forward)엔 없다 */
 export type Handoff =
-  | { kind: 'session'; id: string; name: string; renamed?: boolean; state: SessionSnapshot }
+  | { kind: 'session'; id: string; name: string; renamed?: boolean; state: SessionSnapshot; fontZoom?: FontZoom }
   /** 보조창 복원 (ticket workspace-state-restore) — 메인이 detach_tabs 로 서브 창을 다시 만들며 싣는 워크스페이스
    *  스냅샷. toSession 은 native 가 채운다(원본 세션 id) — 서브는 그 미러에 applyWorkspaceState 로 적용한다 */
-  | { kind: 'restore'; fromSession: string; toSession?: string; state: WorkspaceState }
+  | { kind: 'restore'; fromSession: string; toSession?: string; state: WorkspaceState; fontZoom?: FontZoom }
   | {
       kind: 'tabs';
       fromSession: string;
@@ -52,6 +54,7 @@ export type Handoff =
       toSplit?: SplitSide;
       editors: TabHandoff[];
       terminals: TerminalSnapshot[];
+      fontZoom?: FontZoom;
     };
 
 /** 창 간 DnD 의 dataTransfer 타입 — dragover 중 읽을 수 있는 건 타입만이라 종류 식별에 쓴다.
@@ -654,8 +657,10 @@ export function detachSession(id: string, x: number, y: number): void {
   // 서브 창들이 가진 이 세션의 탭을 먼저 거둬들여 함께 데려간다 (2026-09-08 개정) — 핸드오프는 그 뒤에 만든다
   void recallSessionTabs(id).then(() => {
     const handoff = sessionHandoff(id);
+    if (!handoff) return;
+    handoff.fontZoom = fontZoom();
     // 화면 밖(음수) 좌표로 창이 생기지 않게 — 좌상단 근처 드롭 보정
-    if (handoff) void invoke('detach_session', { id, x: Math.max(0, x), y: Math.max(0, y), handoff });
+    void invoke('detach_session', { id, x: Math.max(0, x), y: Math.max(0, y), handoff });
   });
 }
 
@@ -744,6 +749,7 @@ function detachTabs(pick: TabsPick, x: number, y: number): void {
   if (root === null || isRemoteEmpty(root)) return;
   const handoff = tabsHandoff(from, [pick.editorTab]);
   if (!handoff) return;
+  handoff.fontZoom = fontZoom();
   void invoke('detach_tabs', { root, x: Math.max(0, x), y: Math.max(0, y), handoff }).then((ok) => {
     if (!ok) undoTabsHandoff(from, handoff, pick.editorTab.groupId);
   });
@@ -816,6 +822,8 @@ function needsMirror(h: Handoff, tab: SessionTab | undefined): boolean {
 /** 도착한 핸드오프를 세션에 적용 — 세션 통째면 그 세션(같은 id, 이미 재-attach 중)에 덮어쓰고,
  *  탭 일부면 toSession(없으면 활성)에 붙인다. 대상 컨텍스트가 아직 없으면 다음 reconcile 뒤로 미룬다 */
 function applyHandoff(h: Handoff): void {
+  // 새 창의 배율 상속 — 세션 컨텍스트와 무관하게 먼저 (미뤄진 뒤 다시 와도 같은 값이라 무해)
+  if (h.fontZoom) applyFontZoom(h.fontZoom);
   const sid = handoffTarget(h);
   const ctx = ctxs.get(sid);
   const tab = sessions.list.find((t) => t.id === sid);
