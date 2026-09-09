@@ -153,6 +153,14 @@ function open(inst: TerminalInstance, b: Binding): void {
     //      그 밖의 워크벤치 chord(Ctrl+W·Ctrl+B·Ctrl+S…)는 xterm 이 셸로 보내고 전파를 끊는다
     if (isShellSkippingChord(e)) return false;
     if (e.type !== 'keydown' || !e.ctrlKey || e.altKey || e.metaKey) return true;
+    // Ctrl+Enter: Windows Terminal 규칙대로 LF(\n) — Enter 의 CR 과 구분된다. xterm.js 는 둘 다 \r 이라
+    // 셸 안 프로그램(Claude Code 등)이 Ctrl 을 잃는다. 제어 문자라 tmux 몇 겹이든 설정 없이 통과한다
+    // (확장 키 프로토콜(CSI u)은 tmux 마다 extended-keys 설정이 필요해 채택하지 않았다, 2026-09-10)
+    if (e.code === 'Enter' || e.code === 'NumpadEnter') {
+      term.input('\n');
+      e.preventDefault();
+      return false;
+    }
     // Ctrl+= / Ctrl+- / Ctrl+0 (숫자패드 포함): 터미널 줌 — 편집기 줌과 별개의 값. 전파를 끊어
     // 워크벤치의 편집기 줌 chord 로 흘러가지 않게 한다 (Shift 얹은 앱 전역 줌은 위 skipShell 경로)
     const zoom = !e.shiftKey ? ZOOM_KEYS[e.code] : undefined;
