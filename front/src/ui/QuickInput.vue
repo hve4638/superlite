@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { closeQuickInput, workbench } from '../model/workbench';
 import { quickOpen } from '../model/files';
-import { commandList, isWorkbenchChord, type Command } from '../model/commands';
+import { commandList, isWorkbenchChord, recentCommands, runCommandFromPalette, type Command } from '../model/commands';
 import { editors, openFile } from '../model/editors';
 import { openFolder, openFolderDialog, openRootDefault } from '../model/host';
 import { inApp } from '../model/window';
@@ -199,7 +199,13 @@ const items = computed<Item[]>(() => {
       if (hl === null) continue;
       out.push({ kind: 'command', cmd, highlights: hl });
     }
-    return out;
+    // 팔레트에서 최근 실행한 명령이 최근 순으로 위, 나머지는 등록 순 (VS Code "recently used" — 구분 라벨은
+    // 없다, 사용자 결정 2026-09-09). 입력이 있어도 같은 규칙 — 매칭된 것 안에서만 앞으로 온다
+    const rank = (it: CmdItem) => {
+      const i = recentCommands.ids.indexOf(it.cmd.id);
+      return i < 0 ? Infinity : i;
+    };
+    return out.sort((a, b) => rank(a) - rank(b));
   }
   return fileResults.value;
 });
@@ -318,7 +324,7 @@ function accept(it: Item): void {
   // WHY: VS Code 는 quick open 으로 연 에디터를 preview 로 열지 않는다
   //      (workbench.editor.enablePreviewFromQuickOpen 기본값 false)
   if (it.kind === 'file') void openFile(it.path);
-  else it.cmd.run();
+  else runCommandFromPalette(it.cmd);
 }
 
 function moveFocus(step: 1 | -1): void {

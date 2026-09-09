@@ -29,6 +29,9 @@ export fn setTerminalSerializer(fn) {
 export fn createTerminal(at?) -> TerminalInstance {
   role: 백엔드 PTY 세션 생성 + 목록 등록 + 탭 열기(at: 그룹·index, 기본 활성 그룹 끝). 실제 종료 코드가 있는 죽음(code ≠ null)은 스스로 목록에서 빠지도록 onExit 배선 — spawn 실패(code null)만 탭을 유지해 에러 출력을 읽게 한다
 }
+export fn toggleTerminal() {
+  role: Ctrl+` — 터미널 탭이 없으면 createTerminal, 있으면 창 전체에서 가장 최근에 활성이었던 터미널 탭으로 (editors.focusTerminalTab + pendingFocus — 이미 활성이면 포커스만, 편집기 ↔ 터미널 왕복). 이력은 팩토리 안의 focusOrder — 활성 탭이 터미널이 될 때마다 앞으로 (연 시각이 아니라 마지막 활성 시각, VS Code 와 같다), 인스턴스 제거(removeAt) 때 뺀다. 그룹 무관 — 사용자 결정 2026-09-09 (후보 2, ticket terminal-toggle-keys)
+}
 export fn attachTerminal(info, opts?) -> TerminalInstance? {
   role: 사이드바 목록의 tmux 세션에 붙는다 — 이 창에 이미 열려 있으면 그 탭을 앞으로(newTab 이면 새 탭으로 하나 더 — 다중 attach). createTerminal(attach: id). 팩토리 메서드의 opts.at 은 탭을 열 그룹·index — 워크스페이스 상태 복원(workspaceState)이 ctx.terminals 를 직접 불러 저장된 자리에 붙인다 (shim 은 newTab 만 받는다)
 }

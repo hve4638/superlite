@@ -322,7 +322,7 @@ function onNewTabDragStart(e: DragEvent, kind: 'new-folder' | 'new-terminal'): v
         />
         <span
           class="codicon codicon-terminal global-action"
-          title="New Terminal (Ctrl+`)"
+          title="New Terminal (Ctrl+Shift+`)"
           draggable="true"
           @click="createTerminal()"
           @dragstart="onNewTabDragStart($event, 'new-terminal')"

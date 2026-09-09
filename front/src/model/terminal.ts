@@ -1,4 +1,4 @@
-import { reactive } from '@vue/reactivity';
+import { reactive, watch } from '@vue/reactivity';
 import type { TerminalInfo, TerminalMode, TerminalSession, ThinBackend } from '../backend/types';
 import { ctx, viewOf } from './ctx';
 import { errText, notify } from './notifications';
@@ -66,8 +66,30 @@ export function createTerminals(backend: ThinBackend, editorsM: ReturnType<typeo
 
   editorsM.setTerminalCloser((term) => disposeTerminal(term));
 
+  // 터미널 탭 포커스 이력 (최근이 앞, 인스턴스 id) — 활성 탭이 터미널이 될 때마다 앞으로 옮긴다.
+  // "최근" 은 연 시각이 아니라 마지막으로 활성이 된 시각 (VS Code 와 같다, ticket terminal-toggle-keys)
+  const focusOrder: number[] = [];
+  watch(() => editorsM.activeTab(), (t) => {
+    if (t?.kind !== 'terminal') return;
+    const i = focusOrder.indexOf(t.term);
+    if (i >= 0) focusOrder.splice(i, 1);
+    focusOrder.unshift(t.term);
+  });
+
   function createTerminal(at?: TerminalTabAt): TerminalInstance {
     return register(backend.createTerminal(80, 24), 'bash', undefined, at);
+  }
+
+  /** Ctrl+` — 터미널 탭이 없으면 생성, 있으면 창 전체에서 가장 최근에 활성이었던 터미널 탭으로 (사용자 결정
+   *  2026-09-09: 후보 2, 그룹 무관). 이미 그 탭이 활성이면 포커스만 준다 (편집기 ↔ 터미널 왕복) */
+  function toggleTerminal(): void {
+    if (terminals.list.length === 0) {
+      createTerminal();
+      return;
+    }
+    const id = focusOrder[0] ?? terminals.list[terminals.list.length - 1].id;
+    editorsM.focusTerminalTab(id);
+    editorsM.editors.pendingFocus = true;
   }
 
   /** 사이드바 목록의 세션에 붙는다 — 이 창에 이미 열려 있으면 그 탭을 앞으로 (같은 세션을 두 탭으로
@@ -140,6 +162,8 @@ export function createTerminals(backend: ThinBackend, editorsM: ReturnType<typeo
   function removeAt(idx: number): void {
     const [inst] = terminals.list.splice(idx, 1);
     inputBlocked.delete(inst.session.id);
+    const fi = focusOrder.indexOf(inst.id);
+    if (fi >= 0) focusOrder.splice(fi, 1);
     editorsM.closeTerminalTabs(inst.id);
   }
 
@@ -249,7 +273,7 @@ export function createTerminals(backend: ThinBackend, editorsM: ReturnType<typeo
   });
 
   return {
-    terminals, state, createTerminal, attachTerminal, disposeTerminal, snapshot, releaseTerminal, adoptTerminals,
+    terminals, state, createTerminal, toggleTerminal, attachTerminal, disposeTerminal, snapshot, releaseTerminal, adoptTerminals,
     refreshTerminals, requestKill, confirmKill, cancelKill, killListed, renameListed,
   };
 }
@@ -306,6 +330,7 @@ window.addEventListener('storage', (e) => {
 export const terminals = viewOf(() => ctx().terminals.terminals);
 export const terminalState = viewOf(() => ctx().terminals.state);
 export const createTerminal = (at?: TerminalTabAt): TerminalInstance => ctx().terminals.createTerminal(at);
+export const toggleTerminal = (): void => ctx().terminals.toggleTerminal();
 export const disposeTerminal = (id: number): void => ctx().terminals.disposeTerminal(id);
 export const attachTerminal = (info: TerminalInfo, opts?: { newTab?: boolean }): TerminalInstance | null =>
   ctx().terminals.attachTerminal(info, opts);

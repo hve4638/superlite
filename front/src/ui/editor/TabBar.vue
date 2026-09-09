@@ -61,8 +61,10 @@ function dirHint(path: string): string {
 
 // 터미널 탭 (ticket term-list-reconnect): 닫기·휠 클릭·Ctrl+W 는 detach — tmux 세션은 백그라운드에
 // 남는다. Ctrl+닫기·Ctrl+휠 클릭은 강제 종료 (확인 후 tmux 세션 kill). Ctrl 을 누른 동안 닫기 버튼이
-// 붉게 바뀌어 둘을 구분한다. tmux 세션이 없는 탭(plain)은 Ctrl 이어도 그냥 닫는다
+// 붉게 바뀌어 둘을 구분한다 — 단 마우스가 탭바 위에 있을 때만 (사용자 지시 2026-09-10: 터미널에서
+// Ctrl+C 류를 칠 때마다 × 가 붉어지는 것이 거슬린다). tmux 세션이 없는 탭(plain)은 Ctrl 이어도 그냥 닫는다
 const ctrlHeld = ref(false);
+const hovering = ref(false);
 const onKey = (e: KeyboardEvent) => { ctrlHeld.value = e.ctrlKey; };
 const onBlur = () => { ctrlHeld.value = false; };
 onMounted(() => {
@@ -189,7 +191,7 @@ function onForeignDrop(e: DragEvent) {
 </script>
 
 <template>
-  <div class="tabbar">
+  <div class="tabbar" @mouseenter="hovering = true" @mouseleave="hovering = false">
     <!-- 탭 목록만 스크롤 영역 — 그룹 액션은 밖에 고정. 빈 영역 드롭(끝에 삽입)은 스트립 루트가 받는다 -->
     <StripScroll ref="strip" class="tabs" @dragover="onTabsDragOver" @dragleave="onTabsDragLeave($event)" @drop="onTabsDrop">
       <div
@@ -223,7 +225,7 @@ function onForeignDrop(e: DragEvent) {
         <span class="tab-actions">
           <span
             class="tab-action"
-            :class="{ kill: ctrlHeld && killable(tab) }"
+            :class="{ kill: ctrlHeld && hovering && killable(tab) }"
             :title="killable(tab) ? (ctrlHeld ? 'Kill Terminal' : 'Close (Ctrl+click: Kill Terminal)') : undefined"
             @click.stop="onClose(tab, $event)"
           >

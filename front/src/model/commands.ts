@@ -1,7 +1,8 @@
+import { reactive } from '@vue/reactivity';
 import { openQuickInput, showViewlet, toggleSideBar } from './workbench';
 import { openFolderDialog } from './host';
 import { closeTab, editors, reopenClosedEditor, saveActive, splitGroup, toggleGroupLock, activeGroup, activeTab, openHex, toggleHtmlPreview, isHtml, toggleWordWrap, stepEditorZoom, setEditorZoom } from './editors';
-import { createTerminal } from './terminal';
+import { createTerminal, toggleTerminal } from './terminal';
 import { refreshScm } from './scm';
 import { activeSessionEmpty, cycleSession, sessionsEnabled } from './sessions';
 import { inApp, reloadWindow, zoomWindow } from './window';
@@ -21,6 +22,30 @@ export interface Command {
 
 export const commandList: Command[] = [];
 const byChord = new Map<string, Command>();
+
+// 팔레트에서 실행한 명령 id 의 최근 목록 (최근이 앞, 상한 20) — 빈 입력의 팔레트가 이 순서로 위에 올린다
+// (VS Code "recently used", ticket palette-recent-commands). 세션·창 무관이라 localStorage.
+// 키바인딩으로 실행한 것은 세지 않는다 — Ctrl+S 류가 팔레트 상단을 차지하지 않게 (VS Code 도 팔레트 실행만 센다)
+const RECENT_KEY = 'superlite.recentCommands';
+const RECENT_MAX = 20;
+function loadRecent(): string[] {
+  try {
+    const p = JSON.parse(localStorage.getItem(RECENT_KEY) ?? '') as unknown;
+    return Array.isArray(p) ? p.filter((x): x is string => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+export const recentCommands = reactive({ ids: loadRecent() });
+
+/** 팔레트에서 고른 명령 실행 — 최근 목록의 앞에 기록한다 */
+export function runCommandFromPalette(cmd: Command): void {
+  const ids = recentCommands.ids.filter((id) => id !== cmd.id);
+  ids.unshift(cmd.id);
+  recentCommands.ids = ids.slice(0, RECENT_MAX);
+  localStorage.setItem(RECENT_KEY, JSON.stringify(recentCommands.ids));
+  cmd.run();
+}
 
 /** "ctrl+shift+p" 형태의 정규화된 chord → 등록 */
 function register(cmd: Command, ...chords: string[]): void {
@@ -113,18 +138,30 @@ export function setupCommands(): void {
     run: toggleSideBar,
   }, 'ctrl+b');
 
-  // 터미널은 편집기 탭 — 하단 패널이 없으므로 Ctrl+J(패널 토글)·Ctrl+Shift+`(구 새 터미널)는 없다.
-  // Ctrl+` 는 누를 때마다 새 터미널 탭 (사용자 지시 2026-09-07)
+  // 터미널은 편집기 탭 — 하단 패널이 없으므로 Ctrl+J(패널 토글)는 없다. 키는 VS Code 와 같다:
+  // Ctrl+` 는 터미널 탭이 없을 때만 만들고 있으면 최근 터미널 탭으로, Ctrl+Shift+` 는 항상 새 터미널
+  // (ticket terminal-toggle-keys 2026-09-09 — 종전엔 Ctrl+` 가 매번 새 터미널이었다)
   register({
-    id: 'workbench.action.terminal.new',
-    title: 'Terminal: Create New Terminal',
+    id: 'workbench.action.terminal.toggleTerminal',
+    title: 'View: Toggle Terminal',
     keybinding: 'Ctrl+`',
     skipShell: true,
     run: () => {
       if (activeSessionEmpty()) return; // 빈 세션 — 백엔드 연결이 없어 터미널이 없다
-      createTerminal();
+      toggleTerminal();
     },
   }, 'ctrl+`');
+
+  register({
+    id: 'workbench.action.terminal.new',
+    title: 'Terminal: Create New Terminal',
+    keybinding: 'Ctrl+Shift+`',
+    skipShell: true,
+    run: () => {
+      if (activeSessionEmpty()) return;
+      createTerminal();
+    },
+  }, 'ctrl+shift+`');
 
   register({
     id: 'workbench.action.files.save',
