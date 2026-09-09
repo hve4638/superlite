@@ -123,8 +123,12 @@ cargo build --release --target x86_64-unknown-linux-musl -p superlite-daemon
 (cd app && cargo tauri build --target x86_64-pc-windows-gnu $tauri_cfg)
 
 mkdir -p "$out"
-# 번들러 산출물 이름은 <productName>_<ver>_x64-setup.exe — 채널별 productName 으로 고른다
-src=$(ls target/x86_64-pc-windows-gnu/release/bundle/nsis/"$product"_*_x64-setup.exe)
+# 번들러 산출물 이름은 <productName>_<ver>_x64-setup.exe — 채널별 productName 과 현재 버전으로
+# 경로를 고정한다. 버전 자리를 글로브로 두면 nsis/ 에 남은 옛 버전 파일까지 잡혀 cp 가 깨진다
+# (0.1.0→0.2.0 인상 때 실제로 발생). 버전은 단일 출처인 루트 Cargo.toml [workspace.package] 에서 읽는다
+ver=$(sed -n '/^\[workspace.package\]/,/^\[/{s/^version = "\([^"]*\)".*/\1/p}' Cargo.toml)
+src=target/x86_64-pc-windows-gnu/release/bundle/nsis/"$product"_"$ver"_x64-setup.exe
+[ -f "$src" ] || { echo "산출물 없음: $src" >&2; exit 2; }
 dst=$out/$(basename "$src")
 cp "$src" "$dst"
 echo "→ $dst — $(target/x86_64-unknown-linux-musl/release/superlite-daemon --version | sed 's/^superlite-daemon //')"
