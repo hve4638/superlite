@@ -66,7 +66,8 @@ if $clean; then
 fi
 
 # 채널 overlay — 없는 채널 이름은 여기서 막는다. productName 은 overlay 에서 읽어 설치 파일 이름에 쓴다
-product=Superlite
+# stable 은 기본 설정의 productName — 채널과 같은 sed 로 읽어 출처를 하나로
+product=$(sed -n 's/.*"productName": *"\([^"]*\)".*/\1/p' app/tauri.conf.json)
 tauri_cfg="--config tauri.bundle.conf.json"
 if [ -n "$channel" ]; then
     overlay=app/tauri.$channel.conf.json

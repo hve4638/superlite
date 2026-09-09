@@ -9,8 +9,7 @@
 //! 창은 여럿일 수 있다 (2026-09-03 개정, ticket app-tab-detach-window) — VS Code 창을 여러 개
 //! 띄우는 것처럼 사용자가 탭을 창 밖으로 끌어 새 창을 만든다. 프로세스는 하나, 창마다 웹뷰
 //! 페이지가 별도라 front 상태·WS 연결은 창 단위로 독립이다. native 는 세션마다 소속 창
-//! label 을 함께 들고 list_sessions·sessions-changed 를 창 단위로 보낸다. 어느 탭이
-//! 활성인지는 여전히 모른다 (전환은 front 소유).
+//! label 을 함께 들고 list_sessions·sessions-changed 를 창 단위로 보낸다.
 //!
 //! 창은 각각 독립된 하나다 — 세션이 0 개가 된 창은 닫힌다 (close_if_empty — 탭 닫기·분리·
 //! 병합 모두 같은 규칙, 2026-09-05 개정). 창의 X 는 그 창의 세션만 정리한다. 마지막 창이
@@ -62,7 +61,10 @@ const MAIN_WINDOW: &str = "main";
 struct Groups {
     /// 서브 창 label → 소속 메인 창 label
     subs: HashMap<String, String>,
-    /// 미러 세션 id → 원본(메인 창) 세션 id. 서브 창 소속 세션은 전부 미러다
+    /// 미러 세션 id → 원본(메인 창) 세션 id. 서브 창 소속 세션은 전부 미러다.
+    /// 불변식: 레지스트리(sessions Vec)에서 미러는 항상 원본보다 뒤에 온다 — 미러는 끝에 push 되고
+    /// (detach_tabs·ensure_mirror), 원본이 옮겨지거나 사라질 때 drop_mirrors_of 가 먼저 미러를 지운다.
+    /// open_workspace 의 중복 열기 판정과 primary_root 의 "그 root 의 첫 세션" 이 이 순서에 기댄다
     mirrors: HashMap<String, String>,
     /// 메인 창 label → 활성 세션 id (메인·서브 공유). front 가 set_active_session 으로 알린다
     active: HashMap<String, String>,
@@ -101,10 +103,16 @@ fn drop_mirrors_of(
     list.retain(|(id, _)| !gone.contains(id));
 }
 
+/// 락 순서 규약 (교착 방지 — 중첩해 잡을 때는 반드시 이 순서로):
+///   sessions → windows → groups → persisted
+/// handoffs·focused 는 다른 락을 모두 놓은 뒤 단독으로만 잡는다 (다른 락 안에서 잡지 않는다).
+/// 중첩이 실제로 성립하는 곳: sessions→windows→groups 는 세션 등록·제거 블록(drop_mirrors_of 호출부),
+/// sessions→windows→persisted 는 setup 의 초기 등록(remember_recent) 한 곳. `if` 조건식 안의 임시
+/// guard 는 조건 평가가 끝나면 풀리므로 겹치지 않지만, 바인딩으로 바꾸면 이 규약을 따라야 한다
 struct AppState {
     ws_url: String,
     sessions: Sessions,
-    /// session id → 소속 창 label. sessions 와 함께 갱신한다 — 락 순서는 sessions → windows
+    /// session id → 소속 창 label. sessions 와 함께 갱신한다
     /// (relay 는 sessions 만 본다 — 창은 relay 의 관심사가 아니다)
     windows: Mutex<HashMap<String, String>>,
     /// 창 label → 도착 대기 핸드오프. 창이 아직 로드 전이거나 이벤트를 놓쳐도 부팅 후
@@ -112,10 +120,10 @@ struct AppState {
     handoffs: Mutex<HashMap<String, Vec<serde_json::Value>>>,
     /// 마지막으로 포커스된 창 — 두 번째 실행(argv)·OS 드롭처럼 창을 지목하지 않는 열기의 대상
     focused: Mutex<String>,
-    /// 메인·서브 창 묶음. 락 순서는 sessions → windows → groups
+    /// 메인·서브 창 묶음
     groups: Mutex<Groups>,
     next_window: AtomicUsize,
-    /// 최근 폴더·고정 그룹 — state.json 의 메모리 사본. 락 순서는 sessions → windows → persisted
+    /// 최근 폴더·고정 그룹 — state.json 의 메모리 사본
     persisted: Mutex<Persisted>,
     /// state.json 경로 — app_data_dir 를 못 만들면 None (저장 없이 동작)
     state_file: Option<PathBuf>,
@@ -342,6 +350,8 @@ fn emit_sessions(app: &tauri::AppHandle, state: &AppState) {
 /// 남은 정리(핸드오프·focused)는 Destroyed → drop_window. 호출자가 sessions·windows 락을 잡지
 /// 않은 상태여야 한다
 fn close_if_empty(app: &tauri::AppHandle, state: &AppState, label: &str) {
+    // 아래 두 `if` 는 groups → windows 순으로 보이지만 조건식 임시 guard 라 겹치지 않는다.
+    // 바인딩으로 바꾸려면 규약(windows → groups)대로 잡아야 한다 — set_active_session 과 교착한다
     // 서브 창의 수명은 front 가 정한다 (미러 0 개여도 닫지 않는다)
     if state.groups.lock().unwrap().subs.contains_key(label) {
         return;
@@ -513,7 +523,9 @@ fn build_window(
 
 /// 창 아이콘 (Windows 전용, ticket app-icon-quality). tao 는 창 아이콘을 ICO 첫 항목(16px)의 RGBA 로
 /// CreateIcon 해 WM_SETICON 의 ICON_SMALL 에만 넣는다 — ICON_BIG 이 비어 작업 표시줄·Alt+Tab 이 16px 를
-/// 늘려 그렸다(흐림·저해상도). 여기서 exe 리소스 ICO(tauri-build 가 id 32512 로 박는다)를 창 DPI 의
+/// 늘려 그렸다(흐림·저해상도). 여기서 exe 리소스 ICO(tauri-build 가 id 32512 로 박는다 — bundle.icon 이 있는
+/// overlay(tauri.bundle·tauri.dev, 즉 build.sh)로 빌드할 때만. 기본 tauri.conf.json 은 icon [] 이라 맨 cargo
+/// 빌드에는 리소스가 없어 아래 로드가 실패 로그를 남긴다)를 창 DPI 의
 /// 작은·큰 크기로 LoadImageW 해 둘 다 덮어쓴다. 리소스에서 온 HICON 은 셸이 원본 모듈·리소스를 알아
 /// 필요한 크기를 다시 꺼내므로(GetIconInfoEx) 배율이 달라도 ICO 의 맞는 항목이 쓰인다.
 /// WHY: 창 생성 시점 DPI 로 한 번만 — 모니터 간 DPI 이동(WM_DPICHANGED)은 다루지 않는다 (ponytail).
@@ -600,6 +612,7 @@ fn open_workspace(app: &tauri::AppHandle, state: &AppState, label: &str, root: P
     {
         let mut list = state.sessions.lock().unwrap();
         let mut windows = state.windows.lock().unwrap();
+        // 첫 일치 = 원본 세션 — 같은 root 의 미러는 항상 뒤에 온다 (Groups.mirrors 불변식)
         if let Some((id, _)) = list.iter().find(|(_, r)| r.as_ref() == Some(&root)) {
             let id = id.clone();
             let owner = windows.get(&id).cloned().unwrap_or_else(|| label.to_string());
@@ -872,6 +885,7 @@ async fn detach_session(
         Err(e) => {
             // 롤백 — 생기지 않은 창 소속으로 세션이 사라지지 않게 되돌린다
             {
+                // _list 는 락 순서(sessions → windows) 유지용 — 미사용처럼 보여도 지우지 않는다
                 let _list = state.sessions.lock().unwrap();
                 state.windows.lock().unwrap().insert(id.clone(), from.clone());
             }
@@ -1004,9 +1018,7 @@ async fn detach_tabs(
         #[cfg(windows)]
         Ok(w) => vdesk::follow(&app, window.label(), &w),
         #[cfg(not(windows))]
-        Ok(_) => {
-            let _ = &window;
-        }
+        Ok(_) => {}
     }
     emit_sessions(&app, &state);
     Ok(())
@@ -1150,6 +1162,8 @@ fn primary_root(state: &AppState, id: &str, label: &str) -> Result<PathBuf, Stri
         .and_then(|(_, r)| r.clone())
         .filter(|r| !is_empty_root(Some(r)))
         .ok_or_else(|| "빈 세션".to_string())?;
+    // "첫 세션" 은 레지스트리(탭) 순서 기준 — 미러가 원본보다 뒤에 온다는 Groups.mirrors 불변식 덕에
+    // 원본이 먼저 잡힌다. 탭 순서 이동(move_session)은 창 안에서만 일어나 미러(서브 창)와 섞이지 않는다
     match list.iter().find(|(_, r)| r.as_ref() == Some(&root)) {
         Some((sid, _)) if sid == id => Ok(root),
         _ => Err("이 root 의 첫 세션이 아니다".into()),
@@ -1199,7 +1213,10 @@ async fn get_workspace_state(
     let Some(w) = p.workspaces.iter_mut().find(|w| w.root == root) else {
         return Ok(None);
     };
-    let subs: Vec<serde_json::Value> = if live_subs { Vec::new() } else { std::mem::take(&mut w.subs) }
+    let taken = if live_subs { Vec::new() } else { std::mem::take(&mut w.subs) };
+    // 비운 것이 있을 때만 파일에 반영한다
+    let changed = !taken.is_empty();
+    let subs: Vec<serde_json::Value> = taken
         .into_iter()
         .map(|s| {
             let mut v = s.state;
@@ -1213,14 +1230,10 @@ async fn get_workspace_state(
         })
         .collect();
     let out = serde_json::json!({ "state": w.state.clone(), "subs": subs });
-    if !subs_was_empty(&out) {
+    if changed {
         save_state(state.state_file.as_deref(), &p);
     }
     Ok(Some(out))
-}
-
-fn subs_was_empty(out: &serde_json::Value) -> bool {
-    out.get("subs").and_then(|s| s.as_array()).is_none_or(|a| a.is_empty())
 }
 
 /// 워크스페이스 상태 저장 — front 가 변경 디바운스·닫기 시점에 통째로 보낸다 (root 는 세션 id 로 안다).
@@ -1659,8 +1672,10 @@ fn open_second_instance(app: &tauri::AppHandle, argv: Vec<String>, cwd: String) 
         None => PathBuf::from(&cwd),
     };
     let state = app.state::<AppState>();
-    // 포커스가 서브 창이면 세션은 소속 메인에 붙는다 — 앞으로 가져오는 창도 메인
-    let label = main_label(&state, &state.focused.lock().unwrap().clone());
+    // 포커스가 서브 창이면 세션은 소속 메인에 붙는다 — 앞으로 가져오는 창도 메인.
+    // focused 는 단독으로 잡고 놓은 뒤에 main_label(groups) — 규약대로 중첩하지 않는다
+    let focused = state.focused.lock().unwrap().clone();
+    let label = main_label(&state, &focused);
     // plain: Windows verbatim 루트는 '/' 와이어 경로·자식 cwd 를 깨뜨린다 (common 참조)
     // 경로 오류는 로그만 — 두 번째 실행의 잘못된 인자가 기존 앱을 죽이면 안 된다
     match root.canonicalize() {
@@ -1880,6 +1895,7 @@ mod tests {
             recents: paths(&["/a"]),
             pinned: vec![PinGroup { alias: Some("g".into()), roots: paths(&["/a", "/b"]) }],
             zoom: 2,
+            ..Default::default()
         };
         save_state(Some(&path), &p);
         let back = load_state(Some(&path));
