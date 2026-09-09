@@ -429,6 +429,12 @@ fn program(root: &Path, session: Option<&str>, attach: Option<&str>) -> Program 
                 // -u: 클라이언트 로케일과 무관하게 UTF-8 터미널로 — ssh 로 뜬 원격 데몬은 LANG 이 없어
                 // tmux 가 한글을 _ 로 그린다 (ticket tmux-server-cwd-utf8). 프론트 xterm 은 항상 UTF-8
                 cmd.arg("-u");
+                // -T sync: 클라이언트 터미널(프론트 xterm.js 6, DECSET 2026 지원)에 동기화 출력 기능을 알린다.
+                // 그러면 tmux 가 화면 갱신마다 ?2026h…?2026l 로 감싸고 xterm 은 그 사이 렌더를 미뤄, 갱신이
+                // 잦은 TUI(claude·codex 로딩 애니메이션)에서 tmux 가 셀을 고치러 다니는 커서가 화면을 휘젓고
+                // 입력줄 커서가 깜빡이는 것이 사라진다. terminfo xterm-256color 에는 Sync 가 없어 자동으론
+                // 켜지지 않는다 (ticket ime-composition-window)
+                cmd.args(["-T", "sync"]);
                 cmd.args(["attach-session", "-t", &id]);
                 cmd.cwd(root);
                 cmd.env("TERM", "xterm-256color");

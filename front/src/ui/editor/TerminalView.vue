@@ -78,6 +78,14 @@ onBeforeUnmount(() => {
   left: 0;
   right: 0;
 }
+/* IME 조합 중 xterm 이 커서 칸 위에 띄우는 조합 텍스트 상자 (ticket ime-composition-window). 기본 배경
+   #000 은 터미널 배경보다 어두워 상자 자체가 비치고, 좌표(cursorX × 셀 폭)가 DOM 행의 글리프 자리와
+   서브픽셀로 어긋나 아래 칸 — claude 같은 TUI 가 그리는 역상 커서 — 이 위·왼쪽 가장자리에 점·선으로 샌다.
+   배경색을 맞추고 box-shadow 로 1px 씩 더 덮는다 (레이아웃·textarea 크기 계산에는 영향 없음) */
+.terminal-view :deep(.xterm .composition-view) {
+  background: v-bind(TERMINAL_BACKGROUND);
+  box-shadow: 0 0 0 1px v-bind(TERMINAL_BACKGROUND);
+}
 /* 스크롤 영역도 같은 배경 — xterm 기본(#000)이 비치지 않게 */
 .terminal-view :deep(.xterm .xterm-viewport) {
   background: v-bind(TERMINAL_BACKGROUND) !important;

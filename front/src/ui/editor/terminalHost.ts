@@ -198,6 +198,26 @@ function open(inst: TerminalInstance, b: Binding): void {
     return true;
   });
   term.open(b.el);
+  // WHY: IME 조합창 위치 (ticket ime-composition-window). xterm 6.0.0 은 숨은 textarea 를 커서 이동 때만
+  //      커서 칸으로 옮기고 조합 중엔 잠근다 — 부분 렌더·리사이즈·포커스 복귀 뒤 첫 조합이면 textarea 가
+  //      옛 자리(초기 CSS 는 창 왼쪽 밖·top 0)라 WebView2 가 IME 창을 창 왼쪽 위에 앉힌다. upstream 수정
+  //      (xtermjs/xterm.js#5759, 7.0 예정)과 같이 조합 시작 직전과 포커스 때 커서 위치로 되민다. capture 라
+  //      xterm 의 compositionstart 리스너(isComposing=true, 그 뒤엔 sync 가 무동작)보다 먼저 돈다.
+  //      xterm 을 7.x 로 올리면 지운다.
+  //      조합 시작은 키 입력과 같이 맨 아래로 스크롤한다 (xterm scrollOnUserInput 은 keydown 에만 적용) — 뷰포트가
+  //      한두 줄 위로 밀린 채면 커서가 뷰포트 밖이라 xterm 이 조합 상자·textarea 위치를 갱신하지 않아, 조합
+  //      글자가 입력줄과 다른 행에 그려진다 (2026-09-10 Windows 실기: tmux 안 claude 에서 한두 줄 위)
+  const core = (term as unknown as { _core: { _syncTextArea?: () => void } })._core;
+  const syncTextArea = (): void => core._syncTextArea?.();
+  term.textarea?.addEventListener(
+    'compositionstart',
+    () => {
+      term.scrollToBottom();
+      syncTextArea();
+    },
+    true,
+  );
+  term.textarea?.addEventListener('focus', syncTextArea, true);
   // 드래그 선택은 Windows Terminal 규칙 (사용자 방향 2026-09-07):
   //  - 마우스 모드가 아닐 때 Shift+클릭은 확장 선택이 아니다 — xterm 의 "직전 앵커부터 일괄 선택"
   //    을 끄는 옵션이 없어, capture 단계에서 Shift 를 뗀 이벤트로 바꿔 넘긴다 (보통 클릭·드래그).
