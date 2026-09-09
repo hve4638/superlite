@@ -1082,6 +1082,15 @@ fn set_active_session(app: tauri::AppHandle, window: tauri::WebviewWindow, id: S
     emit_group(&app, &state, &main, "session-active", id);
 }
 
+/// 묶음의 현재 활성 세션 — 창 새로고침 뒤 front 가 리로드 전 활성 탭을 되찾는 경로 (ticket reload-session-focus).
+/// WHY: 주입값 __SUPERLITE_ACTIVE__ 는 창 생성 시점에 굳어 reload 에도 그대로 재실행되므로 최신값은 여기서 묻는다.
+///      아직 set_active_session 이 온 적 없는 묶음(새 창)은 null — front 는 종전 규칙(마지막 탭)대로 간다
+#[tauri::command]
+fn active_session(state: tauri::State<AppState>, window: tauri::WebviewWindow) -> Option<String> {
+    let groups = state.groups.lock().unwrap();
+    groups.active.get(groups.main_of(window.label())).cloned()
+}
+
 /// 호출 창의 메인 창에 딸린 서브 창 label 들 — 메인 창이 세션을 떠나보내기 전 탭 회수(session-recall)
 /// 대상. 서브 창에서 부르면 형제들
 #[tauri::command]
@@ -1780,6 +1789,7 @@ fn main() {
             detach_tabs,
             ensure_mirror,
             set_active_session,
+            active_session,
             list_subs,
             forward,
             take_handoff,

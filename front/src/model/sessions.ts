@@ -450,8 +450,9 @@ export function replaceAppSession(prevId: string, newRoot: string): void {
 }
 
 /** native 레지스트리 목록으로 로컬 상태를 맞춘다 — 추가는 컨텍스트 생성, 제거는 폐기.
- *  새로 나타난 세션은 활성 탭이 된다 (Ctrl+O·다이얼로그·두 번째 실행 전부 "새 탭 = 활성") */
-function reconcile(list: SessionTab[]): void {
+ *  새로 나타난 세션은 활성 탭이 된다 (Ctrl+O·다이얼로그·두 번째 실행 전부 "새 탭 = 활성").
+ *  activate=false 는 초기 동기화가 native 의 활성 세션으로 끝맺을 때 — 그 규칙을 건너뛴다 */
+function reconcile(list: SessionTab[], activate = true): void {
   for (const t of [...sessions.list]) {
     if (!list.some((n) => n.id === t.id)) removeLocal(t.id);
   }
@@ -471,7 +472,7 @@ function reconcile(list: SessionTab[]): void {
     return { ...n, name: prev?.name ?? n.name, renamed: prev?.renamed };
   });
   // 서브 창은 새 탭을 스스로 활성화하지 않는다 — 메인이 활성화하고 session-active 로 따라온다
-  if (added && !subWindow && !consumeBackground(added)) activateSession(added);
+  if (added && !subWindow && !consumeBackground(added) && activate) activateSession(added);
 }
 
 /** 같은 키의 컨텍스트 교체 (서브 창 미러 생성) — 목록 자리는 그대로, 활성이면 새 컨텍스트로 */
@@ -488,8 +489,14 @@ function replaceLocal(tab: SessionTab): void {
 
 export function initSessions(): void {
   if (env.kind !== 'app' || !tauri) return;
-  void tauri.core.invoke('list_sessions').then((r) => {
-    reconcile(r as SessionTab[]);
+  void Promise.all([tauri.core.invoke('list_sessions'), tauri.core.invoke('active_session')]).then(([r, active]) => {
+    // 창 새로고침이면 native 가 리로드 전 활성 세션을 안다 — 주입값(bootActiveSession·부팅 목록)은 창 생성
+    // 시점에 굳어 reload 에도 그대로라, 그 뒤 나타난 탭의 "새 탭 = 활성" 이 마지막 탭을 활성으로 만들었다.
+    // 초기 동기화는 native 의 활성으로 끝맺는다 (ticket reload-session-focus). 아직 없으면(새 창) 종전대로
+    const list = r as SessionTab[];
+    const known = typeof active === 'string' && list.some((t) => t.id === active);
+    reconcile(list, !known);
+    if (known) activateSession(active, false);
     // 분리로 생긴 새 창 — 부팅 전에 적재된 핸드오프를 가져간다
     takeHandoffs();
   });

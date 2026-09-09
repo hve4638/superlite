@@ -100,7 +100,7 @@ export fn replaceAppSession(prevId, newRoot) {
   role: 앱 '현재 탭 대체' 뒷정리 — open_folder_path invoke 뒤 이전 활성 탭을 close_session (native replace 는 빈 세션만 제자리 교체). 같은 워크스페이스 재열기(포커스 이동만)면 root 문자열 대조로 건너뛴다
 }
 export fn initSessions() {
-  role: 앱 전용 — list_sessions 초기 동기화(뒤이어 take_handoff — 분리로 생긴 새 창의 부팅 전 핸드오프) + sessions-changed·session-focus·handoff-available·session-move-request·tabs-move-request·session-active·session-recall·session-recalled 구독, 서브 창이면 initSubWindow(닫기 요청 훅·탭 0 자동 종료) — 구독은 전부 이 창 label 을 target 으로 등록한다 (Tauri 의 target 없는 listen 은 Any 라 native 가 emit_to 로 다른 창에 보낸 이벤트까지 받는다 — 창마다 다른 sessions-changed 가 모든 창에 도달해 서로의 목록으로 reconcile 이 뒤집히는 사고의 원인이었다). reconcile 은 추가분에 컨텍스트를 만들고(새 탭 = 활성 — openInBackground 예약분은 예외) 제거분을 폐기하며 순서는 native 를 따른다. session-focus 는 이미 열린 워크스페이스 재열기 시 native 의 포커스 이동 지시다
+  role: 앱 전용 — list_sessions + active_session 초기 동기화(native 가 리로드 전 활성 세션을 알면 그것으로 끝맺는다 — 주입값은 창 생성 시점에 굳어 창 새로고침 뒤 마지막 탭이 활성이 되던 문제, ticket reload-session-focus. 뒤이어 take_handoff — 분리로 생긴 새 창의 부팅 전 핸드오프) + sessions-changed·session-focus·handoff-available·session-move-request·tabs-move-request·session-active·session-recall·session-recalled 구독, 서브 창이면 initSubWindow(닫기 요청 훅·탭 0 자동 종료) — 구독은 전부 이 창 label 을 target 으로 등록한다 (Tauri 의 target 없는 listen 은 Any 라 native 가 emit_to 로 다른 창에 보낸 이벤트까지 받는다 — 창마다 다른 sessions-changed 가 모든 창에 도달해 서로의 목록으로 reconcile 이 뒤집히는 사고의 원인이었다). reconcile 은 추가분에 컨텍스트를 만들고(새 탭 = 활성 — openInBackground 예약분은 예외) 제거분을 폐기하며 순서는 native 를 따른다. session-focus 는 이미 열린 워크스페이스 재열기 시 native 의 포커스 이동 지시다
 }
 export fn multiWindow() -> Bool {
   role: 창 간 탭 이동이 가능한 환경인가 — 앱이고 창 label 이 있다 (UI 가 창 밖 드롭·이동 메뉴를 켠다)
