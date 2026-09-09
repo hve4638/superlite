@@ -105,7 +105,7 @@ fn drop_mirrors_of(
 
 /// 락 순서 규약 (교착 방지 — 중첩해 잡을 때는 반드시 이 순서로):
 ///   sessions → windows → groups → persisted
-/// handoffs·focused 는 다른 락을 모두 놓은 뒤 단독으로만 잡는다 (다른 락 안에서 잡지 않는다).
+/// handoffs 는 다른 락을 모두 놓은 뒤 단독으로만 잡는다 (다른 락 안에서 잡지 않는다).
 /// 중첩이 실제로 성립하는 곳: sessions→windows→groups 는 세션 등록·제거 블록(drop_mirrors_of 호출부),
 /// sessions→windows→persisted 는 setup 의 초기 등록(remember_recent) 한 곳. `if` 조건식 안의 임시
 /// guard 는 조건 평가가 끝나면 풀리므로 겹치지 않지만, 바인딩으로 바꾸면 이 규약을 따라야 한다
@@ -118,8 +118,6 @@ struct AppState {
     /// 창 label → 도착 대기 핸드오프. 창이 아직 로드 전이거나 이벤트를 놓쳐도 부팅 후
     /// take_handoff 로 가져갈 수 있게 큐로 둔다
     handoffs: Mutex<HashMap<String, Vec<serde_json::Value>>>,
-    /// 마지막으로 포커스된 창 — 두 번째 실행(argv)·OS 드롭처럼 창을 지목하지 않는 열기의 대상
-    focused: Mutex<String>,
     /// 메인·서브 창 묶음
     groups: Mutex<Groups>,
     next_window: AtomicUsize,
@@ -347,7 +345,7 @@ fn emit_sessions(app: &tauri::AppHandle, state: &AppState) {
 /// 세션 0 개가 된 창은 닫는다 — 탭 닫기·분리·병합 모두 이 규칙을 탄다 (2026-09-05 개정,
 /// ticket convenience-features: 종전엔 빈 세션으로 남겼다). 마지막 창이면 Tauri 기본대로 앱이
 /// 종료된다 — state.json 은 변경마다 즉시 저장돼 있어 종료 훅이 필요 없다.
-/// 남은 정리(핸드오프·focused)는 Destroyed → drop_window. 호출자가 sessions·windows 락을 잡지
+/// 남은 정리(핸드오프)는 Destroyed → drop_window. 호출자가 sessions·windows 락을 잡지
 /// 않은 상태여야 한다
 fn close_if_empty(app: &tauri::AppHandle, state: &AppState, label: &str) {
     // 아래 두 `if` 는 groups → windows 순으로 보이지만 조건식 임시 guard 라 겹치지 않는다.
@@ -386,14 +384,6 @@ fn drop_window(app: &tauri::AppHandle, state: &AppState, label: &str) {
         }
     }
     state.handoffs.lock().unwrap().remove(label);
-    // 죽은 창이 focused 로 남으면 두 번째 실행이 어느 창에도 안 보이는 세션을 만든다 — 살아 있는
-    // 창으로 되돌린다 (OS 포커스가 다른 앱으로 가면 Focused(true) 가 안 와 스스로 갱신되지 않는다)
-    let mut focused = state.focused.lock().unwrap();
-    if *focused == label {
-        if let Some(other) = app.webview_windows().keys().find(|l| l.as_str() != label) {
-            *focused = other.clone();
-        }
-    }
 }
 
 fn rand_hex() -> String {
@@ -421,8 +411,8 @@ fn owns(windows: &HashMap<String, String>, id: &str, label: &str) -> bool {
     windows.get(id).map(String::as_str) == Some(label)
 }
 
-/// 창의 메인 창 label — "이 창에 세션 추가" 를 뜻하는 진입로(폴더 열기·+·두 번째 실행·OS 드롭·
-/// 그룹 열기)가 서브 창에서 불리면 소속 메인에 추가된다. 락을 잡지 않은 상태에서 부른다
+/// 창의 메인 창 label — "이 창에 세션 추가" 를 뜻하는 진입로(폴더 열기·+·OS 드롭·그룹 열기)가
+/// 서브 창에서 불리면 소속 메인에 추가된다. 락을 잡지 않은 상태에서 부른다
 fn main_label(state: &AppState, label: &str) -> String {
     state.groups.lock().unwrap().main_of(label).to_string()
 }
@@ -592,17 +582,41 @@ fn is_empty_root(root: Option<&std::path::Path>) -> bool {
     }
 }
 
+/// 같은 워크스페이스가 이미 열려 있으면 (세션 id, 소속 창 label). 첫 일치 = 원본 세션 — 같은
+/// root 의 미러는 항상 뒤에 온다 (Groups.mirrors 불변식). 호출자가 sessions·windows 락을 잡고 부른다
+fn find_open(
+    list: &[(String, Option<PathBuf>)],
+    windows: &HashMap<String, String>,
+    root: &Path,
+) -> Option<(String, String)> {
+    let (id, _) = list.iter().find(|(_, r)| r.as_deref() == Some(root))?;
+    // windows 는 sessions 와 함께 갱신되므로 없을 수 없다 — 방어
+    let owner = windows.get(id).cloned().unwrap_or_else(|| MAIN_WINDOW.to_string());
+    Some((id.clone(), owner))
+}
+
+/// 이미 열린 세션의 창을 앞으로 가져오고 session-focus 로 그 탭에 포커스를 옮긴다. 락 없이 부른다
+fn focus_session(app: &tauri::AppHandle, owner: &str, id: &str) {
+    if let Some(w) = app.get_webview_window(owner) {
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+    let _ = app.emit_to(owner, "session-focus", id);
+}
+
 /// 새 세션 등록 단일 진입점 — 새 session id 를 발급해 레지스트리에 붙이고(소속 = label)
 /// 방송한다. front 는 sessions-changed 를 받아 새 id 로 WS 연결을 열고 그 탭을 활성으로
-/// 만든다. dialog·퀵인풋·OS 드롭·두 번째 실행이 공유한다.
+/// 만든다. dialog·퀵인풋·OS 드롭이 공유한다 (두 번째 실행은 새 창이라 open_second_instance 가
+/// 따로 등록한다).
 ///
 /// replace 는 빈 세션 탭 id (시작 페이지에서 열기) — 그 엔트리가 아직 root 없는
 /// 채로 있으면 push 대신 그 자리를 교체해 탭 위치를 보존한다. id 는 새로 발급 —
 /// front reconcile 이 제거+추가로 자연히 따라온다.
 ///
 /// 같은 워크스페이스가 이미 열려 있으면(어느 창이든) 새 탭 대신 그 창을 앞으로 가져오고
-/// session-focus 로 그 탭에 포커스만 옮긴다 (VS Code — 다른 창에 열린 폴더는 그 창으로).
-/// 워크스페이스 정체성은 canonicalize 된 로컬 경로 또는 ssh://host/path 문자열이다.
+/// session-focus 로 그 탭에 포커스만 옮긴다 (VS Code — 다른 창에 열린 폴더는 그 창으로,
+/// find_open·focus_session). 워크스페이스 정체성은 canonicalize 된 로컬 경로 또는
+/// ssh://host/path 문자열이다.
 /// 에디터·터미널 탭 분리(detach_tabs)는 같은 root 의 두 번째 세션을 의도적으로 만들므로
 /// 이 함수를 타지 않는다.
 fn open_workspace(app: &tauri::AppHandle, state: &AppState, label: &str, root: PathBuf, replace: Option<&str>) {
@@ -612,17 +626,10 @@ fn open_workspace(app: &tauri::AppHandle, state: &AppState, label: &str, root: P
     {
         let mut list = state.sessions.lock().unwrap();
         let mut windows = state.windows.lock().unwrap();
-        // 첫 일치 = 원본 세션 — 같은 root 의 미러는 항상 뒤에 온다 (Groups.mirrors 불변식)
-        if let Some((id, _)) = list.iter().find(|(_, r)| r.as_ref() == Some(&root)) {
-            let id = id.clone();
-            let owner = windows.get(&id).cloned().unwrap_or_else(|| label.to_string());
+        if let Some((id, owner)) = find_open(&list, &windows, &root) {
             drop(windows);
             drop(list);
-            if let Some(w) = app.get_webview_window(&owner) {
-                let _ = w.show();
-                let _ = w.set_focus();
-            }
-            let _ = app.emit_to(owner.as_str(), "session-focus", id);
+            focus_session(app, &owner, &id);
             return;
         }
         // 교체 대상은 여전히 빈 세션(루트 없음 또는 경로 없는 원격 ssh://host)이어야 하고
@@ -1662,30 +1669,67 @@ fn attach_os_drop(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
     });
 }
 
-/// 두 번째 실행 수신 (single-instance) — 넘어온 argv·cwd 로 root 를 정해 마지막으로 포커스된
-/// 창에 새 세션 탭을 추가하고 그 창을 앞으로 가져온다.
-/// "폴더 인자 실행 → 기존 앱에 새 세션" UX — app-installer 의 "Superlite로 열기"가 이 경로를 탄다.
+/// 두 번째 실행의 인자 → 열 root. argv[1] 이 있으면 그 경로(상대 경로는 두 번째 프로세스의 cwd
+/// 기준 — join 은 절대 경로 인자를 그대로 쓴다), 없으면 None = 시작 페이지(빈 세션).
+/// 종전(~2026-09-08)에는 인자 없는 실행이 cwd 를 열었다 — 직접 재실행은 첫 기동과 같은 시작
+/// 페이지여야 하므로 버렸다 (ticket app-second-launch)
+fn second_launch_root(argv: &[String], cwd: &str) -> Option<PathBuf> {
+    argv.get(1).map(|arg| PathBuf::from(cwd).join(arg))
+}
+
+/// 두 번째 실행 수신 (single-instance) — 새 메인 창을 만들어 argv 의 폴더를 열고, 인자가 없으면
+/// 시작 페이지(빈 세션)를 연다 (2026-09-09 사용자 결정, ticket app-second-launch — 종전에는
+/// 마지막으로 포커스된 창에 세션 탭을 더했다). 기존 창은 건드리지 않는다. app-installer 의
+/// "Superlite로 열기"·직접 재실행이 이 경로를 탄다. 같은 폴더가 이미 열려 있으면 새 창 대신
+/// 그 창을 앞으로 가져온다 (open_workspace 와 같은 규칙). 새 창은 저장된 세션을 복원하지 않고
+/// 인자 폴더만 연다. 위치·크기는 기본 (build_window).
+/// WHY: 창 생성은 이 콜백 밖 스레드에서 — Windows 의 single-instance 콜백은 메인 스레드의
+///      WndProc(WM_COPYDATA) 안에서 불린다. 창 생성은 async 커맨드에서만 검증됐고 메인 스레드의
+///      동기 컨텍스트 안 build() 는 교착이 실측된 경로라(build_window 주석) 같은 방식으로 뺀다
 fn open_second_instance(app: &tauri::AppHandle, argv: Vec<String>, cwd: String) {
-    // 상대 경로 인자는 두 번째 프로세스의 cwd 기준 — join 은 절대 경로 인자를 그대로 쓴다
-    let root = match argv.get(1) {
-        Some(arg) => PathBuf::from(&cwd).join(arg),
-        None => PathBuf::from(&cwd),
-    };
-    let state = app.state::<AppState>();
-    // 포커스가 서브 창이면 세션은 소속 메인에 붙는다 — 앞으로 가져오는 창도 메인.
-    // focused 는 단독으로 잡고 놓은 뒤에 main_label(groups) — 규약대로 중첩하지 않는다
-    let focused = state.focused.lock().unwrap().clone();
-    let label = main_label(&state, &focused);
     // plain: Windows verbatim 루트는 '/' 와이어 경로·자식 cwd 를 깨뜨린다 (common 참조)
     // 경로 오류는 로그만 — 두 번째 실행의 잘못된 인자가 기존 앱을 죽이면 안 된다
-    match root.canonicalize() {
-        Ok(root) => open_workspace(app, &state, &label, superlite_common::plain(root), None),
-        Err(e) => eprintln!("superlite: 두 번째 실행 경로 확인 실패: {e}"),
-    }
-    if let Some(w) = app.get_webview_window(&label) {
-        let _ = w.show();
-        let _ = w.set_focus();
-    }
+    let root = match second_launch_root(&argv, &cwd) {
+        Some(p) => match p.canonicalize() {
+            Ok(p) => Some(superlite_common::plain(p)),
+            Err(e) => {
+                eprintln!("superlite: 두 번째 실행 경로 확인 실패: {e}");
+                return;
+            }
+        },
+        None => None,
+    };
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let state = app.state::<AppState>();
+        if let Some(root) = &root {
+            remember_recent(&state, root);
+        }
+        let label = {
+            let mut list = state.sessions.lock().unwrap();
+            let mut windows = state.windows.lock().unwrap();
+            if let Some((id, owner)) = root.as_deref().and_then(|r| find_open(&list, &windows, r)) {
+                drop(windows);
+                drop(list);
+                focus_session(&app, &owner, &id);
+                return;
+            }
+            let label = new_window_label(&state);
+            push_session(&mut list, &mut windows, &label, root);
+            label
+        };
+        match build_window(&app, &state, &label, None, None) {
+            Ok(w) => {
+                let _ = w.set_focus();
+            }
+            Err(e) => {
+                eprintln!("superlite: 두 번째 실행 창 생성 실패: {e}");
+                // 롤백 — 생기지 않은 창 소속으로 세션이 남지 않게 (Destroyed 는 오지 않는다)
+                drop_window(&app, &state, &label);
+            }
+        }
+        emit_sessions(&app, &state);
+    });
 }
 
 fn main() {
@@ -1755,18 +1799,13 @@ fn main() {
             local_write,
             local_mkdir
         ])
-        // 창 닫힘(X·close_if_empty) = 그 창의 세션만 정리 (메인 창이면 서브 창도 함께 닫는다). 포커스 추적은 두 번째 실행의 대상 창
-        .on_window_event(|window, event| match event {
-            tauri::WindowEvent::Destroyed => {
+        // 창 닫힘(X·close_if_empty) = 그 창의 세션만 정리 (메인 창이면 서브 창도 함께 닫는다)
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Destroyed = event {
                 let app = window.app_handle();
                 let state = app.state::<AppState>();
                 drop_window(app, &state, window.label());
             }
-            tauri::WindowEvent::Focused(true) => {
-                let state = window.app_handle().state::<AppState>();
-                *state.focused.lock().unwrap() = window.label().to_string();
-            }
-            _ => {}
         })
         .setup(move |app| {
             // 시작은 항상 빈 세션(시작 페이지)이다 — 마지막 워크스페이스 복원은 하지
@@ -1797,7 +1836,6 @@ fn main() {
                 sessions,
                 windows: Mutex::default(),
                 handoffs: Mutex::default(),
-                focused: Mutex::new(MAIN_WINDOW.to_string()),
                 groups: Mutex::default(),
                 next_window: AtomicUsize::new(0),
                 persisted: Mutex::new(persisted),
@@ -1857,6 +1895,20 @@ mod tests {
 
     fn paths(v: &[&str]) -> Vec<PathBuf> {
         v.iter().map(PathBuf::from).collect()
+    }
+
+    #[test]
+    fn second_launch_root_arg_or_start_page() {
+        let cwd = if cfg!(windows) { "C:\\work" } else { "/work" };
+        // 인자 없음 = 시작 페이지 (cwd 를 열지 않는다)
+        assert_eq!(second_launch_root(&["superlite".into()], cwd), None);
+        // 상대 경로는 cwd 기준, 절대 경로는 그대로
+        assert_eq!(
+            second_launch_root(&["superlite".into(), "proj".into()], cwd),
+            Some(PathBuf::from(cwd).join("proj"))
+        );
+        let abs = if cfg!(windows) { "D:\\x" } else { "/x" };
+        assert_eq!(second_launch_root(&["superlite".into(), abs.into()], cwd), Some(PathBuf::from(abs)));
     }
 
     #[test]

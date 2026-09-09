@@ -11,8 +11,9 @@
 ; 2. 폴더 컨텍스트 메뉴 "Superlite로 열기": HKCU\Software\Classes 아래 Directory\shell
 ;    (폴더 아이콘 우클릭) 과 Directory\Background\shell (폴더 안 빈 곳 우클릭). 사용자별
 ;    설치라 HKCU 로 충분하고 관리자 권한이 필요 없다. %V 는 두 위치 모두에서 대상 폴더
-;    경로다. 앱은 argv[1] 을 루트로 열고, 이미 떠 있으면 single-instance 로 그 창에 세션을
-;    더한다 (app/src/main.rs open_second_instance). Windows 11 에서는 "추가 옵션 표시"
+;    경로다. 앱은 argv[1] 을 루트로 열고, 이미 떠 있으면 single-instance 로 새 메인 창에
+;    연다 (app/src/main.rs open_second_instance — 2026-09-09 개정, 종전엔 기존 창에 세션 탭을
+;    더했다). Windows 11 에서는 "추가 옵션 표시"
 ;    아래에 나온다 (클래식 메뉴 — 새 메뉴 등록은 패키징·서명이 필요해 범위 밖).
 
 !define SL_DAEMON "$INSTDIR\daemon\windows-x86_64.exe"
