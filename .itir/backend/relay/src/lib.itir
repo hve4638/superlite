@@ -1,5 +1,7 @@
-role: 중계 코어 — 준비된 TcpListener 위에 /ws·/ssh/hosts·/ssh/state·/daemon/clean·/tmux-conf(GET/PUT/OPTIONS — 클라이언트 tmux.conf, 사이드바 터미널 뷰가 편집)·/version·/nvim(nvim.rs — 임베드 Neovim 중계, 데몬 와이어 밖) 라우터를 얹어 serve. attach 직후 클라이언트 tmux.conf 를 데몬에 tmuxConf 로 밀어 넣는다 (와이어 v17 — 원격별 관리 없이 이 백엔드 머신의 파일 하나가 원본). 데몬 spawn·attach, 상주 제어 연결 포함. dist 는 옵션 (bin 은 정적 서빙, Tauri 앱은 자산 번들이라 불필요). root 는 세션 해석기(SessionRoots)가 정한다 — 고정 root(bin) 또는 세션 레지스트리 조회(Tauri 앱, decision/workspace-session-tabs.md). root 문자열이 ssh:// 스킴이면 원격 — 해석(Target)은 접속 직전 한 곳에서만 한다
+role: 중계 코어 — 준비된 TcpListener 위에 /ws·/ssh/hosts·/ssh/state·/daemon/clean·/tmux-conf(GET/PUT/OPTIONS — 클라이언트 tmux.conf, 사이드바 터미널 뷰가 편집)·/version·/github/oauth·/git/credentials(gitcred.rs)·/nvim(nvim.rs — 임베드 Neovim 중계, 데몬 와이어 밖) 라우터를 얹어 serve. HTTP 핸들러는 각자 authed()+cors() 전문을 앞세운다(미들웨어 없음 — WS 둘은 예외라 라우터를 갈라야 해서) — 새 엔드포인트가 전문을 빠뜨리면 곧 무인증이다. attach 직후 클라이언트 tmux.conf 를 데몬에 tmuxConf 로 밀어 넣는다 (와이어 v17 — 원격별 관리 없이 이 백엔드 머신의 파일 하나가 원본). 데몬 spawn·attach, 상주 제어 연결 포함. dist 는 옵션 (bin 은 정적 서빙, Tauri 앱은 자산 번들이라 불필요). root 는 세션 해석기(SessionRoots)가 정한다 — 고정 root(bin) 또는 세션 레지스트리 조회(Tauri 앱, decision/workspace-session-tabs.md). root 문자열이 ssh:// 스킴이면 원격 — 해석(Target)은 접속 직전 한 곳에서만 한다
 
+// Registry: SessionRoots::Registry 의 본체 — (세션 id, root?) 등록 순서 목록(Arc<Mutex<Vec>>). 앱(native)이 만들어 넘기고 relay 는 읽기만
+export type Registry
 export class SessionRoots {
   role: 세션 id → root 해석기 (rust enum). Fixed 는 모든 세션이 기동 인자의 root 하나(bin·종전 동작), Registry 는 native 쪽이 등록한 세션만 허용 — root 결정권이 native 에 남아 front 가 임의 경로를 지목할 통로가 없다. Registry 는 순서 보존 리스트 — 등록 순서가 곧 세션 탭 순서라 순서의 단일 출처를 레지스트리에 둔다 (세션 수가 한 자리라 선형 탐색으로 충분). 엔트리의 root 는 Option — 루트 없는 빈 세션(시작 페이지)도 레지스트리에 산다 (ticket app-empty-session). 원격 root(ssh://host/path)도 불투명 문자열로 나른다
   fn resolve(session?) -> root? {
@@ -10,7 +12,7 @@ class Target {
   role: 접속 대상 — Local(데몬 IPC 소켓) 또는 Remote{host, path}(ssh exec 채널). root 문자열의 ssh:// 스킴 여부로 to_target 이 가른다
 }
 fn serve() {
-  role: 서버 기동 단일 진입점 — control_loop spawn + /ws·/ssh/hosts 라우터(+옵션 dist ServeDir) axum serve. bin 과 Tauri 앱이 공유한다. root 대신 SessionRoots 를 받는다. App 상태에 ssh::Spares(호스트별 예비 파이프)를 함께 둔다 — relay 들이 공유
+  role: 서버 기동 단일 진입점 — control_loop spawn + 모듈 role 의 라우트 전부(+옵션 dist ServeDir — 이것만 authed 밖, 번들에 비밀 없음) axum serve. bin 과 Tauri 앱이 공유한다. root 대신 SessionRoots 를 받는다. App 상태에 ssh::Spares(호스트별 예비 파이프)를 함께 둔다 — relay 들이 공유
 }
 fn authed() {
   role: /ws 와 /ssh/* 공유 인증 — SUPERLITE_TOKEN 설정 시 ?tkn= 일치(일치가 곧 인증 — Origin 검증 생략, tauri:// 오리진 수용), 미설정 시 Origin=Host 검증(브라우저 CSRF), Origin 부재(비브라우저)는 통과
@@ -28,7 +30,7 @@ fn clean_handler() {
   role: POST /daemon/clean?host= — 문제 데몬 정리 (superlite-daemon --clean). host 없으면 clean_local, 있으면 ssh::clean_remote. 프론트가 '데몬 기동 실패' 뒤 사용자 승인을 받은 경우에만 부른다 — 자동 호출 없음 (사용자 결정 2026-09-04). 응답 본문은 --clean 의 stdout, 실패는 502 + 사유. 인증은 authed, CORS 는 /ssh/* 와 같다
 }
 fn version_handler() {
-  role: GET /version — 이 빌드의 version·channel(빈 문자열 = stable)·commit·builtAt·wire(WIRE_VERSION)·daemonBin(로컬 데몬 배치 경로, 부재면 오류 문자열) JSON. 프론트 About·시작 페이지가 쓴다. 데몬 와이어 밖 relay 자체 응답이라 WIRE_VERSION 불변, 웹·앱 동일 경로 (release-versioning). 인증·CORS 는 /ssh/* 와 같다
+  role: GET /version — 이 빌드의 version·channel(빈 문자열 = stable)·commit·builtAt·wire(WIRE_VERSION)·daemonBin(로컬 데몬 배치 경로, 부재면 오류 문자열)·tmuxBin(tmux 배치 경로, 프론트 미소비) JSON. 프론트 About·시작 페이지가 쓴다. 데몬 와이어 밖 relay 자체 응답이라 WIRE_VERSION 불변, 웹·앱 동일 경로 (release-versioning). 인증·CORS 는 /ssh/* 와 같다
 }
 fn github_oauth_handler() {
   role: POST /github/oauth?path=<device/code|oauth/access_token>&<폼 인자…> — GitHub device flow 두 끝점(https://github.com/login/<path>)으로 폼 인자를 전달하고 JSON 응답을 되돌리는 중계 (ticket scm-subrepo-credential). github.com 로그인 끝점은 CORS 가 없어 프론트가 직접 못 부른다. 인자를 query 로 받는 이유: 본문 없는 POST 는 단순 요청이라 preflight 가 없다. path 는 둘만 허용. 토큰은 프론트에만 간다 — relay 는 저장하지 않는다. 데몬 와이어 밖, WIRE_VERSION 불변. 인증·CORS 는 /ssh/* 와 같다

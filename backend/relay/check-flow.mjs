@@ -1,6 +1,6 @@
 // flow control 스모크 — ack 없이는 데몬이 고수위(100k 자)에서 출력 읽기를 멈추고,
 // ack 를 보내면 재개돼 끝까지 흘러나온다.
-//   cargo build --workspace 후: node backend/relay/check-flow.mjs
+//   cargo build -p superlite-backend -p superlite-daemon 후: node backend/relay/check-flow.mjs
 import assert from 'node:assert';
 import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
@@ -47,7 +47,7 @@ try {
       ws.onerror = () => res(false);
     });
     if (ok) break;
-    assert.ok(i < 50, '백엔드 기동 실패 — cargo build --workspace 먼저');
+    assert.ok(i < 50, '백엔드 기동 실패 — cargo build -p superlite-backend -p superlite-daemon 먼저');
     await sleep(100);
   }
   ws.onmessage = (ev) => {

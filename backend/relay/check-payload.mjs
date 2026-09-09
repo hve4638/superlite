@@ -1,7 +1,7 @@
 // 바이너리 payload 프레임(와이어 v6) 스모크 — 대형 readFile 이 WS 바이너리 프레임
 // (4B BE 헤더 길이 + 헤더 JSON + 본문)으로 오고, 텍스트는 deflate-raw 해제·이미지는
 // 원본 바이트가 그대로 복원되는지, 소형은 종전 JSON 텍스트 프레임인지 검증한다.
-//   cargo build --workspace 후: node backend/relay/check-payload.mjs
+//   cargo build -p superlite-backend -p superlite-daemon 후: node backend/relay/check-payload.mjs
 import assert from 'node:assert';
 import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -34,7 +34,7 @@ try {
       });
       break;
     } catch {
-      assert.ok(i < 50, '백엔드 기동 실패 (5초) — cargo build --workspace 먼저?');
+      assert.ok(i < 50, '백엔드 기동 실패 (5초) — cargo build -p superlite-backend -p superlite-daemon 먼저?');
       await sleep(100);
     }
   }

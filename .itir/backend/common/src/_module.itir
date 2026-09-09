@@ -1,6 +1,6 @@
 role: 데몬·백엔드 공유 규약 — IPC 주소(unix socket / Windows named pipe)와 락 파일 경로, 빌드 정보(버전·커밋·빌드 시각·채널 — build.rs 가 굽는다, 세 바이너리가 같은 값). 릴리스 채널(release-channel): SUPERLITE_CHANNEL 로 구운 CHANNEL 과 이름 줄기 SLUG(superlite / superlite-<channel>)가 이름이 고정된 자원(IPC 폴더·파이프·캐시·relay 의 설정 폴더·원격 헬퍼 폴더)을 채널별로 갈라 dev·stable 설치본이 한 PC 에 공존한다
 
-// 16: 내장 tmux (term-list-reconnect) — createTerminal attach·listTerminals·killTerminal·renameTerminal·tmuxConf·termTmux, attach 응답 terminal. 15 는 폐기된 터미널 데몬 분리(건너뜀)
+// 와이어 버전 이력(무엇이 어느 번호에서 바뀌었는지, 15 건너뜀 포함)의 단일 출처는 lib.rs WIRE_VERSION 의 doc 주석이다 — 여기에 사본을 두지 않는다
 export val WIRE_VERSION
 export val VERSION
 export val COMMIT

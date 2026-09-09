@@ -1,5 +1,5 @@
 // 파일 조작 스모크 — createFile(배타·중첩)/createDir/rename(대상 보호)/delete(파일·디렉토리).
-//   cargo build --workspace 후: node backend/relay/check-fileops.mjs
+//   cargo build -p superlite-backend -p superlite-daemon 후: node backend/relay/check-fileops.mjs
 import assert from 'node:assert';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -31,7 +31,7 @@ try {
       });
       break;
     } catch {
-      assert.ok(i < 50, '백엔드 기동 실패 (5초) — cargo build --workspace 먼저?');
+      assert.ok(i < 50, '백엔드 기동 실패 (5초) — cargo build -p superlite-backend -p superlite-daemon 먼저?');
       await sleep(100);
     }
   }

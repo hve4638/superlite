@@ -86,7 +86,7 @@ fn conf_dir() -> PathBuf {
     superlite_common::cache_dir().unwrap_or_else(std::env::temp_dir).join("tmux")
 }
 
-pub(crate) fn user_conf_path() -> PathBuf {
+fn user_conf_path() -> PathBuf {
     conf_dir().join("user.conf")
 }
 

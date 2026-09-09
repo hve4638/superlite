@@ -2,7 +2,7 @@
 // relay 가 달라 PUT 앞에 브라우저가 OPTIONS preflight 를 보낸다. relay 가 이를 2xx + allow-methods 로
 // 받아야 저장이 된다 (종전 405 → "Failed to fetch"). 브라우저 없이 preflight 요청을 그대로 보내 헤더를
 // 확인하고, PUT → GET 왕복으로 파일 저장까지 본다. 앱과 같이 토큰 모드로 띄운다.
-//   cargo build --workspace 후: node backend/relay/check-tmux-conf.mjs
+//   cargo build -p superlite-backend -p superlite-daemon 후: node backend/relay/check-tmux-conf.mjs
 import assert from 'node:assert';
 import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
@@ -39,7 +39,7 @@ try {
   for (let i = 0; ; i++) {
     const ok = await fetch(`http://127.0.0.1:18788/version?tkn=${TOKEN}`).then((r) => r.ok, () => false);
     if (ok) break;
-    assert.ok(i < 50, '백엔드 기동 실패 — cargo build --workspace 먼저');
+    assert.ok(i < 50, '백엔드 기동 실패 — cargo build -p superlite-backend -p superlite-daemon 먼저');
     await sleep(100);
   }
 

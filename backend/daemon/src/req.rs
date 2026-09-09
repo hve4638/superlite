@@ -1,5 +1,6 @@
 //! RPC 요청 처리 — fs 읽기/쓰기(etag 낙관적 충돌 검사)·rg 검색·git 상태/스테이징/커밋/로그/브랜치.
-//! 모든 경로는 safe_join 관문을 지난다.
+//! 경로는 safe_join 관문(루트 상대)을 지난다 — 단 파일 단건(readFile/stat/writeFile)과 readDir 절대 경로는
+//! file_path 를 거쳐 절대 경로도 허용한다 (워크스페이스 밖 파일 열기, VS Code 파리티).
 
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, LazyLock};
@@ -168,7 +169,7 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
         })),
         "readDir" => {
             let rel = p["path"].as_str().unwrap_or("");
-            // 절대 경로(와이어 v18) — 폴더 탭이 워크스페이스 밖을 탐색한다. 허용 근거는 browseDir 과
+            // 절대 경로(와이어 v16) — 폴더 탭이 워크스페이스 밖을 탐색한다. 허용 근거는 browseDir 과
             // 같다 (인증 경계는 relay). 항목 path 도 절대('/' 구분)이고 repo 표식은 달지 않는다 —
             // git RPC 는 루트 상대라 밖의 저장소를 다룰 수 없다
             let abs = Path::new(rel).is_absolute();
@@ -192,7 +193,7 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
                 let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
                 let kind = if is_dir { "directory" } else { "file" };
                 let mut item = json!({"name": name, "path": path, "kind": kind});
-                // mtime(ms)·size(파일만) — 폴더 탭 자세히 보기 열 (와이어 v18). metadata 는 이미 읽었다
+                // mtime(ms)·size(파일만) — 폴더 탭 자세히 보기 열 (와이어 v16). metadata 는 이미 읽었다
                 if let Some(m) = &meta {
                     if let Ok(t) = m.modified() {
                         if let Ok(d) = t.duration_since(std::time::UNIX_EPOCH) {
@@ -722,9 +723,12 @@ fn list_files(root: &Path) -> Result<Vec<String>, String> {
 
 /// rg 전용 — exit code 계약이 0=매치, 1=무매치(정상), 2+=에러다
 async fn run_rg(root: &Path, args: &[&str]) -> Result<String, String> {
+    // WHY: output() 은 stdin 을 null 로 만들지 않는다 — relay 의 stdin(파이프·소켓)을 물려받으면
+    //      rg 가 stdin 을 검색 대상으로 삼아 결과가 빈다. git_sync 와 같은 규칙.
     let out = tokio::process::Command::new("rg")
         .args(args)
         .current_dir(root)
+        .stdin(std::process::Stdio::null())
         .output()
         .await
         .map_err(err)?;
@@ -766,7 +770,7 @@ pub(crate) async fn git_sync(method: &str, p: &Value, root: &Path, session: Opti
 
 async fn run(root: &Path, bin: &str, args: &[&str]) -> Result<String, String> {
     let mut cmd = tokio::process::Command::new(bin);
-    cmd.args(args).current_dir(root);
+    cmd.args(args).current_dir(root).stdin(std::process::Stdio::null()); // run_rg 와 같은 이유
     run_cmd(cmd).await
 }
 

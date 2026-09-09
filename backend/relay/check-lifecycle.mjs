@@ -1,5 +1,5 @@
 // 수명 스모크 — 데몬 자동 기동(tmux 방식)과 유휴 자진 종료를 검증한다.
-//   cargo build --workspace 후: node backend/relay/check-lifecycle.mjs
+//   cargo build -p superlite-backend -p superlite-daemon 후: node backend/relay/check-lifecycle.mjs
 // 개발 중 인스턴스와 부딪히지 않게 소켓·포트를 전용으로 띄운다.
 import assert from 'node:assert';
 import { spawn } from 'node:child_process';
@@ -33,7 +33,7 @@ try {
       });
       break;
     } catch {
-      assert.ok(i < 50, '백엔드 기동 실패 (5초) — cargo build --workspace 먼저?');
+      assert.ok(i < 50, '백엔드 기동 실패 (5초) — cargo build -p superlite-backend -p superlite-daemon 먼저?');
       await sleep(100);
     }
   }

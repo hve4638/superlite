@@ -1,5 +1,5 @@
 // /ws 연결 토큰 스모크 — SUPERLITE_TOKEN 설정 시 ?tkn= 불일치는 403, 일치는 정상 동작.
-//   cargo build --workspace 후: node backend/relay/check-auth.mjs
+//   cargo build -p superlite-backend -p superlite-daemon 후: node backend/relay/check-auth.mjs
 import assert from 'node:assert';
 import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -45,7 +45,7 @@ try {
   for (let i = 0; ; i++) {
     good = await tryConnect(`ws://127.0.0.1:18794/ws?tkn=${TOKEN}`);
     if (good.outcome === 'open') break;
-    assert.ok(i < 50, '백엔드 기동 실패 — cargo build --workspace 먼저');
+    assert.ok(i < 50, '백엔드 기동 실패 — cargo build -p superlite-backend -p superlite-daemon 먼저');
     await sleep(100);
   }
 

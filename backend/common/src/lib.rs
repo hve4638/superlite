@@ -107,6 +107,8 @@ fn ipc_path() -> PathBuf {
     //      (가짜 데몬에 파일·터미널 전부 노출)이 가능하다. 조용히 넘어가지 않고 죽는다.
     let mode = std::fs::metadata(&dir).map(|m| m.permissions().mode()).unwrap_or(0);
     assert!(mode & 0o077 == 0, "IPC 디렉터리 권한 이상 (0700 이어야 한다): {}", dir.display());
+    // 파일명 줄기 "daemon" 은 daemon clean.rs(clean_old_versions)가 옛 버전 락 파일을 고르는
+    // 접두이기도 하다 — 바꾸면 그쪽도 같이.
     dir.join(format!("daemon-{WIRE_VERSION}.sock"))
 }
 
@@ -161,7 +163,8 @@ pub fn cache_dir() -> Option<PathBuf> {
 }
 
 /// 데몬 로그 파일 `$HOME/.cache/<SLUG>/daemon.log` (append) — 데몬을 띄우는 쪽(relay
-/// spawn_daemon, 원격 헬퍼 spawn_self_daemon)이 stderr 로 물린다. 실패면 None (호출측이 null 로)
+/// spawn_daemon 의 Windows 경로, 원격 헬퍼 spawn_self_daemon)이 stderr 로 물린다. unix 의 relay 는
+/// stderr 를 상속시킨다. 실패면 None (호출측이 null 로)
 pub fn daemon_log_file() -> Option<std::fs::File> {
     let dir = cache_dir()?;
     std::fs::create_dir_all(&dir).ok()?;

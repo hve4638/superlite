@@ -3,7 +3,8 @@
 //!
 //! 실행: superlite-backend [워크스페이스루트]  (기본 cwd)   superlite-backend --version
 //!   SUPERLITE_HTTP=127.0.0.1:8795  SUPERLITE_DIST=front/dist
-//!   SUPERLITE_TOKEN=<토큰>  — 설정 시 /ws 는 ?tkn= 일치 필수 (loopback 밖 노출 전제조건)
+//!   SUPERLITE_TOKEN=<토큰>  — 설정 시 /ws 는 ?tkn= 일치 필수. loopback 밖 노출은 토큰 설정이
+//!   운영 규약이다 — 코드는 빈 값만 거부하고 미설정(무인증)은 막지 않는다
 
 use std::path::PathBuf;
 

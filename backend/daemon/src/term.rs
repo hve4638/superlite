@@ -270,9 +270,8 @@ pub(crate) fn sink_send(sink: &Sink, msg: String, evictable: bool) {
 
 // WHY: portable-pty 의 kill 은 SIGHUP 후 최대 200ms 를 재우며 대기한다 — read 루프/워커를
 //      막지 않게 스레드로 보내고, wait 까지 해서 좀비를 남기지 않는다.
-// tmux 클라이언트는 SIGHUP 대신 master(pty) 를 닫아 EOF 로 물러나게 한다 — SIGHUP 은 클라이언트를
-// 급사시켜 tmux 의 그 pane(셸)까지 죽이는데(실측 2026-09-07), master 닫힘은 tmux 가 clean detach 로
-// 처리해 세션·셸이 산다. plain 은 종전대로 SIGHUP 으로 셸을 끝낸다.
+// tmux 클라이언트는 아래 WHY 대로 detach-client 로 물러나게 한다(세션·셸이 산다). plain 은 종전대로
+// SIGHUP 으로 셸을 끝낸다.
 pub(crate) fn kill_term(mut t: Term) {
     t.flow.kill(); // 배압 대기 중인 리더를 깨워야 스레드가 회수된다
     std::thread::spawn(move || {
@@ -617,6 +616,11 @@ mod tests {
         }
         let (terms_a, sink_a): (Terms, Sink) = (Terms::default(), detached());
         let (terms_b, sink_b): (Terms, Sink) = (Terms::default(), detached());
+        // WHY: plain PTY 로 고정한다 — tmux 가 있는 머신에서는 실제 tmux 세션이 공유 서버(-L <SLUG>,
+        //      SUPERLITE_CHANNEL 없는 cargo test 는 stable 서버)에 만들어지고 kill_term 은 detach 라
+        //      세션이 남는다. 재는 것은 adopt 의 라우팅이지 tmux 가 아니다. mode() 는 OnceLock 이라
+        //      첫 호출 전에 둬야 하고, 이 프로세스의 다른 테스트는 tmux 를 타지 않는다.
+        std::env::set_var("SUPERLITE_TMUX", "0");
         std::env::set_var("SHELL", "/bin/sh");
         spawn_term(1, 80, 24, Path::new("/"), None, None, terms_a.clone(), sink_a.clone()).expect("pty");
         // A 에 이미 있는 id 로는 못 붙인다 / 없는 출처는 실패

@@ -229,15 +229,9 @@ pub struct HostList {
     pub items: std::collections::BTreeMap<String, Vec<Item>>,
 }
 
+/// 채널별 분리 (release-channel 결정) — dev 는 superlite-dev/remote.json. 폴더 규칙은 config_dir 하나
 fn state_path() -> Option<PathBuf> {
-    #[cfg(windows)]
-    let base = std::env::var_os("APPDATA").map(PathBuf::from);
-    #[cfg(not(windows))]
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| home_dir().map(|h| h.join(".config")));
-    // 채널별 분리 (release-channel 결정) — dev 는 superlite-dev/remote.json
-    Some(base?.join(superlite_common::SLUG).join("remote.json"))
+    superlite_common::config_dir().map(|d| d.join("remote.json"))
 }
 
 fn load_state() -> RemoteState {
@@ -677,13 +671,13 @@ impl Held {
         let (stop, mut stop_rx) = tokio::sync::oneshot::channel();
         let (back, stdin) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
-            let mut ping = tokio::time::interval(std::time::Duration::from_secs(30));
+            let mut ping = tokio::time::interval(crate::PING_INTERVAL);
             ping.tick().await;
             loop {
                 tokio::select! {
                     _ = &mut stop_rx => break,
                     _ = ping.tick() => {
-                        if si.write_all(b"{\"method\":\"ping\"}\n").await.is_err() {
+                        if si.write_all(format!("{}\n", crate::PING_LINE).as_bytes()).await.is_err() {
                             break;
                         }
                     }

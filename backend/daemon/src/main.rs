@@ -1,10 +1,10 @@
 //! superlite-daemon — 워크스페이스·터미널을 소유하는 단일 상주 프로세스 (v0, 로컬).
 //!
 //! 백엔드하고만 로컬 IPC(unix socket / Windows named pipe)로 통신한다 — 네트워크에 노출되지 않는다
-//! (_docs/decision/process-topology.md). 프레이밍은 개행 구분 JSON 한 줄:
+//! (ws docs/decision/process-topology.md). 프레이밍은 개행 구분 JSON 한 줄:
 //! {"id","method","params"} 요청 → {"id","result"|"error"} 응답, 터미널 출력은
 //! {"event":"termData","term","data"} 푸시. 연결마다 첫 요청은 attach(root) 여야 하고
-//! 이후 요청은 그 root 를 쓴다. 와이어 계약 확정은 보류 중 (_docs/decisions.md).
+//! 이후 요청은 그 root 를 쓴다. 와이어 계약의 이력·버전은 superlite_common::WIRE_VERSION.
 //!
 //! 수명(tmux 방식): 백엔드가 접속 실패 시 이 바이너리를 spawn 한다. 연결 0 인 상태가
 //! grace(기본 3초) 지속되면 소켓을 지우고 스스로 종료한다.
@@ -593,10 +593,6 @@ impl Drop for ConnCleanup {
     }
 }
 
-/// 바이너리 payload 프레임 (와이어 v6) — IPC: 0x00 매직 + 4B BE payload 길이 + payload.
-/// payload 는 relay 가 WS 바이너리 프레임으로 그대로 나르는 단위: 4B BE 헤더 길이 +
-/// 헤더 JSON(id·result 메타·payload 명세) + 본문 바이트. JSON 줄은 '{' 로 시작하므로
-/// 0x00 첫 바이트로 무모호하게 구분된다.
 /// attach 뒤에만 허용되는 요청의 root — attach 전이면 응답 있는 요청(id 비-null)에만 에러를
 /// 돌리고 None (알림은 조용히 버린다)
 fn session_root(cleanup: &ConnCleanup, tx: &UnboundedSender<String>, id: &serde_json::Value) -> Option<PathBuf> {
@@ -611,6 +607,10 @@ fn session_root(cleanup: &ConnCleanup, tx: &UnboundedSender<String>, id: &serde_
     }
 }
 
+/// 바이너리 payload 프레임 (와이어 v6) — IPC: 0x00 매직 + 4B BE payload 길이 + payload.
+/// payload 는 relay 가 WS 바이너리 프레임으로 그대로 나르는 단위: 4B BE 헤더 길이 +
+/// 헤더 JSON(id·result 메타·payload 명세) + 본문 바이트. JSON 줄은 '{' 로 시작하므로
+/// 0x00 첫 바이트로 무모호하게 구분된다.
 fn payload_frame(header: &serde_json::Value, body: &[u8]) -> Vec<u8> {
     let h = header.to_string().into_bytes();
     let payload_len = 4 + h.len() + body.len();
@@ -629,7 +629,7 @@ async fn handle_conn(
 ) {
     let (read_half, mut write_half) = tokio::io::split(stream);
     // WHY: 응답·터미널 이벤트가 여러 태스크/스레드에서 나오므로 단일 writer 태스크로 직렬화.
-    //      바이너리 payload(와이어 v6)는 별도 채널 — 기존 String 채널의 26개 송신처를
+    //      바이너리 payload(와이어 v6)는 별도 채널 — 기존 String 채널의 송신처를
     //      건드리지 않는다. 응답은 id 로 대응되므로 두 채널 간 순서 보장은 계약이 아니다
     //      (handle_req 가 이미 태스크 병렬이라 종전에도 응답 순서는 비결정적).
     let (tx, mut rx) = unbounded_channel::<String>();
@@ -673,9 +673,8 @@ async fn handle_conn(
         let method = req["method"].as_str().unwrap_or("").to_string();
         match method.as_str() {
             "ping" => {} // 생존 신호 — read timeout 리셋이 목적의 전부, 응답 없음
-            // 요청자(셸 심)의 프론트 요청 (와이어 v9) — attach 없이 허용. 대상 세션은
-            // params.session 으로 지목 (PTY 환경변수 SUPERLITE_SESSION). 응답은 프론트의
-            // requestReply 가 올 때 front::reply 가 이 연결로 돌려준다
+            // 요청자(셸 심)의 프론트 요청 (와이어 v9) — attach 없이 허용. 응답은 프론트의
+            // requestReply 가 올 때 front::reply 가 이 연결로 돌려준다.
             // 대상은 params.tty(지금 그 터미널을 보는 세션, 와이어 v18) 우선, 없으면 params.session.
             // 해석은 tmux 조회(subprocess)를 낄 수 있어 블로킹 풀에서
             "frontRequest" => {

@@ -11,6 +11,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// 데몬 연결 생존 신호 — 데몬의 read timeout(daemon main.rs, 600초)보다 충분히 짧아야 한다.
+/// 제어 연결·/ws 업스트림·ssh 예비 파이프(ssh.rs)가 같은 값을 쓴다.
+pub(crate) const PING_LINE: &str = r#"{"method":"ping"}"#;
+pub(crate) const PING_INTERVAL: Duration = Duration::from_secs(30);
+
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -58,8 +63,11 @@ pub enum SessionRoots {
     /// (세션 수가 한 자리라 조회는 선형 탐색으로 충분).
     /// root 가 None 인 엔트리는 루트 없는 빈 세션(시작 페이지 탭) — 탭으로는 살지만
     /// 데몬 attach 대상이 아니다 (front 도 연결을 열지 않는다, ticket app-empty-session)
-    Registry(Arc<Mutex<Vec<(String, Option<PathBuf>)>>>),
+    Registry(Registry),
 }
+
+/// (세션 id, root) 등록 순서 목록 — SessionRoots::Registry 의 본체
+pub type Registry = Arc<Mutex<Vec<(String, Option<PathBuf>)>>>;
 
 impl SessionRoots {
     fn resolve(&self, session: Option<&str>) -> Option<PathBuf> {
@@ -88,7 +96,7 @@ pub async fn serve(listener: TcpListener, roots: SessionRoots, token: Option<Str
     // 상주 제어 연결 — 데몬 기동 보장 + 백엔드 생존 신호. 이게 있는 한 데몬은 안 죽는다.
     tokio::spawn(control_loop());
 
-    let app = Router::new()
+    let mut app = Router::new()
         .route("/ws", get(ws_handler))
         .route("/ssh/hosts", get(hosts_handler))
         .route("/ssh/state", axum::routing::post(state_handler))
@@ -96,10 +104,10 @@ pub async fn serve(listener: TcpListener, roots: SessionRoots, token: Option<Str
         .route("/tmux-conf", get(tmux_conf_get).put(tmux_conf_put).options(tmux_conf_options))
         .route("/version", get(version_handler))
         .route("/github/oauth", axum::routing::post(github_oauth_handler))
-        .route("/git/credentials", get(git_credentials_get).post(git_credentials_post));
-    // /nvim 은 독립 줄로 — 위 라우터 체인을 고치는 다른 브랜치와의 병합 충돌을 피한다
-    let mut app = app.route("/nvim", get(nvim::nvim_handler));
+        .route("/git/credentials", get(git_credentials_get).post(git_credentials_post))
+        .route("/nvim", get(nvim::nvim_handler));
     if let Some(dist) = &dist {
+        // 정적 dist 만 authed 를 거치지 않는다 — 번들에 비밀이 없고, 토큰은 앱이 URL 로 주입한다
         app = app.fallback_service(ServeDir::new(dist));
     }
     let app = app.with_state(App { roots, token, spares: Arc::default() });
@@ -277,8 +285,8 @@ async fn control_loop() {
         let mut lines = BufReader::new(read_half).lines();
         loop {
             tokio::select! {
-                _ = tokio::time::sleep(Duration::from_secs(30)) => {
-                    if write_line(&mut write_half, r#"{"method":"ping"}"#).await.is_err() {
+                _ = tokio::time::sleep(PING_INTERVAL) => {
+                    if write_line(&mut write_half, PING_LINE).await.is_err() {
                         break;
                     }
                 }
@@ -396,7 +404,7 @@ async fn clean_handler(
 }
 
 /// GET /version — 이 백엔드 빌드의 버전·채널(빈 문자열 = stable)·커밋·빌드 시각·WIRE_VERSION·
-/// 로컬 데몬 경로 (JSON).
+/// 로컬 데몬 경로·tmuxBin(이 OS·arch 의 tmux 배치 경로, 프론트 미소비 — 진단용) (JSON).
 /// 프론트의 About·시작 페이지가 쓴다. 데몬 와이어(/ws) 밖 relay 자체 응답이라 WIRE_VERSION 은
 /// 불변이고, 웹·앱이 같은 경로를 탄다 (ticket release-versioning). 데몬 경로는 배치 규칙
 /// (daemon_bin_for)의 결과 — 부재면 그 오류 문자열을 그대로 보인다
@@ -647,6 +655,7 @@ async fn close_with(
     use futures_util::{SinkExt, StreamExt};
     let mut reason = reason.to_string();
     while reason.len() > 120 {
+        // 123B 한도 아래 여유 3B — 정확히 채울 이유가 없다
         reason.pop();
     }
     let close = Message::Close(Some(axum::extract::ws::CloseFrame { code, reason: reason.into() }));
@@ -900,7 +909,7 @@ async fn relay(ws: WebSocket, target: Target, session: Option<String>, spares: A
 
     // 프론트 → 데몬 + 30초 ping (둘 다 취소 안전한 await 만 쓴다)
     let mut up = tokio::spawn(async move {
-        let mut ping = tokio::time::interval(Duration::from_secs(30));
+        let mut ping = tokio::time::interval(PING_INTERVAL);
         ping.tick().await; // interval 의 첫 즉시 틱 소비
         loop {
             tokio::select! {
@@ -914,7 +923,7 @@ async fn relay(ws: WebSocket, target: Target, session: Option<String>, spares: A
                     Some(Ok(_)) => {} // 프론트발 binary/ping/pong 프레임은 프로토콜에 없다
                 },
                 _ = ping.tick() => {
-                    if write_line(&mut write_half, r#"{"method":"ping"}"#).await.is_err() {
+                    if write_line(&mut write_half, PING_LINE).await.is_err() {
                         break;
                     }
                 }

@@ -1,5 +1,5 @@
 // 감시 스모크 — 외부 파일 변경이 fsChanges 이벤트로 프론트까지 푸시되는지 검증한다.
-//   cargo build --workspace 후: node backend/relay/check-watch.mjs
+//   cargo build -p superlite-backend -p superlite-daemon 후: node backend/relay/check-watch.mjs
 // 워크스페이스는 임시 디렉터리 — create/change/delete 와 .git 심층 필터를 확인한다.
 import assert from 'node:assert';
 import { spawn } from 'node:child_process';
@@ -32,7 +32,7 @@ try {
       });
       break;
     } catch {
-      assert.ok(i < 50, '백엔드 기동 실패 (5초) — cargo build --workspace 먼저?');
+      assert.ok(i < 50, '백엔드 기동 실패 (5초) — cargo build -p superlite-backend -p superlite-daemon 먼저?');
       await sleep(100);
     }
   }

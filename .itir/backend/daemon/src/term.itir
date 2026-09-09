@@ -3,7 +3,7 @@ import { err } from '.'
 
 role: PTY 터미널 — 생성·입출력·리사이즈·정리. 입력은 터미널별 쓰기 스레드로 넘겨 read 루프를 절대 막지 않는다 (배압으로 셸이 출력에서 막히면 pty 입력 큐도 차기 때문 — termAck 이 같은 read 루프라 블로킹 쓰기는 데드락). 출력은 연결이 아니라 세션의 sink 로 — 끊김 중엔 버퍼, 재접속 시 flush
 
-export fn owner_of(terms, tty, tmux_id?) -> term_id? {
+export fn owner_of(terms, tty, tmux_id?) -> attached_at? {
   role: 요청자(credential helper·셸 심) 좌표로 이 세션의 터미널 찾기 (와이어 v18) — tmux 세션 id 가 있으면 그것으로, 아니면 plain 셸의 tty 로. 같은 tmux 세션을 여러 탭이 보면 가장 늦게 붙은 것(attached_at — 터미널 id 는 프론트가 세션마다 매겨 세션 간 비교 불가)
 }
 class Term {

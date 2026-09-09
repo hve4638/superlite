@@ -3,7 +3,7 @@
 // 셸이고, 탭 닫기(disposeTerminal)는 detach 일 뿐이며, killTerminal 이 세션을 끝낸다. tmux 서버는 전용
 // 소켓(SUPERLITE_TMUX_SOCK)이라 이 머신의 사용자 tmux 서버를 건드리지 않는다 — 정리는 세션 kill 로만
 // (exit-empty 로 서버가 스스로 내려간다).
-//   cargo build --workspace 후: node backend/relay/check-tmux.mjs
+//   cargo build -p superlite-backend -p superlite-daemon 후: node backend/relay/check-tmux.mjs
 import assert from 'node:assert';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
@@ -72,7 +72,7 @@ async function connect(session) {
         });
       return { ws, data, tmux, send, call, attach };
     }
-    assert.ok(i < 50, '백엔드 기동 실패 — cargo build --workspace 먼저');
+    assert.ok(i < 50, '백엔드 기동 실패 — cargo build -p superlite-backend -p superlite-daemon 먼저');
     await sleep(100);
   }
 }

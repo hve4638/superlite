@@ -1,6 +1,6 @@
 // etag 낙관적 충돌 검사 스모크 — writeFile 이 stale etag 를 거부하고, 내용 동일 탈출구와
 // etag 생략(Overwrite) 이 통하는지 검증한다.
-//   cargo build --workspace 후: node backend/relay/check-etag.mjs
+//   cargo build -p superlite-backend -p superlite-daemon 후: node backend/relay/check-etag.mjs
 import assert from 'node:assert';
 import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -32,7 +32,7 @@ try {
       });
       break;
     } catch {
-      assert.ok(i < 50, '백엔드 기동 실패 (5초) — cargo build --workspace 먼저?');
+      assert.ok(i < 50, '백엔드 기동 실패 (5초) — cargo build -p superlite-backend -p superlite-daemon 먼저?');
       await sleep(100);
     }
   }

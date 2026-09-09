@@ -1,5 +1,5 @@
 // excludes 스모크 — 트리(files.exclude 기본값)와 검색·quickOpen 걷기(--hidden + 제외 글롭).
-//   cargo build --workspace 후: node backend/relay/check-excludes.mjs
+//   cargo build -p superlite-backend -p superlite-daemon 후: node backend/relay/check-excludes.mjs
 import assert from 'node:assert';
 import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -51,7 +51,7 @@ try {
       });
       break;
     } catch {
-      assert.ok(i < 50, '백엔드 기동 실패 (5초) — cargo build --workspace 먼저?');
+      assert.ok(i < 50, '백엔드 기동 실패 (5초) — cargo build -p superlite-backend -p superlite-daemon 먼저?');
       await sleep(100);
     }
   }

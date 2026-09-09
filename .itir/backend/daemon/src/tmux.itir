@@ -12,7 +12,6 @@ export fn mode() -> Mode {
 export fn mode_json() -> Value {
   role: attach 응답 terminal 필드 {mode, error?} — 프론트가 사이드바 아이콘·경고 배지를 정한다
 }
-export fn user_conf_path() -> PathBuf
 export fn base_args() -> args {
   role: 공통 앞부분 -L/-S 소켓 + -f base.conf (base.conf 재기록 포함)
 }

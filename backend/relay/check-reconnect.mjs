@@ -1,6 +1,6 @@
 // 재접속 스모크 — 같은 session id 로 다시 붙으면 터미널이 살아 있고, 끊김 중 출력이
 // 버퍼에서 flush 되며, 세션 grace 를 넘기면 회수된다.
-//   cargo build --workspace 후: node backend/relay/check-reconnect.mjs
+//   cargo build -p superlite-backend -p superlite-daemon 후: node backend/relay/check-reconnect.mjs
 import assert from 'node:assert';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
@@ -51,7 +51,7 @@ async function connect(session) {
       const send = (method, params) => ws.send(JSON.stringify({ method, params }));
       return { ws, data, send, attach };
     }
-    assert.ok(i < 50, '백엔드 기동 실패 — cargo build --workspace 먼저');
+    assert.ok(i < 50, '백엔드 기동 실패 — cargo build -p superlite-backend -p superlite-daemon 먼저');
     await sleep(100);
   }
 }
