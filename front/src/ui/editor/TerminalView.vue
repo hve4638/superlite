@@ -52,7 +52,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="host" class="terminal-view" :style="{ background: TERMINAL_BACKGROUND }" />
+  <!-- 브라우저·웹뷰 기본 컨텍스트 메뉴 차단 (사용자 지시 2026-09-09) — 우클릭은 xterm 에 그대로 간다 -->
+  <div ref="host" class="terminal-view" :style="{ background: TERMINAL_BACKGROUND }" @contextmenu.prevent />
 </template>
 
 <style scoped>

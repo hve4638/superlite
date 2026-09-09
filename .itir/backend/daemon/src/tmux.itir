@@ -1,6 +1,6 @@
 import { err } from '.'
 
-role: 내장 tmux 통합 (ticket term-list-reconnect, ws decision/process-topology.md 2026-09-07 개정) — 터미널의 "꺼지지 않는 실행 요소"를 tmux 서버에 위임한다. 데몬은 PTY 안에서 tmux 클라이언트(attach-session)를 띄울 뿐, 셸 생존·스크롤백·다중 attach·detach 는 tmux 서버 몫. 세션 원장도 tmux 다 — 별도 DB 없이 세션 환경변수 SUPERLITE_TMUX_WORKSPACE_PATH(ENV_ROOT)가 워크스페이스를 가리키고 기본 키는 #{session_id}. 서버는 -L <SLUG> 전용 소켓(사용자의 tmux 서버·~/.tmux.conf 와 격리, SUPERLITE_TMUX_SOCK 이면 -S — check 하니스), 설정은 내장 base.conf(tmux-base.conf — 로그인 셸·TMUX/TMUX_PANE 제거·SUPERLITE_TMUX_SOCKET·status off·prefix None·mouse on 등)를 캐시 폴더에 써 두고 -f 로, 끝에 사용자 conf(user.conf — 클라이언트 tmux.conf 를 tmuxConf 로 받은 것)를 source. unix 전용 — Windows 는 Unsupported (터미널 보존 없음, 사용자 결정)
+role: 내장 tmux 통합 (ticket term-list-reconnect, ws decision/process-topology.md 2026-09-07 개정) — 터미널의 "꺼지지 않는 실행 요소"를 tmux 서버에 위임한다. 데몬은 PTY 안에서 tmux 클라이언트(attach-session)를 띄울 뿐, 셸 생존·스크롤백·다중 attach·detach 는 tmux 서버 몫. 세션 원장도 tmux 다 — 별도 DB 없이 세션 환경변수 SUPERLITE_TMUX_WORKSPACE_PATH(ENV_ROOT)가 워크스페이스를 가리키고 기본 키는 #{session_id}. 서버는 -L <SLUG> 전용 소켓(사용자의 tmux 서버·~/.tmux.conf 와 격리, SUPERLITE_TMUX_SOCK 이면 -S — check 하니스), 설정은 내장 base.conf(tmux-base.conf — 로그인 셸·TMUX/TMUX_PANE 제거·SUPERLITE_TMUX_SOCKET·status off·prefix None·mouse on·MouseDown2Pane(휠클릭 paste) 해제 등)를 캐시 폴더에 써 두고 -f 로, 끝에 사용자 conf(user.conf — 클라이언트 tmux.conf 를 tmuxConf 로 받은 것)를 source. unix 전용 — Windows 는 Unsupported (터미널 보존 없음, 사용자 결정)
 
 export val ENV_ROOT
 export class Mode {
@@ -16,7 +16,7 @@ export fn base_args() -> args {
   role: 공통 앞부분 -L/-S 소켓 + -f base.conf (base.conf 재기록 포함)
 }
 export fn new_session(bin, root, env) -> id_and_name {
-  role: 새 tmux 세션 detached 로 — 이름은 <폴더명>-<n> (충돌 시 n 증가), cwd root, -e 로 세션 환경변수(셸 심 좌표·ENV_ROOT). -P -F 로 session_id 를 받아 돌려준다
+  role: 새 tmux 세션 detached 로 — 이름은 <폴더명>-<n> (충돌 시 n 증가), cwd root, -e 로 세션 환경변수(셸 심 좌표·ENV_ROOT). -P -F 로 session_id 를 받아 돌려준다. 명령의 cwd 는 / 로 고정 — 서버가 여기서 처음 뜨면 이 cwd 를 물려받아 데몬보다 오래 살고, 워크트리에서 뜬 서버는 폴더 삭제 뒤 -c 를 무시한다 (tmux 3.7b, ticket tmux-server-cwd-utf8)
 }
 export fn session_of_pane(bin, tty) -> id? {
   role: pane tty → 그 pane 이 속한 세션 id (list-panes -a) — askpass 요청자 좌표 해석 (와이어 v18). 요청자는 tmux 안의 셸 자식이라 자기 tty 만 안다. 서버 부재·미발견은 None

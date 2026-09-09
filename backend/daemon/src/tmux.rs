@@ -149,6 +149,10 @@ pub(crate) fn new_session(bin: &Path, root: &Path, env: &[(&str, String)]) -> Re
     for n in 1..=99u32 {
         let name = session_name(root, n);
         let mut c = command(bin)?;
+        // 서버가 아직 없으면 이 명령이 서버를 띄우고, 서버는 이 프로세스의 cwd 를 물려받아 데몬보다 오래
+        // 산다. 워크트리에서 뜬 서버는 그 폴더가 삭제되면 이후 모든 new-session 의 -c 를 무시하고 옛 cwd 에
+        // 서 pane 을 띄운다 (tmux 3.7b 실측, ticket tmux-server-cwd-utf8) — 사라지지 않는 / 로 고정
+        c.current_dir("/");
         c.args(["new-session", "-d", "-s", &name, "-c"]).arg(root).args(["-P", "-F", "#{session_id}"]);
         for (k, v) in env {
             c.arg("-e").arg(format!("{k}={v}"));
