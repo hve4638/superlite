@@ -1,11 +1,12 @@
 <script setup lang="ts">
 // 모달 confirm (VS Code dialog 근사) — Enter=확인, Escape=취소, 확인 버튼 자동 포커스.
-// ponytail: 범용 다이얼로그 서비스 없음 — 쓰는 곳이 넷(탐색기 삭제·SCM discard·에디터 닫기·원격 데몬
-// 강제 정리)이고 각자 v-if + props 로 띄운다. 상한(한 화면에 둘 이상 동시 필요)은 아직 아니다.
+// ponytail: 범용 다이얼로그 서비스 없음 — 쓰는 곳이 여덟(Workbench: 에디터 닫기·데몬 강제 정리·터미널 강제
+// 종료, ExplorerView: 삭제·덮어쓰기·이동 확인, ScmView discard, FolderView 삭제)이고 각자 v-if + props 로 띄운다.
+// 상한(한 화면에 둘 이상 동시 필요)은 아직 아니다 — 동시에 뜰 수 있는 조합이 생기면 서비스로 올린다.
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 
 // secondaryLabel 이 있으면 3버튼 (Save / Don't Save / Cancel 류 — 에디터 닫기 확인).
-// checkboxLabel 이 있으면 "다시 묻지 않기" 류 체크박스 — 확인 이벤트에 체크 여부를 실어 준다 (터미널 강제 종료)
+// checkboxLabel 이 있으면 "다시 묻지 않기" 류 체크박스 — 확인 이벤트에 체크 여부를 실어 준다 (터미널 강제 종료·탐색기 이동 확인)
 defineProps<{ message: string; detail?: string; confirmLabel: string; secondaryLabel?: string; checkboxLabel?: string }>();
 const emit = defineEmits<{ confirm: [checked: boolean]; secondary: []; cancel: [] }>();
 const checked = ref(false);

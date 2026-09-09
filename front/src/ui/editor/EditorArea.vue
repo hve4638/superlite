@@ -1,18 +1,13 @@
 <script setup lang="ts">
 import { onBeforeUnmount } from 'vue';
-import { editors, openDiff, openFile } from '../../model/editors';
+import { editors } from '../../model/editors';
 import { activeSessionEmpty } from '../../model/sessions';
 import EditorLayoutNode from './EditorLayoutNode.vue';
 import { trackForeignDrag } from './tabDnd';
 import StartPage from '../StartPage.vue';
 
-// DEV 전용 테스트 훅 — playwright 검증 스크립트가 파일을 열 수 있게 한다
 // 다른 창의 탭·탐색기 드래그가 이 창에 들어오면 그룹 본문의 드롭 층을 띄운다 (cross-window-editor-drop)
 onBeforeUnmount(trackForeignDrag());
-
-if (import.meta.env.DEV) {
-  (window as unknown as Record<string, unknown>).__test = { openFile, openDiff };
-}
 </script>
 
 <template>

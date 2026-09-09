@@ -72,7 +72,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown, true));
 }
 .dialog-body > .codicon-info {
   font-size: 26px;
-  color: var(--vscode-notificationsInfoIcon-foreground, #3794ff);
+  color: var(--vscode-notificationsInfoIcon-foreground);
 }
 .dialog-text {
   min-width: 0;
@@ -98,16 +98,16 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown, true));
 }
 .dialog-button {
   padding: 4px 14px;
-  border: 1px solid var(--vscode-button-border, transparent);
+  border: 1px solid var(--vscode-button-border);
   border-radius: 2px;
-  background: var(--vscode-button-secondaryBackground, #3a3d41);
-  color: var(--vscode-button-secondaryForeground, #ffffff);
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
   font-size: 13px;
   cursor: pointer;
 }
 .dialog-button.primary {
-  background: var(--vscode-button-background, #0e639c);
-  color: var(--vscode-button-foreground, #ffffff);
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
 }
 .dialog-button:hover {
   filter: brightness(1.1);

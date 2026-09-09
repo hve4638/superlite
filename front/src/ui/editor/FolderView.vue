@@ -279,7 +279,7 @@ function menuFor(entry: DirEntry | null): ContextMenuItem[] {
     ...(entry.kind === 'directory' ? session(entry.path) : []),
     ...ops,
     ...(ops.length ? [{ separator: true }] : []),
-    { label: 'Copy Path', keybinding: 'Shift+Alt+C', run: () => void navigator.clipboard.writeText(entry.path) },
+    { label: 'Copy Path', run: () => void navigator.clipboard.writeText(entry.path) },
     ...(outside.value ? [] : [
       { separator: true },
       { label: 'Rename...', keybinding: 'F2', run: () => startRename(entry) },
@@ -326,7 +326,7 @@ function onKeydown(e: KeyboardEvent): void {
     case 'ArrowUp': moveCursor(-cols); break;
     case 'j': moveCursor(1); break;
     case 'k': moveCursor(-1); break;
-    case 'PageDown': moveCursor(20 * cols); break;
+    case 'PageDown': moveCursor(20 * cols); break; // ponytail: 뷰포트 높이와 무관한 20행 고정 — 실측 행 수가 필요해지면 스크롤 컴포넌트의 viewportH 를 받아 쓴다
     case 'PageUp': moveCursor(-20 * cols); break;
     case 'Home': cursorTo(0); break;
     case 'End': cursorTo(entries.value.length - 1); break;
@@ -516,7 +516,7 @@ watch(
   pointer-events: none;
 }
 .nav.on {
-  background: var(--vscode-toolbar-activeBackground, var(--vscode-toolbar-hoverBackground));
+  background: var(--vscode-toolbar-activeBackground);
   color: var(--vscode-foreground);
 }
 .crumbs {
@@ -527,7 +527,7 @@ watch(
   margin: 0 6px;
   height: 22px;
   padding: 0 4px;
-  border: 1px solid var(--vscode-input-border, var(--vscode-editorGroup-border));
+  border: 1px solid var(--vscode-input-border);
   background: var(--vscode-input-background);
   font-size: 12px;
   white-space: nowrap;

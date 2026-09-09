@@ -4,6 +4,7 @@ import { openQuickInput, openContextMenu } from '../model/workbench';
 import { openFolderTab } from '../model/editors';
 import { createTerminal } from '../model/terminal';
 import { endEditorDrag, startNewTabDrag } from './editor/tabDnd';
+import { DETACH_DX, DETACH_DY, insertIndexAt } from './dndUtil';
 import StripScroll from './widgets/StripScroll.vue';
 import {
   inApp,
@@ -90,8 +91,6 @@ function openAddMenu(e: MouseEvent): void {
 const dragId = ref<string | null>(null);
 const dropIndex = ref<number | null>(null);
 const foreign = ref(false);
-/** 새 창의 타이틀바 탭(35px)이 포인터 아래 오도록 창을 올리는 오프셋 */
-const TAB_GRAB_Y = 17;
 const dragging = computed(() => dragId.value !== null || foreign.value);
 
 // 서브 창의 스트립은 메인 것을 비추는 전환 전용 — 세션을 받지도(드롭) 내보내지도(드래그) 않는다
@@ -114,8 +113,7 @@ function onTabDragOver(e: DragEvent, i: number): void {
   if (!dragging.value) return;
   e.preventDefault();
   if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-  dropIndex.value = e.clientX < rect.left + rect.width / 2 ? i : i + 1;
+  dropIndex.value = insertIndexAt(e, i);
 }
 
 // 탭 사이 틈 — 탭 위에서 정한 삽입 지점을 유지한 채 드롭만 허용한다 (다른 창 탭은 끝에)
@@ -168,8 +166,7 @@ function pointerOutsideHeader(e: DragEvent): boolean {
 function onTabDragEnd(e: DragEvent): void {
   const id = dragId.value;
   if (id !== null && multiWindow() && e.dataTransfer?.dropEffect === 'none' && pointerOutsideHeader(e)) {
-    // 새 창의 탭이 포인터 아래 오도록 살짝 왼쪽 위로
-    detachSession(id, e.screenX - 100, e.screenY - TAB_GRAB_Y);
+    detachSession(id, e.screenX - DETACH_DX, e.screenY - DETACH_DY);
   }
   endTabDrag();
 }
@@ -280,8 +277,7 @@ function onNewTabDragStart(e: DragEvent, kind: 'new-folder' | 'new-terminal'): v
               @mousedown.stop
             />
             <template v-else>
-              <!-- 빈 세션(이름 없음)의 표시 라벨 — 시작 페이지 탭임을 나타낸다 -->
-              <!-- 이름은 워크스페이스 정보가 오면 채워진다 — 그 전엔 빈 세션만 Welcome, 로드 중인 세션은 공백 -->
+              <!-- 이름은 워크스페이스 정보가 오면 채워진다 — 그 전엔 빈 세션(시작 페이지 탭)만 Welcome, 로드 중인 세션은 공백 -->
               <span class="session-name">{{ labels.get(tab.id) ?? sessionLabel(tab) }}</span>
             </template>
             <!-- 로딩 스피너 — 초기 로드(ctx.init) 중, X 바로 왼쪽. 예비 파이프 접속은 상태바 단계가
@@ -317,7 +313,7 @@ function onNewTabDragStart(e: DragEvent, kind: 'new-folder' | 'new-terminal'): v
       <template v-if="!activeSessionEmpty()">
         <!-- 끌어서 놓는 자리(탭 사이·그룹·가장자리 분할)에 만들 수도 있다 — 드롭은 탭바·그룹 본문 드롭 존 -->
         <span
-          class="codicon codicon-folder layout-icon"
+          class="codicon codicon-folder global-action"
           title="Open Folder Tab"
           draggable="true"
           @click="openFolderTab('')"
@@ -325,7 +321,7 @@ function onNewTabDragStart(e: DragEvent, kind: 'new-folder' | 'new-terminal'): v
           @dragend="endEditorDrag()"
         />
         <span
-          class="codicon codicon-terminal layout-icon"
+          class="codicon codicon-terminal global-action"
           title="New Terminal (Ctrl+`)"
           draggable="true"
           @click="createTerminal()"
@@ -369,8 +365,6 @@ function onNewTabDragStart(e: DragEvent, kind: 'new-folder' | 'new-terminal'): v
   justify-content: flex-start;
   min-width: 0;
 }
-/* C 시안 (VS Code 에디터 탭 문법) 실험 적용 — 전체 높이 사각 탭, 활성 = 에디터
-   배경 + 상단 2px 액센트 라인, 탭 경계는 1px border */
 .app-icon {
   width: 18px;
   height: 18px;
@@ -383,7 +377,6 @@ function onNewTabDragStart(e: DragEvent, kind: 'new-folder' | 'new-terminal'): v
   display: flex;
   align-items: stretch;
   height: 100%;
-  gap: 0;
   min-width: 0;
   max-width: 100%;
 }
@@ -392,6 +385,8 @@ function onNewTabDragStart(e: DragEvent, kind: 'new-folder' | 'new-terminal'): v
   flex: 0 1 auto;
   --strip-bg: var(--vscode-titleBar-activeBackground);
 }
+/* C 시안 (VS Code 에디터 탭 문법) 실험 적용 — 전체 높이 사각 탭, 활성 = 에디터
+   배경 + 상단 2px 액센트 라인, 탭 경계는 1px border */
 .session-tab {
   position: relative;
   flex-shrink: 0;
@@ -414,7 +409,7 @@ function onNewTabDragStart(e: DragEvent, kind: 'new-folder' | 'new-terminal'): v
 .session-tab:hover {
   background: rgba(255, 255, 255, 0.04);
 }
-/* 탭 드래그 삽입선 — 탭 사이 틈(gap 4px) 가운데의 세로 직선. inset box-shadow 는
+/* 탭 드래그 삽입선 — 탭 경계선 위(left/right -1px)의 세로 직선. inset box-shadow 는
    둥근 모서리를 따라가 반달처럼 보여서 쓰지 않는다 */
 .session-tab.drop-before::after,
 .session-tab.drop-after::after {
@@ -506,13 +501,13 @@ function onNewTabDragStart(e: DragEvent, kind: 'new-folder' | 'new-terminal'): v
   padding: 0 8px;
   flex-shrink: 0;
 }
-.layout-icon {
+.global-action {
   font-size: 16px;
   padding: 4px;
   border-radius: 5px;
   cursor: pointer;
 }
-.layout-icon:hover {
+.global-action:hover {
   background: var(--vscode-toolbar-hoverBackground);
 }
 .window-controls {

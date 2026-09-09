@@ -3,8 +3,9 @@ import '@vscode/codicons/dist/codicon.css';
 import './theme/tokens.css';
 import './theme/accent.css';
 import './theme/base.css';
-// WHY: 부팅 세션 생성(활성 컨텍스트)이 UI 모듈 평가보다 앞서야 한다 — TerminalPane 등이
-//      모듈 평가 시점에 활성 세션의 스토어를 읽는다. import 순서가 곧 평가 순서다.
+// WHY: 부팅 세션 생성(활성 컨텍스트)이 UI 모듈 평가보다 앞서야 한다 — ui/editor/terminalHost 의
+//      최상위(setTerminalSerializer 등록·allTerminals 워처)가 모듈 평가 시점에 활성 세션의 스토어를
+//      읽는다. import 순서가 곧 평가 순서다.
 import './model/host';
 import Workbench from './ui/Workbench.vue';
 import { installKeybindings, setupCommands } from './model/commands';

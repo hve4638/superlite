@@ -111,7 +111,7 @@ function isActive(id: ViewletId): boolean {
 .badge.warn {
   padding: 0;
   min-width: 16px;
-  background: var(--vscode-errorForeground, #f14c4c);
+  background: var(--vscode-errorForeground);
   color: #fff;
   font-size: 12px;
 }

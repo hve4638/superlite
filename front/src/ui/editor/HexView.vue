@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watchEffect } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watchEffect } from 'vue';
 import { editors, ensureHex, HEX_CHUNK, loadHexChunk } from '../../model/editors';
 
 // hex 뷰어 — HxD 식 3열(offset / 16바이트 hex / ASCII). 보이는 행만 그리고, 바이트도 보이는
@@ -25,12 +25,15 @@ const scroller = ref<HTMLElement | null>(null);
 const scrollTop = ref(0);
 const viewH = ref(0);
 
+let ro: ResizeObserver | null = null;
 onMounted(() => {
   const el = scroller.value;
   if (!el) return;
   viewH.value = el.clientHeight;
-  new ResizeObserver(() => (viewH.value = el.clientHeight)).observe(el);
+  ro = new ResizeObserver(() => (viewH.value = el.clientHeight));
+  ro.observe(el);
 });
+onBeforeUnmount(() => ro?.disconnect());
 
 const rowCount = computed(() => (doc.value ? Math.ceil(doc.value.size / ROW_BYTES) : 0));
 // 헤더 1행 + 본문 — 축척 전 실제 높이
@@ -110,7 +113,7 @@ const rows = computed(() => {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  font-family: var(--vscode-editor-font-family, monospace);
+  font-family: monospace;
   font-size: 13px;
   color: var(--vscode-editor-foreground);
   background: var(--vscode-editor-background);

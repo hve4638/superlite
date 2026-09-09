@@ -12,7 +12,8 @@
  *   재로드(applyExternalEdit) 도 자연히 nvim 에 흘러간다.
  * - 버퍼는 path 당 하나 (nvim 프로세스 수명 동안), 포커스된 편집기의 버퍼가 nvim 현재 버퍼.
  * - 워크벤치 chord(Ctrl+P·Ctrl+W 등)는 nvim 에 보내지 않는다 — 창 keydown 이 처리한다.
- * - :w :q :wq :x (+!) 는 명령줄 Enter 에서 가로채 우리 저장·닫기 경로로 (nvim 은 acwrite 버퍼라
+ * - :w :q :wq :x (+!) 는 명령줄 Enter 에서 가로채 우리 저장·닫기 경로로 — 가로채는 곳은 이 모듈이 아니라
+ *   model/nvim 의 cmdlineKey·runEx 이고 여기는 키를 넘기기만 한다 (nvim 은 acwrite 버퍼라
  *   디스크를 안 쓰고, :q 는 마지막 창이라 nvim 자체가 끝난다).
  *
  * 남긴 엣지: diff 편집기(modified 쪽)는 대상 밖. `.` 반복은 insert 로 친 내용을 되풀이하지
@@ -160,7 +161,7 @@ function ensureBuf(client: NvimClient, model: TextModel): Promise<number> {
 // ---- 편집기 키 (VSCodeVim 의 useCtrlKeys 예외와 같은 자세) ----
 // 순수 vim 이 아니라 편집기다 — 클립보드·undo 처럼 vim 밖과 닿는 Ctrl 키는 편집기 의미로 (사용자 지시 2026-09-07).
 // 값이 문자열이면 nvim 에 그 키를 대신 보내고, null 이면 nvim 에 보내지 않고 Monaco 가 처리한다 (복사·검색 위젯).
-// 잃는 vim 키: Ctrl+V 블록 visual(→ Ctrl+Q, vim 기본 별칭)·Ctrl+A 증가·Ctrl+Y 한 줄 스크롤·Ctrl+F 페이지(→ Ctrl+D 로).
+// 잃는 vim 키: Ctrl+V 블록 visual(→ Ctrl+Q, vim 기본 별칭)·Ctrl+A 증가·Ctrl+Y 한 줄 스크롤·Ctrl+F 페이지(→ Ctrl+D 로)·Ctrl+C(insert 에서만 =Esc, 그 외는 편집기 복사). itir editor role 의 목록과 같이 유지한다.
 function editorKey(key: string): string | null | undefined {
   switch (key) {
     case '<C-z>': return 'u';
@@ -209,7 +210,7 @@ function selectionText(editor: CodeEditor): string {
 }
 
 // ---- 편집기 부착 ----
-export function attachVim(editor: CodeEditor): IDisposable {
+function attachVim(editor: CodeEditor): IDisposable {
   const client = nvim();
   if (!client) return { dispose: () => {} };
   bind(client);

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue';
-import type { DirEntry, Unopenable } from '../../backend/types';
+import type { DirEntry } from '../../backend/types';
+import { fmtMB } from './folderFmt';
 import { editors, imageMime } from '../../model/editors';
 import { files } from '../../model/files';
 import { backend } from '../../model/host';
@@ -24,7 +25,7 @@ type Preview =
   | { kind: 'text'; text: string; truncated: boolean }
   | { kind: 'image'; data: string }
   | { kind: 'hex' }
-  | { kind: 'unopenable'; reason: Unopenable }
+  | { kind: 'unopenable'; size: number }
   | { kind: 'error'; message: string };
 const preview = ref<Preview | null>(null);
 let seq = 0;
@@ -50,7 +51,7 @@ watch(
       const image = imageMime(path) !== null;
       const r = await backend.readFile(path, image ? { encoding: 'base64' } : { maxBytes: PREVIEW_MAX });
       if (mine !== seq) return;
-      if (r.unopenable) preview.value = r.unopenable.kind === 'binary' ? { kind: 'hex' } : { kind: 'unopenable', reason: r.unopenable };
+      if (r.unopenable) preview.value = r.unopenable.kind === 'binary' ? { kind: 'hex' } : { kind: 'unopenable', size: r.unopenable.size };
       else preview.value = image ? { kind: 'image', data: r.content } : clip(r.content);
     } catch (e) {
       if (mine === seq) preview.value = { kind: 'error', message: e instanceof Error ? e.message : String(e) };
@@ -63,9 +64,6 @@ function clip(content: string): Preview {
   return lines.length > PREVIEW_LINES
     ? { kind: 'text', text: lines.slice(0, PREVIEW_LINES).join('\n'), truncated: true }
     : { kind: 'text', text: content, truncated: false };
-}
-function fmtMB(bytes: number): string {
-  return `${(bytes / (1024 * 1024)).toFixed(2)}MB`;
 }
 </script>
 
@@ -80,14 +78,14 @@ function fmtMB(bytes: number): string {
     />
     <template v-else-if="entry && preview">
       <div v-if="preview.kind === 'loading'" class="notice">
-        <span class="codicon codicon-loading codicon-modifier-spin loading" /> Loading…
+        <span class="codicon codicon-loading codicon-modifier-spin" /> Loading…
       </div>
       <pre v-else-if="preview.kind === 'text'" class="text">{{ preview.text }}<span v-if="preview.truncated" class="more">
 … ({{ PREVIEW_LINES }} lines shown)</span></pre>
       <ImageView v-else-if="preview.kind === 'image'" :path="entry.path" :data="preview.data" />
       <HexView v-else-if="preview.kind === 'hex'" :key="entry.path" :path="entry.path" />
       <div v-else-if="preview.kind === 'unopenable'" class="notice">
-        Too large to preview<template v-if="preview.reason.kind === 'large'"> ({{ fmtMB(preview.reason.size) }})</template>
+        Too large to preview ({{ fmtMB(preview.size) }})
       </div>
       <div v-else class="notice error">{{ preview.message }}</div>
     </template>
@@ -109,7 +107,7 @@ function fmtMB(bytes: number): string {
   margin: 0;
   padding: 4px 8px;
   overflow: auto;
-  font-family: var(--vscode-editor-font-family, monospace);
+  font-family: monospace;
   font-size: 12px;
   line-height: 18px;
   color: var(--vscode-editor-foreground);

@@ -24,3 +24,8 @@ export function typeOf(e: DirEntry): string {
   const dot = e.name.lastIndexOf('.');
   return dot > 0 ? `${e.name.slice(dot + 1).toUpperCase()} File` : 'File';
 }
+
+/** 열 수 없는 큰 파일의 안내용 크기 — 소수 둘째 자리 MB (EditorGroupView 안내·FolderPreview 공통) */
+export function fmtMB(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(2)}MB`;
+}

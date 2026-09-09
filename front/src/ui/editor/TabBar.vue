@@ -5,7 +5,7 @@ import { closeEmptyGroup, closeTab, editors, isHtml, moveTabToGroup, openFile, o
 import { createTerminal, requestKillTerminal, terminals } from '../../model/terminal';
 import { DND_EDITOR, detachEditorTab, multiWindow, requestTabsMove, sessionRoot, sessions } from '../../model/sessions';
 import { windowLabel } from '../../model/window';
-import { pointerOutside } from '../dndUtil';
+import { DETACH_DX, DETACH_DY, insertIndexAt, pointerOutside } from '../dndUtil';
 import { editorDrag, endEditorDrag, isForeignDrag, readForeignDrop, startTabDrag } from './tabDnd';
 import FileIcon from '../widgets/FileIcon.vue';
 import ProgressBar from '../widgets/ProgressBar.vue';
@@ -103,7 +103,7 @@ function onDragStart(e: DragEvent, tab: Tab) {
 // 출처 창의 dragend — 아무 존도 받지 않았고 포인터가 창 밖이면 새 창으로 분리 (세션 탭과 같은 판정)
 function onDragEnd(e: DragEvent) {
   if (editorDrag.kind === 'tab' && multiWindow() && e.dataTransfer?.dropEffect === 'none' && pointerOutside(e)) {
-    detachEditorTab(editorDrag.groupId, editorDrag.tabId, e.screenX - 100, e.screenY - 17);
+    detachEditorTab(editorDrag.groupId, editorDrag.tabId, e.screenX - DETACH_DX, e.screenY - DETACH_DY);
   }
   dropIndex.value = null;
   foreign.value = 'none';
@@ -130,8 +130,7 @@ function onTabDragOver(e: DragEvent, i: number) {
   if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
   // 파일 드롭은 끝에 붙인다 — 삽입선 없이 드롭만 받는다
   if (!tabDragging.value) return;
-  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-  dropIndex.value = e.clientX < rect.left + rect.width / 2 ? i : i + 1;
+  dropIndex.value = insertIndexAt(e, i);
 }
 
 // 탭 밖 빈 영역 — 끝에 삽입. 다른 그룹의 탭, 같은 그룹의 순서 변경, 탐색기 파일, 다른 창의 탭 모두 받는다
@@ -389,7 +388,7 @@ function onForeignDrop(e: DragEvent) {
 }
 /* Ctrl 을 누른 동안 터미널 탭의 닫기 = 강제 종료 — 붉게 */
 .tab-action.kill .codicon-close {
-  color: var(--vscode-errorForeground, #f14c4c);
+  color: var(--vscode-errorForeground);
 }
 /* dirty 탭: ● 표시, 버튼에 hover 하면 × 로 교체 */
 .codicon-circle-filled {

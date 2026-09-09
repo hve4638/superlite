@@ -366,8 +366,8 @@ function cancelAlias(): void {
   padding: 6px 18px;
   border: none;
   border-radius: 2px;
-  background: var(--vscode-button-background, #0e639c);
-  color: var(--vscode-button-foreground, #ffffff);
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
   font-size: 13px;
   cursor: pointer;
 }
@@ -387,15 +387,15 @@ function cancelAlias(): void {
   flex: none;
 }
 .start-status.failed {
-  color: var(--vscode-errorForeground, #f48771);
+  color: var(--vscode-errorForeground);
 }
 .start-retry {
   margin-left: 6px;
   padding: 2px 10px;
-  border: 1px solid var(--vscode-button-border, transparent);
+  border: 1px solid var(--vscode-button-border);
   border-radius: 2px;
-  background: var(--vscode-button-secondaryBackground, #3a3d41);
-  color: var(--vscode-button-secondaryForeground, #ffffff);
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
   font-size: 12px;
   cursor: pointer;
 }
@@ -404,7 +404,7 @@ function cancelAlias(): void {
   cursor: default;
 }
 .start-open:hover {
-  background: var(--vscode-button-hoverBackground, #1177bb);
+  background: var(--vscode-button-hoverBackground);
 }
 .start-recents {
   margin-top: 18px;
@@ -421,7 +421,7 @@ function cancelAlias(): void {
   border-radius: 4px;
 }
 .recent-col.pinned.drop-column {
-  outline: 1px dashed var(--vscode-focusBorder, #007fd4);
+  outline: 1px dashed var(--vscode-focusBorder);
   outline-offset: 4px;
 }
 .recent-head {
@@ -472,14 +472,14 @@ function cancelAlias(): void {
   cursor: pointer;
 }
 .recent-row:hover {
-  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.06));
+  background: var(--vscode-list-hoverBackground);
 }
 .recent-row.group {
   cursor: default;
 }
 .recent-row.group.drop-into {
-  background: var(--vscode-list-dropBackground, rgba(83, 89, 93, 0.5));
-  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  background: var(--vscode-list-dropBackground);
+  outline: 1px solid var(--vscode-focusBorder);
 }
 /* 일괄 열기 선택 — 액센트 굵은 테두리 + 오른쪽 위 번호 배지 */
 .recent-row.group.picked {
@@ -501,7 +501,7 @@ function cancelAlias(): void {
   font-size: 12px;
   font-weight: 600;
   background: var(--sl-accent);
-  color: var(--vscode-button-foreground, #ffffff);
+  color: var(--vscode-button-foreground);
   border-bottom-left-radius: 4px;
   pointer-events: none;
 }
@@ -525,13 +525,13 @@ function cancelAlias(): void {
   padding: 3px 10px;
   border: none;
   border-radius: 2px;
-  background: var(--vscode-button-background, #0e639c);
-  color: var(--vscode-button-foreground, #ffffff);
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
   font-size: 12px;
   cursor: pointer;
 }
 .pick-open:hover {
-  background: var(--vscode-button-hoverBackground, #1177bb);
+  background: var(--vscode-button-hoverBackground);
 }
 .recent-row.group.drop-before::before,
 .recent-row.group.drop-after::after {
@@ -540,7 +540,7 @@ function cancelAlias(): void {
   left: 4px;
   right: 4px;
   height: 2px;
-  background: var(--vscode-focusBorder, #007fd4);
+  background: var(--vscode-focusBorder);
 }
 .recent-row.group.drop-before::before {
   top: -3px;
@@ -549,9 +549,6 @@ function cancelAlias(): void {
   bottom: -3px;
 }
 /* 멤버 줄 사이 삽입선 */
-.group-item {
-  position: relative;
-}
 .group-item.drop-before::before,
 .group-item.drop-after::after {
   content: '';
@@ -559,7 +556,7 @@ function cancelAlias(): void {
   left: 0;
   right: 4px;
   height: 2px;
-  background: var(--vscode-focusBorder, #007fd4);
+  background: var(--vscode-focusBorder);
 }
 .group-item.drop-before::before {
   top: -2px;
@@ -576,7 +573,7 @@ function cancelAlias(): void {
   opacity: 0.8;
 }
 .recent-name {
-  color: var(--vscode-textLink-foreground, #3794ff);
+  color: var(--vscode-textLink-foreground);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -604,15 +601,16 @@ function cancelAlias(): void {
 .alias-input {
   min-width: 0;
   padding: 0 4px;
-  border: 1px solid var(--vscode-focusBorder, #007fd4);
+  border: 1px solid var(--vscode-focusBorder);
   border-radius: 2px;
-  background: var(--vscode-input-background, #3c3c3c);
-  color: var(--vscode-input-foreground, inherit);
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
   font: inherit;
   outline: none;
 }
 /* 그룹의 멤버 줄 — 이름과 경로를 나란히 (이름은 내용폭, 경로가 남은 폭에서 꼬리를 남기며 줄임), 끝에 × */
 .group-item {
+  position: relative;
   grid-column: 2 / 4;
   display: grid;
   grid-template-columns: minmax(0, max-content) minmax(0, 1fr) 16px;
@@ -624,7 +622,7 @@ function cancelAlias(): void {
   cursor: pointer;
 }
 .group-item:hover {
-  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.06));
+  background: var(--vscode-list-hoverBackground);
 }
 /* 멤버 하나만 열린다는 표시 — 제목 hover 와 같은 밑줄 */
 .group-item:hover .group-name {

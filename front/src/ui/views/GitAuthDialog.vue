@@ -156,7 +156,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown, true));
       </div>
       <div class="dialog-actions">
         <button v-if="!(mode === 'device' && device?.step === 'code')" class="dialog-button primary" @click="submit()">
-          {{ mode === 'device' && device?.step === 'error' ? 'OK' : mode === 'manual' ? 'Add' : 'OK' }}
+          {{ mode === 'manual' ? 'Add' : 'OK' }}
         </button>
         <button v-if="!(mode === 'device' && device?.step === 'error')" class="dialog-button" @click="cancel()">Cancel</button>
       </div>
@@ -233,7 +233,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown, true));
 .field > input {
   height: 26px;
   padding: 0 6px;
-  border: 1px solid var(--vscode-input-border, transparent);
+  border: 1px solid var(--vscode-input-border);
   background: var(--vscode-input-background);
   color: var(--vscode-input-foreground);
   font-size: 13px;
@@ -255,7 +255,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown, true));
   gap: 8px;
   margin-top: 8px;
   font-size: 22px;
-  font-family: var(--monaco-monospace-font, monospace);
+  font-family: monospace;
   letter-spacing: 2px;
   user-select: text;
 }

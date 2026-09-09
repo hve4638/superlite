@@ -377,6 +377,7 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   font-size: 13px;
+  outline: none;
 }
 /* spec: CHANGES/GRAPH 두 pane 이 사이드바를 정확히 반반 나눈다 (각 354px) */
 .pane {
@@ -433,9 +434,6 @@ onMounted(() => {
 .repo-branch .codicon {
   font-size: 14px;
 }
-.scm-view {
-  outline: none;
-}
 /* 선택 — 리스트 포커스 중엔 활성색, 커밋 입력 등 다른 곳에 있으면 비활성색 (VS Code list) */
 .resource-row.selected {
   background: var(--vscode-list-inactiveSelectionBackground);
@@ -444,11 +442,6 @@ onMounted(() => {
   background: var(--vscode-list-activeSelectionBackground);
   color: var(--vscode-list-activeSelectionForeground);
 }
-.scm-view:has(.multi-repo) .graph-pane {
-  flex: 1 0 auto;
-  min-height: 140px;
-}
-
 /* ── pane 헤더 (paneview.css: 22px / 11px bold uppercase) ── */
 .pane-header {
   flex: none;

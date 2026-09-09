@@ -10,7 +10,7 @@ when:
 ## Domain Terms
 
 - **ThinBackend** — 프론트가 원격에 요구하는 유일한 계약 (`src/backend/types.ts`). 이후 Rust core 로 구현 교체 예정.
-- **spec** — `../tools/refspec/spec/` 의 레퍼런스(Code OSS 1.134.0, Dark Modern) 추출물. geometry/computed-style JSON + 스크린샷. UI 수치는 추측하지 말고 spec 에서 가져온다.
+- **spec** — ws repo `code-superlight-ws/tools/refspec/spec/`(이 repo 밖, 생성기 `extract.mjs` 도 같은 곳) 의 레퍼런스(Code OSS 1.134.0, Dark Modern) 추출물. geometry/computed-style JSON + 스크린샷. UI 수치는 추측하지 말고 spec 에서 가져온다.
 - **tokens.css** — spec 에서 생성된 `--vscode-*` 3181개 변수 (`src/theme/tokens.css`). 색은 반드시 이 변수로만 지정한다.
-- **viewlet** — 사이드바에 표시되는 뷰 (explorer/search/scm). activity bar 가 전환한다.
+- **viewlet** — 사이드바에 표시되는 뷰 (explorer/search/scm/remote/terminals — `model/workbench.ts` ViewletId). activity bar 가 전환한다.
 - **preview 탭** — 트리 단일 클릭으로 열린 이탤릭 탭. 다른 preview 가 열리면 교체된다.

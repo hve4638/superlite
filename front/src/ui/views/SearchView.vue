@@ -7,7 +7,8 @@ import FileIcon from '../widgets/FileIcon.vue';
 
 const inputEl = ref<HTMLInputElement | null>(null);
 const replaceVisible = ref(false);
-// 장식 토글 — 검색 동작에는 반영되지 않는다 (backend 계약에 옵션 없음)
+// ponytail: 무동작 컨트롤 다섯 — whole word·regex 토글(아래 둘), 치환 입력·Replace All, 결과 메시지의 "Open in editor".
+// backend 검색 계약(ThinBackend.search)의 옵션이 caseSensitive 하나뿐이고 치환·편집기 열기가 없어 화면만 VS Code 를 따른다. 계약이 늘면 그때 연결하거나 뺀다.
 const wholeWord = ref(false);
 const useRegex = ref(false);
 
@@ -230,7 +231,7 @@ const noResults = computed(() => Boolean(search.query) && search.done && search.
   height: 26px;
   background: var(--vscode-input-background);
   color: var(--vscode-input-foreground);
-  border: 1px solid var(--vscode-input-border, transparent);
+  border: 1px solid var(--vscode-input-border);
   border-radius: 4px;
   overflow: hidden;
 }

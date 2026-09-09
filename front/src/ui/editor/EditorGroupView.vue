@@ -14,6 +14,7 @@ import TerminalView from './TerminalView.vue';
 import FolderView from './FolderView.vue';
 import FileIcon from '../widgets/FileIcon.vue';
 import ProgressBar from '../widgets/ProgressBar.vue';
+import { fmtMB } from './folderFmt';
 
 const props = defineProps<{ group: EditorGroup }>();
 
@@ -119,9 +120,6 @@ const overlay = computed<Overlay | null>(() => {
 });
 
 /** 안내 문구용 크기 표기 — 상한이 수십 MB 라 MB 고정으로 충분하다 */
-function fmtMB(bytes: number): string {
-  return `${(bytes / (1024 * 1024)).toFixed(2)}MB`;
-}
 
 function focusGroup() {
   editors.activeGroupId = props.group.id;
@@ -138,17 +136,15 @@ const SHORTCUTS = [
   <div class="editor-group" @mousedown="focusGroup">
     <!-- 빈 그룹도 탭바를 그린다 — 자물쇠·닫기 × 자리 (editor-group-empty-lock) -->
     <TabBar :group="group" />
-    <template v-if="group.tabs.length">
-      <div v-if="crumbs.length" class="breadcrumbs">
-        <template v-for="(seg, i) in crumbs" :key="i">
-          <span v-if="i > 0" class="codicon codicon-chevron-right sep" />
-          <span class="crumb">
-            <FileIcon v-if="i === crumbs.length - 1" :name="seg" />
-            <span class="crumb-label">{{ seg }}</span>
-          </span>
-        </template>
-      </div>
-    </template>
+    <div v-if="crumbs.length" class="breadcrumbs">
+      <template v-for="(seg, i) in crumbs" :key="i">
+        <span v-if="i > 0" class="codicon codicon-chevron-right sep" />
+        <span class="crumb">
+          <FileIcon v-if="i === crumbs.length - 1" :name="seg" />
+          <span class="crumb-label">{{ seg }}</span>
+        </span>
+      </template>
+    </div>
     <div class="editor-body">
       <!-- 활성 탭의 로드가 800ms 를 넘김 — 제목 영역(탭바·breadcrumbs) 아래 2px 진행선 (VS Code editor progress) -->
       <ProgressBar v-if="active && editors.slowTabs.has(active.id)" />

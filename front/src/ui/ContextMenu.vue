@@ -1,13 +1,3 @@
-<script lang="ts">
-import { openContextMenu } from '../model/workbench';
-
-// DEV 전용 검증 훅 — Explorer 등이 openContextMenu 를 붙이기 전에도 브라우저 콘솔에서
-// 메뉴를 띄워볼 수 있게 한다. 모듈 로드 시 1회 등록.
-if (import.meta.env.DEV) {
-  (window as unknown as Record<string, unknown>).__openCtx = openContextMenu;
-}
-</script>
-
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { closeContextMenu, workbench, type ContextMenuItem } from '../model/workbench';

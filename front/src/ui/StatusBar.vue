@@ -15,9 +15,14 @@ const branchLabel = computed(() => (repo.value ? (repo.value.dirty ? `${repo.val
 
 // 이미지 탭이면 텍스트 항목(Ln/Col·Spaces·인코딩·언어) 대신 해상도·크기·배율을 표시한다
 // (VS Code 이미지 프리뷰 동일 — 해상도는 로드 전이면 아직 없다)
+/** 텍스트 편집기가 아닌 전용 뷰 탭 — 이 종류에는 Ln/Col·언어 같은 텍스트 항목을 그리지 않는다. 종류가 늘면 여기 한 곳 */
+const viewerTab = computed(() => {
+  const t = fileTab.value;
+  return t !== null && (t.kind === 'hex' || t.kind === 'preview' || t.kind === 'terminal' || t.kind === 'folder');
+});
 const image = computed(() => {
   const t = fileTab.value;
-  if (!t || t.kind === 'hex' || t.kind === 'preview' || t.kind === 'terminal' || t.kind === 'folder') return null;
+  if (!t || viewerTab.value) return null;
   const data = editors.docs.get(t.path)?.image;
   if (data === undefined) return null;
   return { view: editors.imageView.get(t.path), size: base64Bytes(data) };
@@ -27,7 +32,6 @@ const hexSize = computed(() => {
   const t = fileTab.value;
   return t && t.kind === 'hex' ? editors.hex.get(t.path)?.size ?? null : null;
 });
-const viewerTab = computed(() => fileTab.value !== null && (fileTab.value.kind === 'hex' || fileTab.value.kind === 'preview' || fileTab.value.kind === 'terminal' || fileTab.value.kind === 'folder'));
 
 // 접속 진행 중 경과 시간 힌트 — 1초 틱 (헬퍼 업로드처럼 오래 걸리는 단계용)
 const now = ref(Date.now());
@@ -51,6 +55,15 @@ const remoteLabel = computed(() => {
 // 편집기 줌 팝오버 — 배율 항목 클릭으로 열고, 바깥 클릭·Escape 로 닫는다. 슬라이더는 10% 단위(step).
 // WHY: 상태바가 overflow hidden 이라 항목 안의 absolute 는 위로 잘린다 — fixed 로 띄우고 항목의
 //      오른쪽 끝에 맞춘다 (열 때 한 번 계산; 상태바는 창 맨 아래 고정이라 bottom 은 상수)
+/** 상태바 줌 항목이 다루는 값 — 텍스트 편집기 탭은 편집기 줌, 터미널 탭은 터미널 줌, 그 외(hex·preview·folder·없음)는 항목 없음.
+ *  두 줌은 범위(EDITOR_ZOOM_*)만 같고 값은 서로 다른 상태다 */
+const zoom = computed(() => {
+  const t = fileTab.value;
+  if (!t) return null;
+  if (t.kind === 'terminal') return { title: 'Terminal Zoom', value: terminalView.zoom, set: setTerminalZoom };
+  if (viewerTab.value || image.value) return null; // 이미지 탭은 해상도·배율 항목이 대신 선다
+  return { title: 'Editor Zoom', value: editorView.zoom, set: setEditorZoom };
+});
 const zoomOpen = ref(false);
 const zoomItem = ref<HTMLElement | null>(null);
 const zoomRight = ref(0);
@@ -174,7 +187,7 @@ function fmtSize(bytes: number): string {
         </div>
       </template>
       <div v-else-if="hexSize !== null" class="statusbar-item"><span>{{ fmtSize(hexSize) }}</span></div>
-      <!-- HTML 프리뷰 탭이면 자동 갱신 토글 — 뷰어 종류별 스위치 (PDF 뷰어는 pdf 키로 같은 자리) -->
+      <!-- HTML 프리뷰 탭이면 자동 갱신 토글 — viewerAutoReload 는 뷰어 종류별 스위치라 다른 뷰어가 생기면 같은 자리 -->
       <div
         v-else-if="fileTab?.kind === 'preview'"
         class="statusbar-item"
@@ -194,38 +207,25 @@ function fmtSize(bytes: number): string {
         <div class="statusbar-item"><span>UTF-8</span></div>
         <div class="statusbar-item"><span>LF</span></div>
         <div class="statusbar-item"><span>{{ languageLabel(fileTab.path) }}</span></div>
-        <!-- 편집기 줌 — 웹뷰 줌(Ctrl+=)과 별개로 편집기 글꼴만. 팝오버는 항목 위로 열린다 -->
-        <div ref="zoomItem" class="statusbar-item zoom" :class="{ open: zoomOpen }" title="Editor Zoom" @click="toggleZoom">
-          <span>{{ editorView.zoom }}%</span>
-          <!-- 슬라이더 하나뿐 — 값은 상태바 항목이 보여준다. 채워진 구간은 트랙 그라디언트로 (ends 는 0~100% 비율) -->
-          <div v-if="zoomOpen" class="zoom-popover" :style="{ right: `${zoomRight}px` }" @click.stop>
-            <input
-              type="range"
-              :min="EDITOR_ZOOM_MIN"
-              :max="EDITOR_ZOOM_MAX"
-              :step="EDITOR_ZOOM_STEP"
-              :value="editorView.zoom"
-              :style="{ '--fill': `${((editorView.zoom - EDITOR_ZOOM_MIN) / (EDITOR_ZOOM_MAX - EDITOR_ZOOM_MIN)) * 100}%` }"
-              @input="setEditorZoom(Number(($event.target as HTMLInputElement).value))"
-            />
-          </div>
-        </div>
       </template>
-      <div v-else-if="fileTab?.kind === 'terminal'" ref="zoomItem" class="statusbar-item zoom" :class="{ open: zoomOpen }" title="Terminal Zoom" @click="toggleZoom">
-        <!-- 터미널 줌 — 편집기 줌과 별개의 값 (Ctrl+= / Ctrl+- / Ctrl+0 은 터미널 포커스 중 이쪽) -->
-        <span>{{ terminalView.zoom }}%</span>
+      <!-- 줌 — 편집기 탭이면 편집기 글꼴 줌(웹뷰 줌 Ctrl+= 와 별개), 터미널 탭이면 터미널 줌(별개의 값, Ctrl+=/-/0 은
+           터미널 포커스 중 이쪽). 어느 쪽인지는 zoom computed 가 고른다. 팝오버는 항목 위로 열린다 -->
+      <div v-if="zoom" ref="zoomItem" class="statusbar-item zoom" :class="{ open: zoomOpen }" :title="zoom.title" @click="toggleZoom">
+        <span>{{ zoom.value }}%</span>
+        <!-- 슬라이더 하나뿐 — 값은 상태바 항목이 보여준다. 채워진 구간은 트랙 그라디언트로 (ends 는 0~100% 비율) -->
         <div v-if="zoomOpen" class="zoom-popover" :style="{ right: `${zoomRight}px` }" @click.stop>
           <input
             type="range"
             :min="EDITOR_ZOOM_MIN"
             :max="EDITOR_ZOOM_MAX"
             :step="EDITOR_ZOOM_STEP"
-            :value="terminalView.zoom"
-            :style="{ '--fill': `${((terminalView.zoom - EDITOR_ZOOM_MIN) / (EDITOR_ZOOM_MAX - EDITOR_ZOOM_MIN)) * 100}%` }"
-            @input="setTerminalZoom(Number(($event.target as HTMLInputElement).value))"
+            :value="zoom.value"
+            :style="{ '--fill': `${((zoom.value - EDITOR_ZOOM_MIN) / (EDITOR_ZOOM_MAX - EDITOR_ZOOM_MIN)) * 100}%` }"
+            @input="zoom.set(Number(($event.target as HTMLInputElement).value))"
           />
         </div>
       </div>
+      <!-- ponytail: 알림 센터(벨) 없음 — 정적 아이콘. 지난 알림을 다시 볼 필요가 생기면 model/notifications 의 표식과 함께 올린다 -->
       <div class="statusbar-item" title="No Notifications">
         <span class="codicon codicon-bell" />
       </div>
@@ -273,8 +273,8 @@ function fmtSize(bytes: number): string {
   font-size: 14px;
 }
 .statusbar-item.connecting {
-  background: var(--vscode-statusBarItem-remoteBackground, #16825d);
-  color: var(--vscode-statusBarItem-remoteForeground, #ffffff);
+  background: var(--vscode-statusBarItem-remoteBackground);
+  color: var(--vscode-statusBarItem-remoteForeground);
 }
 .statusbar-item.zoom.open {
   background: var(--vscode-statusBarItem-hoverBackground);
@@ -287,8 +287,8 @@ function fmtSize(bytes: number): string {
   box-sizing: border-box;
   display: flex;
   align-items: center;
-  background: var(--vscode-editorWidget-background, #252526);
-  border: 1px solid var(--vscode-editorWidget-border, #454545);
+  background: var(--vscode-editorWidget-background);
+  border: 1px solid var(--vscode-editorWidget-border);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.36);
   cursor: default;
   z-index: 100;
@@ -302,8 +302,8 @@ function fmtSize(bytes: number): string {
   margin: 0;
   background: transparent;
   cursor: pointer;
-  --track: var(--vscode-scrollbarSlider-background, rgba(121, 121, 121, 0.4));
-  --accent: var(--vscode-focusBorder, #0078d4);
+  --track: var(--vscode-scrollbarSlider-background);
+  --accent: var(--vscode-focusBorder);
 }
 .zoom-popover input[type='range']::-webkit-slider-runnable-track {
   height: 3px;
@@ -326,7 +326,7 @@ function fmtSize(bytes: number): string {
   gap: 8px;
 }
 .statusbar-item.vim .vim-cmdline {
-  font-family: var(--vscode-editor-font-family, monospace);
+  font-family: monospace;
 }
 .statusbar-item.vim .vim-cmdline-input {
   width: 1px;
@@ -346,7 +346,7 @@ function fmtSize(bytes: number): string {
   text-overflow: ellipsis;
 }
 .statusbar-item.offline {
-  background: var(--vscode-statusBarItem-offlineBackground, #6c1717);
-  color: var(--vscode-statusBarItem-offlineForeground, #ffffff);
+  background: var(--vscode-statusBarItem-offlineBackground);
+  color: var(--vscode-statusBarItem-offlineForeground);
 }
 </style>

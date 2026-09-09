@@ -54,7 +54,6 @@ const ACTIONS: Record<string, { icon: string; label: string; run: () => void }[]
     { icon: 'codicon-clear-all', label: 'Clear Search Results', run: clearSearch },
     { icon: 'codicon-collapse-all', label: 'Collapse All', run: collapseAllResults },
   ],
-  scm: [],
   remote: [
     { icon: 'codicon-refresh', label: 'Refresh', run: () => void refreshHosts() },
   ],
@@ -101,7 +100,7 @@ const actions = computed(() => {
   display: flex;
   flex-direction: column;
   background: var(--vscode-sideBar-background);
-  color: var(--vscode-sideBar-foreground, var(--vscode-foreground));
+  color: var(--vscode-sideBar-foreground);
   flex-shrink: 0;
   overflow: hidden;
 }

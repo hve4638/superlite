@@ -35,7 +35,12 @@ export function startNewTabDrag(kind: 'new-folder' | 'new-terminal'): void {
 }
 
 export function endEditorDrag(): void {
+  // 읽는 쪽은 kind 로 먼저 거르지만, 직전 드래그의 값이 남아 새지 않도록 전부 되돌린다
   editorDrag.kind = 'none';
+  editorDrag.groupId = 0;
+  editorDrag.tabId = '';
+  editorDrag.path = '';
+  editorDrag.paths = [];
 }
 
 /** 다른 창에서 끌고 온 편집기 탭·탐색기 경로인가 — 이 창의 드래그가 아니고(editorDrag 없음) 창 간 MIME 이

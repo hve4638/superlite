@@ -130,7 +130,7 @@ defineExpose({ toggleConf });
     </div>
     <section v-if="confOpen" class="conf">
       <div class="pane-header">
-        <span class="pane-title">tmux.conf</span>
+        <span>tmux.conf</span>
         <button class="save" :disabled="confSaving" @click="void saveConf()">Save</button>
       </div>
       <textarea v-model="confText" class="conf-text" spellcheck="false" placeholder="# 사용자 tmux 설정 — 내장 기본값(base.conf) 뒤에 적용된다" />
@@ -150,7 +150,7 @@ defineExpose({ toggleConf });
   display: flex;
   gap: 6px;
   padding: 6px 12px;
-  color: var(--vscode-errorForeground, #f14c4c);
+  color: var(--vscode-errorForeground);
   word-break: break-word;
 }
 .empty-note {
@@ -226,7 +226,7 @@ defineExpose({ toggleConf });
   flex-direction: column;
   height: 45%;
   min-height: 120px;
-  border-top: 1px solid var(--vscode-sideBarSectionHeader-border, transparent);
+  border-top: 1px solid var(--vscode-sideBarSectionHeader-border);
 }
 .pane-header {
   display: flex;
@@ -256,7 +256,7 @@ defineExpose({ toggleConf });
   flex: 1;
   min-height: 0;
   resize: none;
-  font-family: var(--vscode-editor-font-family, monospace);
+  font-family: monospace;
   font-size: 12px;
   background: var(--vscode-input-background);
   color: var(--vscode-input-foreground);

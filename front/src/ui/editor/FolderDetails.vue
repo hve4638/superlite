@@ -88,7 +88,7 @@ function outsideRows(e: Event): boolean {
       @contextmenu="outsideRows($event) && ($event.preventDefault(), emit('contextmenu', null, $event))"
     >
       <div v-if="!listing || (listing.entries === null && !listing.error)" class="notice">
-        <span class="codicon codicon-loading codicon-modifier-spin loading" /> Loading…
+        <span class="codicon codicon-loading codicon-modifier-spin" /> Loading…
       </div>
       <div v-else-if="listing.error" class="notice error">{{ listing.error }}</div>
       <div v-else-if="rows.length === 0" class="notice">This folder is empty.</div>

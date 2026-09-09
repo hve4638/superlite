@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 탐색기 인라인 이름 입력 (VS Code explorer InputBox 근사) — 실시간 검증, Enter 커밋/
+// 인라인 이름 입력 (VS Code explorer InputBox 근사; 탐색기 트리와 폴더 탭 FolderView 가 쓴다) — 실시간 검증, Enter 커밋/
 // Esc 취소/blur 는 유효하면 커밋. 검증 에러는 입력 아래 붉은 박스 (VS Code 동일).
 import { computed, onMounted, ref, watch } from 'vue';
 

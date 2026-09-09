@@ -29,9 +29,13 @@ onMounted(() => {
 // 이미 마운트된 채 다시 활성화(Ctrl+`·탭 클릭) — remount 가 없으니 포커스 요청을 지켜본다.
 // WHY: 활성 탭이 이 터미널일 때만 — 다른 탭으로 옮기는 요청(pre flush, 아직 언마운트 전)을
 //      여기서 삼키면 monaco 가 포커스를 못 받는다
-const isActiveTab = () =>
-  editors.activeGroupId === props.groupId &&
-  editors.groups.find((g) => g.id === props.groupId)?.activeTabId === `terminal:${props.term}`;
+// 탭 id 문자열을 여기서 다시 조립하지 않는다 — id 규칙은 model/editors 의 것이라, 활성 탭 객체를 찾아 종류·term 으로 본다
+const isActiveTab = () => {
+  if (editors.activeGroupId !== props.groupId) return false;
+  const g = editors.groups.find((g) => g.id === props.groupId);
+  const t = g?.tabs.find((t) => t.id === g.activeTabId);
+  return t?.kind === 'terminal' && t.term === props.term;
+};
 watch(
   () => editors.pendingFocus && isActiveTab(),
   (on) => {

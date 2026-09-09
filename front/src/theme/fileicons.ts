@@ -1,4 +1,4 @@
-// Seti 아이콘 최소 매핑 — vs-seti-icon-theme.json 에서 픽스처에 필요한 항목만 발췌.
+// Seti 아이콘 최소 매핑 — vs-seti-icon-theme.json 에서 발췌한, 탐색기·퀵인풋이 실제로 쓰는 유일한 표 (확장자 7개).
 // 문자 코드는 seti.woff 의 PUA 코드포인트다.
 
 interface IconDef {

@@ -194,7 +194,7 @@ function menuFor(node: TreeNode, sel: TreeNode[]): ContextMenuItem[] {
     { separator: true },
     { label: 'Cut', keybinding: 'Ctrl+X', enabled: false },
     { label: 'Copy', keybinding: 'Ctrl+C', enabled: false },
-    { label: 'Copy Path', keybinding: 'Shift+Alt+C', run: () => void navigator.clipboard.writeText(sel.map((n) => n.path).join('\n')) },
+    { label: 'Copy Path', run: () => void navigator.clipboard.writeText(sel.map((n) => n.path).join('\n')) },
     ...(isRemote.value
       ? [{ separator: true }, { label: 'Download...', run: () => void downloadAll(sel) }]
       : []),
@@ -677,13 +677,13 @@ defineExpose({
   padding: 5px 0;
   border: none;
   border-radius: 2px;
-  background: var(--vscode-button-background, #0e639c);
-  color: var(--vscode-button-foreground, #ffffff);
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
   font-size: 13px;
   cursor: pointer;
 }
 .no-folder-open:hover {
-  background: var(--vscode-button-hoverBackground, #1177bb);
+  background: var(--vscode-button-hoverBackground);
 }
 .explorer-view {
   flex: 1;
@@ -699,7 +699,6 @@ defineExpose({
   flex-direction: column;
 }
 
-/* ===== pane header (Outline·Timeline 스텁 — spec .pane-header: 22px, 11px/700, bg #181818) ===== */
 .conn-error {
   display: flex;
   gap: 6px;
@@ -712,6 +711,7 @@ defineExpose({
   flex: none;
   font-size: 16px;
 }
+/* ===== pane header (Outline·Timeline 스텁 — spec .pane-header: 22px, 11px/700, bg #181818) ===== */
 .pane-header {
   display: flex;
   align-items: center;
@@ -778,7 +778,7 @@ defineExpose({
 }
 /* 포커스 행 — 선택 집합 안에서 키보드·범위 선택의 기준 (VS Code list.focusOutline) */
 .tree:focus-within .row.focused {
-  outline: 1px solid var(--vscode-list-focusOutline, var(--vscode-focusBorder));
+  outline: 1px solid var(--vscode-list-focusOutline);
   outline-offset: -1px;
 }
 /* OS 드롭 업로드 대상 강조 — 폴더 행은 배경, 루트(행 밖·루트 파일 위)는 트리 테두리 (VS Code 동일 감각) */

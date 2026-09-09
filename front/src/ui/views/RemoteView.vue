@@ -488,20 +488,20 @@ function basename(path: string): string {
   min-height: 40px;
   margin: 5px 8px 5px 6px;
   padding: 4px 6px;
-  border: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.25));
+  border: 1px solid var(--vscode-widget-border);
   border-radius: 5px;
-  background: var(--vscode-editorWidget-background, rgba(128, 128, 128, 0.06));
+  background: var(--vscode-editorWidget-background);
   white-space: nowrap;
   cursor: pointer;
 }
 /* hover 는 배경·윤곽을 또렷하게 (평소 카드는 흐릿 — 사용자 요청 2026-09-08) */
 .row:hover {
   background: var(--vscode-list-hoverBackground);
-  border-color: var(--vscode-descriptionForeground, #9d9d9d);
+  border-color: var(--vscode-descriptionForeground);
 }
 .row.selected {
   background: var(--vscode-list-inactiveSelectionBackground);
-  border-color: var(--vscode-focusBorder, #007fd4);
+  border-color: var(--vscode-focusBorder);
 }
 /* drift·missing: 고정 저장본이 현재 config 와 다름 / config 에 없음 */
 .row.drift .row-name {
@@ -523,8 +523,8 @@ function basename(path: string): string {
    - 그룹 안 앞·뒤: 그룹 카드 안쪽에 들여 그은 얇은 액센트 선 (2px)
    - 가운데(그룹 만들기): 카드 배경·점선 테두리 강조 + 오른쪽 "+ Group" 표시 */
 .row.drop-into {
-  background: var(--vscode-list-dropBackground, rgba(83, 89, 93, 0.5));
-  border: 1px dashed var(--vscode-focusBorder, #007fd4);
+  background: var(--vscode-list-dropBackground);
+  border: 1px dashed var(--vscode-focusBorder);
 }
 .row.drop-into .row-actions {
   display: none;
@@ -538,8 +538,8 @@ function basename(path: string): string {
   padding: 1px 6px;
   border-radius: 9px;
   font-size: 11px;
-  background: var(--vscode-focusBorder, #007fd4);
-  color: var(--vscode-button-foreground, #fff);
+  background: var(--vscode-focusBorder);
+  color: var(--vscode-button-foreground);
   pointer-events: none;
 }
 .pane-body > .row.drop-before::before,
@@ -552,7 +552,7 @@ function basename(path: string): string {
   right: -4px;
   height: 3px;
   border-radius: 2px;
-  background: var(--vscode-focusBorder, #007fd4);
+  background: var(--vscode-focusBorder);
   pointer-events: none;
   z-index: 1;
 }
@@ -571,7 +571,7 @@ function basename(path: string): string {
   left: 12px;
   right: 6px;
   height: 2px;
-  background: var(--sl-accent, var(--vscode-focusBorder));
+  background: var(--sl-accent);
   pointer-events: none;
   z-index: 1;
 }
@@ -592,8 +592,8 @@ function basename(path: string): string {
   position: relative;
   margin: 5px 8px 5px 16px;
   padding: 3px 3px 3px 5px;
-  border: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.25));
-  border-left: 3px solid var(--sl-accent, var(--vscode-focusBorder));
+  border: 1px solid var(--vscode-widget-border);
+  border-left: 3px solid var(--sl-accent);
   border-radius: 6px;
   background: rgba(128, 128, 128, 0.04);
 }
@@ -629,10 +629,10 @@ function basename(path: string): string {
   flex: 1;
   height: 16px;
   padding: 0 4px;
-  border: 1px solid var(--vscode-focusBorder, #007fd4);
+  border: 1px solid var(--vscode-focusBorder);
   border-radius: 2px;
-  background: var(--vscode-input-background, #3c3c3c);
-  color: var(--vscode-input-foreground, inherit);
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
   font: inherit;
   font-size: 11px;
   outline: none;
