@@ -391,26 +391,6 @@ struct Program {
     fallback: Option<String>,
 }
 
-/// 데몬 환경에 UTF-8 로케일이 없을 때 셸에 줄 LANG (ticket tmux-server-cwd-utf8). ssh 로 뜬 원격 데몬은
-/// LANG 이 없다 (Windows OpenSSH 는 로케일을 보내지 않고 비대화 셸은 .bashrc 를 안 탄다) — 그러면 셸 안
-/// bash·ls·git 이 한글을 8진 이스케이프로 찍고 readline 이 바이트 단위로 움직인다. 그 머신에 ko_KR.UTF-8 이
-/// 설치돼 있으면 그것(개발 환경과 동일), 없으면 glibc 내장 C.UTF-8. LC_ALL 이 있거나 LANG 이 이미 UTF-8 이면
-/// None (사용자 설정 존중). ponytail: 한글 중심 — 언어별 후보는 후순위 ticket
-#[cfg(unix)]
-fn locale_fallback() -> Option<String> {
-    let utf8 = |k: &str| std::env::var(k).is_ok_and(|v| v.to_ascii_lowercase().contains("utf"));
-    if std::env::var_os("LC_ALL").is_some() || utf8("LANG") {
-        return None;
-    }
-    let installed = std::process::Command::new("locale")
-        .arg("-a")
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-        .unwrap_or_default();
-    let ko = installed.lines().any(|l| l.replace('-', "").eq_ignore_ascii_case("ko_KR.utf8"));
-    Some(if ko { "ko_KR.UTF-8" } else { "C.UTF-8" }.into())
-}
-
 fn program(root: &Path, session: Option<&str>, attach: Option<&str>) -> Program {
     // 셸 심(`superlite <path>`, ticket cli-open-command)이 이 데몬·세션을 찾는 좌표 (와이어 v9).
     // SUPERLITE_SOCK 은 common 의 우회 변수와 같은 이름 — 셸 안에서 띄운 백엔드·심이 socket_path()
@@ -431,9 +411,8 @@ fn program(root: &Path, session: Option<&str>, attach: Option<&str>) -> Program 
         env.push(("GIT_CONFIG_KEY_0", "credential.helper".into()));
         env.push(("GIT_CONFIG_VALUE_0", helper));
     }
-    #[cfg(unix)]
-    if let Some(lang) = locale_fallback() {
-        env.push(("LANG", lang));
+    if let Some(lang) = crate::tmux::locale_fallback() {
+        env.push(("LANG", lang.to_string()));
     }
     let mut fallback = None;
     if let crate::tmux::Mode::Tmux { bin } = crate::tmux::mode() {

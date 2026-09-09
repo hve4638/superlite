@@ -12,6 +12,9 @@ export fn mode() -> Mode {
 export fn mode_json() -> Value {
   role: attach 응답 terminal 필드 {mode, error?} — 프론트가 사이드바 아이콘·경고 배지를 정한다
 }
+export fn locale_fallback() -> lang? {
+  role: 데몬 환경에 UTF-8 로케일이 없을 때(ssh 원격 데몬 — LANG 없음) tmux 클라이언트·셸에 줄 LANG. 설치돼 있으면 ko_KR.UTF-8, 아니면 C.UTF-8. LC_ALL 이 있거나 LANG 이 이미 UTF-8 이면 None (사용자 설정 존중). 데몬당 한 번 판정. 관리 명령(ls·show-environment·list-panes·display-message)도 이 LANG 으로 띄운다 — C 로케일의 tmux 는 -F 출력의 탭·한글을 _ 로 바꿔 list 의 필드 분리가 깨지고 사이드바 목록이 늘 비었다 (ticket term-persist-status 2026-09-09; 종전엔 term 의 셸 LANG 전용이었다)
+}
 export fn base_args() -> args {
   role: 공통 앞부분 -L/-S 소켓 + -f base.conf (base.conf 재기록 포함)
 }

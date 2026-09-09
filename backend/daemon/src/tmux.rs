@@ -112,15 +112,49 @@ pub(crate) fn base_args() -> Result<Vec<OsString>, String> {
     Ok(a)
 }
 
+/// 데몬 환경에 UTF-8 로케일이 없을 때 tmux 클라이언트·셸에 줄 LANG (ticket tmux-server-cwd-utf8). ssh 로
+/// 뜬 원격 데몬은 LANG 이 없다 (Windows OpenSSH 는 로케일을 보내지 않고 비대화 셸은 .bashrc 를 안 탄다) —
+/// 그러면 셸 안 bash·ls·git 이 한글을 8진 이스케이프로 찍고 readline 이 바이트 단위로 움직인다. 그 머신에
+/// ko_KR.UTF-8 이 설치돼 있으면 그것(개발 환경과 동일), 없으면 glibc 내장 C.UTF-8. LC_ALL 이 있거나 LANG 이
+/// 이미 UTF-8 이면 None (사용자 설정 존중). 데몬당 한 번 판정 — 목록 갱신(3초 주기)마다 locale -a 를 띄우지
+/// 않는다. ponytail: 한글 중심 — 언어별 후보는 후순위 ticket
+pub(crate) fn locale_fallback() -> Option<&'static str> {
+    static LANG: OnceLock<Option<&'static str>> = OnceLock::new();
+    *LANG.get_or_init(|| locale_fallback_for(std::env::var_os("LC_ALL").is_some(), std::env::var("LANG").ok().as_deref()))
+}
+
+fn locale_fallback_for(has_lc_all: bool, lang: Option<&str>) -> Option<&'static str> {
+    if has_lc_all || lang.is_some_and(|v| v.to_ascii_lowercase().contains("utf")) {
+        return None;
+    }
+    let installed = std::process::Command::new("locale")
+        .arg("-a")
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    let ko = installed.lines().any(|l| l.replace('-', "").eq_ignore_ascii_case("ko_KR.utf8"));
+    Some(if ko { "ko_KR.UTF-8" } else { "C.UTF-8" })
+}
+
+// WHY: 관리 명령(ls·show-environment·list-panes·display-message)도 UTF-8 로케일로 띄운다 — C 로케일의
+//      tmux 클라이언트는 출력의 비출력 문자(-F 의 탭 구분자)와 비ASCII(한글 세션 이름)를 전부 `_` 로
+//      바꿔 찍는다. LANG 없는 원격 데몬에서 list 가 필드 분리에 실패해 사이드바 목록이 늘 비었다
+//      (ticket term-persist-status, 2026-09-09 실측: tmux 3.7b)
 fn command(bin: &Path) -> Result<std::process::Command, String> {
     let mut c = std::process::Command::new(bin);
     c.env_remove("TMUX").env_remove("TMUX_PANE").args(base_args()?);
+    if let Some(lang) = locale_fallback() {
+        c.env("LANG", lang);
+    }
     Ok(c)
 }
 
 fn async_command(bin: &Path) -> Result<tokio::process::Command, String> {
     let mut c = tokio::process::Command::new(bin);
     c.env_remove("TMUX").env_remove("TMUX_PANE").args(base_args()?);
+    if let Some(lang) = locale_fallback() {
+        c.env("LANG", lang);
+    }
     Ok(c)
 }
 
@@ -285,5 +319,22 @@ pub(crate) async fn apply_conf(bin: &Path, content: &str) -> Result<String, Stri
         Ok(t) => Ok(t),
         Err(e) if no_server(&e) => Ok(String::new()),
         Err(e) => Ok(e), // 설정 오류는 실패가 아니라 사용자에게 보일 메시지
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// LANG 없는 원격 데몬은 UTF-8 로케일을 채워야 한다 (없으면 tmux 가 -F 의 탭·한글을 _ 로 찍어
+    /// 목록 파싱이 깨진다 — ticket term-persist-status). 사용자 설정(LC_ALL·UTF-8 LANG)은 존중
+    #[cfg(unix)]
+    #[test]
+    fn locale_fallback_fills_missing_utf8() {
+        assert!(locale_fallback_for(false, None).is_some_and(|l| l.ends_with(".UTF-8")), "LANG 없음 → UTF-8 폴백");
+        assert!(locale_fallback_for(false, Some("C")).is_some_and(|l| l.ends_with(".UTF-8")), "C 로케일 → UTF-8 폴백");
+        assert_eq!(locale_fallback_for(false, Some("ko_KR.UTF-8")), None, "이미 UTF-8 이면 존중");
+        assert_eq!(locale_fallback_for(false, Some("en_US.utf8")), None, "utf8 표기도 UTF-8");
+        assert_eq!(locale_fallback_for(true, None), None, "LC_ALL 이 있으면 존중");
     }
 }

@@ -96,6 +96,8 @@ export function createTerminals(backend: ThinBackend, editorsM: ReturnType<typeo
         r.tmux = info;
         r.title = info.name;
         editorsM.renameTerminalTab(inst.id, info.name);
+        // tmux 가 다시 되면 이전 실패 배지를 내린다 — 종전엔 onTerminalMode(재접속)만 비워 세션 끝까지 남았다
+        state.error = null;
         void refreshTerminals();
       } else {
         state.error = error ?? 'tmux 실패';
