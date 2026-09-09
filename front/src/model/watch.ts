@@ -168,6 +168,8 @@ export function createWatch(
       connection.stage = stage; // null = attach 완료
       connection.stageSince = Date.now();
       connection.failedStage = null;
+      // 재접속(Retry)의 첫 단계 — 실패 표시를 진행 표시로 바꾼다. 다시 실패하면 onConnection 이 새 사유를 놓는다
+      connection.error = null;
       connection.uploadBytes = bytes ?? null;
     });
     backend.onConnection?.((ok, error) => {

@@ -19,6 +19,7 @@ import {
   genSessionId,
   openInBackground,
   openWebFolder,
+  reconnectSession,
   remoteHost,
   replaceAppSession,
   rootOfBackend,
@@ -247,7 +248,7 @@ export async function confirmDaemonClean(): Promise<void> {
     const text = await res.text();
     if (!res.ok) throw new Error(text || `HTTP ${res.status}`);
     notify('info', `데몬 정리:\n${text.trim() || '(정리할 것 없음)'}`);
-    backend.reconnect?.();
+    reconnectSession(backend);
   } catch (e) {
     notify('error', `데몬 정리 실패: ${errText(e)}`);
   } finally {
@@ -255,8 +256,8 @@ export async function confirmDaemonClean(): Promise<void> {
   }
 }
 
-/** 영구 실패 뒤 사용자 주도 재접속 (시작 페이지 Retry) — 활성 세션의 백엔드를 다시 연다 */
+/** 영구 실패 뒤 사용자 주도 재접속 (시작 페이지·탐색기 Retry) — 활성 세션을 다시 연다 */
 export function retryActiveConnection(): void {
   const c = activeSessionCtx();
-  c?.backend.reconnect?.();
+  if (c) reconnectSession(c.backend);
 }

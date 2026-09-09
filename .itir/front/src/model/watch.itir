@@ -20,5 +20,5 @@ export fn failureLabel(stage?) -> String {
 }
 
 export fn createWatch(backend, editorsM, filesM, scmM, searchM) {
-  role: 세션별 감시 소비 모듈 생성 — 디바운스 소비자(누적 버퍼·타이머)가 세션마다 독립이다. initConnection(연결 상태 구독)은 초기 로드보다 먼저 호출된다 — 원격 ssh 실패는 첫 응답 자리에 close 4502 로 오므로 init 뒤 구독은 놓친다. onConnectStage 구독도 같은 자리 (첫 단계 이벤트가 attach 응답보다 먼저). connection.error = 재시도 무의미한 영구 실패 사유, failedStage = 그때의 마지막 단계. 실패 알림은 단계별 라벨로 구분. 데몬 기동 단계 실패면 promptDaemonClean — 강제 정리는 사용자 승인 하에서만 (자동 정리 없음, ticket daemon-cleanup)
+  role: 세션별 감시 소비 모듈 생성 — 디바운스 소비자(누적 버퍼·타이머)가 세션마다 독립이다. initConnection(연결 상태 구독)은 초기 로드보다 먼저 호출된다 — 원격 ssh 실패는 첫 응답 자리에 close 4502 로 오므로 init 뒤 구독은 놓친다. onConnectStage 구독도 같은 자리 (첫 단계 이벤트가 attach 응답보다 먼저). connection.error = 재시도 무의미한 영구 실패 사유, failedStage = 그때의 마지막 단계 — 재접속(Retry)의 첫 단계 이벤트가 error 를 지워 실패 표시가 진행 표시로 바뀌고, 다시 실패하면 새 사유가 놓인다. 실패 알림은 단계별 라벨로 구분. 데몬 기동 단계 실패면 promptDaemonClean — 강제 정리는 사용자 승인 하에서만 (자동 정리 없음, ticket daemon-cleanup)
 }

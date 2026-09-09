@@ -59,16 +59,31 @@ export function createSessionCtx(backend: ThinBackend, browseOnly = false): Sess
   const fileops = createFileops(backend, editors, files, scm);
   const watch = createWatch(backend, editors, files, scm, search);
   let initP: Promise<void> | null = null;
+  let connectionInit = false;
   const sessionCtx: SessionCtx = {
     backend, files, editors, scm, search, workbench, terminals, fileops, watch,
-    init: () =>
-      (initP ??= (watch.initConnection(), browseOnly
-        ? workbench.initWorkbench()
-        : Promise.all([
-            workbench.initWorkbench(),
-            files.initFiles(),
-            scm.refreshScm(),
-          ]).then(() => watch.initWatch()))),
+    init: () => {
+      if (initP === null) {
+        // 연결 상태 구독은 한 번 — 재시도 init 이 핸들러를 다시 걸 필요는 없다
+        if (!connectionInit) {
+          connectionInit = true;
+          watch.initConnection();
+        }
+        initP = browseOnly
+          ? workbench.initWorkbench()
+          : Promise.all([
+              workbench.initWorkbench(),
+              files.initFiles(),
+              scm.refreshScm(),
+            ]).then(() => watch.initWatch());
+        // 실패(원격 접속 실패로 첫 요청이 reject)하면 다음 init 이 처음부터 다시 — Retry 가
+        // 백엔드를 다시 연 뒤 init 을 재호출한다 (ticket remote-connect-retry)
+        initP.catch(() => {
+          initP = null;
+        });
+      }
+      return initP;
+    },
     snapshot: () => ({
       editors: editors.snapshot(),
       workbench: workbench.snapshot(),

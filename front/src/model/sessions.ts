@@ -177,6 +177,15 @@ function addLocal(tab: SessionTab, backend?: ThinBackend): SessionCtx {
     if (!t || !env.onRequest) return Promise.reject(new Error(`처리기 없는 요청: ${method}`));
     return env.onRequest(t, ctx, method, params);
   });
+  startInit(tab, ctx);
+  return ctx;
+}
+
+/** 초기 로드 실패(원격 접속 실패)로 다시 시도해야 하는 세션 id — reconnectSession 이 init 을 재실행 */
+const initFailed = new Set<string>();
+
+/** 초기 로드 + 완료 후 이름 채움·워크스페이스 상태 복원. 실패한 세션은 Retry 가 다시 부른다 */
+function startInit(tab: SessionTab, ctx: SessionCtx): void {
   // 이름 채움 — 워크스페이스 정보가 오면 탭 라벨을 실제 이름으로 (부팅 주입 목록은 이미 이름이 있다).
   // 원격 빈 세션은 홈 이름이 오지만 라벨은 Welcome [host] 고정 (TitleBar)
   loading.add(tab.id);
@@ -205,10 +214,24 @@ function addLocal(tab: SessionTab, backend?: ThinBackend): SessionCtx {
       }
     }
   }, () => {
-    // 초기 로드 실패(원격 ssh 접속 실패 등) — 사유는 connection.error 로 탐색기에 보인다
+    // 초기 로드 실패(원격 ssh 접속 실패 등) — 사유는 connection.error 로 탐색기에 보인다.
+    // 세션이 그 사이 닫혔으면 기록하지 않는다
     loading.delete(tab.id);
+    if (ctxs.get(tab.id) === ctx) initFailed.add(tab.id);
   });
-  return ctx;
+}
+
+/** 영구 실패(close 4403·4502) 뒤 사용자 주도 재접속 — 백엔드를 다시 열고, 초기 로드가 실패했던
+ *  세션이면 로드도 처음부터 다시 (트리·SCM·감시 구독은 init 이 성공해야 붙는다). 로드가 끝난 뒤의
+ *  실패는 재연결 알림의 전체 리프레시가 재동기화하므로 init 을 다시 돌리지 않는다 (ticket remote-connect-retry) */
+export function reconnectSession(backend: ThinBackend): void {
+  for (const [id, ctx] of ctxs) {
+    if (ctx.backend !== backend) continue;
+    backend.reconnect?.();
+    const tab = sessions.list.find((t) => t.id === id);
+    if (tab && initFailed.delete(id)) startInit(tab, ctx);
+    return;
+  }
 }
 
 function removeLocal(id: string): void {
@@ -224,6 +247,7 @@ function removeLocal(id: string): void {
   }
   ctxs.delete(id);
   loading.delete(id);
+  initFailed.delete(id);
   untrackWorkspace(id);
   if (idx !== -1) sessions.list.splice(idx, 1);
   ctx.backend.dispose?.();

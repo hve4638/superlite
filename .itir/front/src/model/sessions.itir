@@ -71,6 +71,9 @@ export fn moveSession(id, to) {
 export fn rootOfBackend(backend) -> String? {
   role: 백엔드 핸들 → 그 세션 탭의 root — 강제 정리가 원격 host 를 알아내는 경로
 }
+export fn reconnectSession(backend) {
+  role: 영구 실패(close 4403·4502) 뒤 사용자 주도 재접속 (시작 페이지·탐색기 Retry, 강제 정리 뒤) — backend.reconnect 하고, 초기 로드가 실패했던 세션(initFailed)이면 init 을 다시 돌려 트리·SCM·감시 구독을 붙인다. 로드가 끝난 뒤의 실패는 재연결 알림의 전체 리프레시가 재동기화하므로 init 을 다시 돌리지 않는다 (ticket remote-connect-retry)
+}
 export fn allSessionCtxs() -> SessionCtx[] {
   role: 열려 있는 모든 세션 컨텍스트 — tmux.conf 저장을 접속 중인 데몬 전부에 적용할 때
 }

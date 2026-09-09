@@ -2,13 +2,13 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { files, parentOf, rangeSelect, revealPath, select, selectAll, selectedNodes, toAbsPath, toggleSelect, visibleNodes, toggleDir, type TreeNode } from '../../model/files';
 import { activeTab, baseName, editors, openFile } from '../../model/editors';
-import { openFolder } from '../../model/host';
+import { openFolder, retryActiveConnection } from '../../model/host';
 import { createDir, createFile, deleteEntry, renameEntry, saveClipboardImage, transferEntries, undoFileOp } from '../../model/fileops';
 import { decorationFor } from '../../model/scm';
 import { DND_FILE, activeSessionEmpty, multiWindow, remoteHost, sessionRoot, sessions } from '../../model/sessions';
 import { windowLabel } from '../../model/window';
 import { downloadEntry, uploadDropped, type DroppedEntry } from '../../model/transfer';
-import { connection } from '../../model/watch';
+import { connection, failureLabel, stageLabel } from '../../model/watch';
 import { openContextMenu, openQuickInput, workbench, type ContextMenuItem } from '../../model/workbench';
 import { editorDrag, endEditorDrag, startFileDrag } from '../editor/tabDnd';
 import FileIcon from '../widgets/FileIcon.vue';
@@ -527,10 +527,16 @@ defineExpose({
     <div v-else class="explorer-pane">
       <!-- 루트 첫 로드 중 — 사이드바 제목 아래 2px 에 겹치는 무한 진행선 (VS Code 뷰 progress) -->
       <ProgressBar v-if="files.loading && !connection.error" />
-      <!-- 영구 접속 실패(원격 ssh) — 재연결하지 않으므로 사유를 보인다. 재접속은 탭을 다시 여는 것 -->
-      <div v-if="connection.error" class="conn-error">
+      <!-- 영구 접속 실패(원격 ssh) — 재연결하지 않으므로 사유 + Retry (시작 페이지의 Retry 와 같은
+           경로, ticket remote-connect-retry). 재시도 중에는 접속 단계가 이 자리에 보인다 -->
+      <div v-if="connection.error !== null" class="conn-error">
         <span class="codicon codicon-error" />
-        <span>{{ connection.error }}</span>
+        <span>{{ failureLabel(connection.failedStage) }}: {{ connection.error }}</span>
+        <button class="conn-retry" @click="retryActiveConnection()">Retry</button>
+      </div>
+      <div v-else-if="connection.stage !== null" class="conn-error connecting">
+        <span class="codicon codicon-loading codicon-modifier-spin" />
+        <span>{{ stageLabel(connection.stage, connection.uploadBytes) }}</span>
       </div>
       <div
         ref="treeEl"
@@ -701,15 +707,30 @@ defineExpose({
 
 .conn-error {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
   padding: 8px 12px;
   font-size: 13px;
   color: var(--vscode-errorForeground);
   word-break: break-all;
 }
+.conn-error.connecting {
+  color: inherit;
+  opacity: 0.85;
+}
 .conn-error .codicon {
   flex: none;
   font-size: 16px;
+}
+.conn-retry {
+  padding: 2px 10px;
+  border: 1px solid var(--vscode-button-border);
+  border-radius: 2px;
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+  font-size: 12px;
+  cursor: pointer;
 }
 /* ===== pane header (Outline·Timeline 스텁 — spec .pane-header: 22px, 11px/700, bg #181818) ===== */
 .pane-header {

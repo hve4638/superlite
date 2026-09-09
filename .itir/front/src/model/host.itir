@@ -31,10 +31,10 @@ export fn backendApiUrl(path, query?) -> url? {
   role: 백엔드 자체 HTTP API(/ssh/*) 주소 — 데몬 와이어(/ws) 밖에서 백엔드가 직접 응답하는 첫 표면 (주소·연결은 백엔드 소유 — ws docs/decision/remote-ssh.md). 웹은 같은 오리진 상대 경로, 앱은 주입된 WS endpoint 에서 오리진·토큰 유도. mock 은 null — 호출측(원격 탐색기)이 UI 를 감추는 신호
 }
 export fn confirmDaemonClean() {
-  role: 강제 정리 승인 — 실패 세션의 root(rootOfBackend)에서 host 를 얻어 POST /daemon/clean(host 없으면 로컬)로 superlite-daemon --clean 을 실행하고 결과를 알림으로 보인 뒤 backend.reconnect. 실패는 알림. 승인 없이는 아무것도 죽이지 않는다
+  role: 강제 정리 승인 — 실패 세션의 root(rootOfBackend)에서 host 를 얻어 POST /daemon/clean(host 없으면 로컬)로 superlite-daemon --clean 을 실행하고 결과를 알림으로 보인 뒤 sessions.reconnectSession(초기 로드가 실패했던 세션이면 로드도 다시). 실패는 알림. 승인 없이는 아무것도 죽이지 않는다
 }
 export fn retryActiveConnection() {
-  role: 영구 실패 뒤 사용자 주도 재접속 (시작 페이지 Retry) — 활성 세션 백엔드의 reconnect
+  role: 영구 실패 뒤 사용자 주도 재접속 (시작 페이지·탐색기 Retry) — 활성 세션의 sessions.reconnectSession
 }
 export fn openFolderDialog() {
   role: OS 폴더 다이얼로그 열기 (앱 전용 — native open_folder invoke, 활성 빈 탭이면 replace 동반). Ctrl+Shift+O 커맨드가 쓴다 — 앱의 OS 다이얼로그 병행 통로. Ctrl+O·시작 페이지·탐색기·+ 드롭다운은 경로 입력 퀵인풋을 쓴다 (web-folder-open.md — Ctrl+O 는 모든 환경에서 경로 입력)
