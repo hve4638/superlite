@@ -10,6 +10,7 @@ export type ContextMenuItem
 export type WorkbenchSnapshot
 export val workbench
 export val subShell
+// 서브 창: subShell.sideBarVisible 이 참이 되거나 그 상태에서 활성 세션이 바뀌면 그 세션의 loadWorkspace — lazy 세션의 트리·SCM 을 그때 읽는다 (ticket window-detach-reload)
 
 export fn createWorkbench(backend) {
   role: 세션별 셸 상태 모듈 생성. snapshot/restore — 창 이동 핸드오프의 레이아웃 몫(사이드바 크기·표시·뷰릿, 오버레이 제외)

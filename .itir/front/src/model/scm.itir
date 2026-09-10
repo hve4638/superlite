@@ -11,6 +11,8 @@ export val scm
 export val CHANGE_LETTER
 export val CHANGE_COLOR
 
+export type ScmSnapshot
+
 export fn createScm(backend, editorsM) {
   role: 세션별 SCM 모듈 생성 — 변경 클릭이 여는 diff·파일이 같은 세션의 editors 인스턴스로 가도록 묶는다. noteDirEntries: 트리 나열 결과의 repo 표식으로 펼쳐서 보인 저장소를 즉시 등록하고 그 저장소만 상태를 받는다 (files.onDirLoaded 구독자)
 }

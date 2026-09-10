@@ -592,6 +592,103 @@ fn set_zoom(window: tauri::WebviewWindow, state: tauri::State<AppState>, action:
     }
 }
 
+/// OS 입력기(IME) 전환 — 편집기 vim 모드의 한글 IME 문제 (ticket editor-vim-ime-imswitch, 2026-09-08 사용자 결정):
+/// 브라우저 위의 어떤 vim 계층도 편집기 안에서 OS IME 를 이길 수 없어(한글이 켜져 있으면 normal 모드 키가
+/// 조합키 Process 로 온다) VSCodeVim 의 im-select 처럼 편집기 밖에서 입력기를 바꾼다. front 의 model/nvim 이
+/// non-insert 모드 진입에 enabled=false(영문 강제 — 그때의 상태를 창 단위로 기억), insert 진입·vim 모드 해제에
+/// enabled=true(기억한 상태 복원) 로 부른다. Windows 만 — macOS·Linux 는 무동작 (배포 타깃이 Windows, build.sh)
+#[tauri::command]
+fn set_ime(window: tauri::WebviewWindow, enabled: bool) {
+    #[cfg(windows)]
+    win_ime::apply(&window, enabled);
+    #[cfg(not(windows))]
+    let _ = (window, enabled);
+}
+
+/// Windows 전용 IME 열림 상태 제어 — IMM32 의 WM_IME_CONTROL(IMC_GET/SETOPENSTATUS) 을 기본 IME 창에 보낸다.
+/// 한국어 IME 는 한/영 토글이 열림 상태다(열림 = 한글, 닫힘 = 영문). 대상은 이 창의 HWND 와 자손 창 전부의
+/// 기본 IME 창(중복 제거) — WebView2 의 입력 창(Chrome_WidgetWin_*)은 다른 프로세스 스레드라 우리 스레드의
+/// 기본 IME 창만으로는 닿지 않을 수 있어 자손까지 함께 보낸다 (SendMessage 는 프로세스 경계를 넘는다).
+/// WHY: ImmGetContext/ImmSetOpenStatus 는 다른 프로세스 창의 컨텍스트를 주지 않아 메시지 방식을 쓴다.
+///      복원값은 창 label 별로 한 번만 기억한다 — 영문 강제가 잇따라 와도(편집기마다 attach) 첫 상태를 지킨다
+#[cfg(windows)]
+mod win_ime {
+    use std::collections::BTreeMap;
+    use std::sync::Mutex;
+    use windows::core::BOOL;
+    use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+    use windows::Win32::UI::Input::Ime::ImmGetDefaultIMEWnd;
+    use windows::Win32::UI::WindowsAndMessaging::{EnumChildWindows, SendMessageTimeoutW, SMTO_ABORTIFHUNG, WM_IME_CONTROL};
+
+    const IMC_GETOPENSTATUS: usize = 0x0005;
+    const IMC_SETOPENSTATUS: usize = 0x0006;
+
+    /// 창 label → 영문 강제 직전의 열림 상태. 항목이 있으면 강제 중
+    static SAVED: Mutex<BTreeMap<String, bool>> = Mutex::new(BTreeMap::new());
+
+    pub fn apply(window: &tauri::WebviewWindow, enabled: bool) {
+        let Ok(hwnd) = window.hwnd() else { return };
+        let label = window.label().to_string();
+        let targets = ime_windows(hwnd);
+        if targets.is_empty() {
+            eprintln!("superlite: IME 창 없음 ({label})");
+            return;
+        }
+        let mut saved = SAVED.lock().unwrap();
+        if enabled {
+            // 강제 중이 아니면 되돌릴 것도 없다
+            let Some(open) = saved.remove(&label) else { return };
+            set_open(&targets, open);
+        } else {
+            if !saved.contains_key(&label) {
+                saved.insert(label, get_open(&targets));
+            }
+            set_open(&targets, false);
+        }
+    }
+
+    fn ime_windows(root: HWND) -> Vec<HWND> {
+        let mut hwnds = vec![root];
+        unsafe extern "system" fn collect(h: HWND, lp: LPARAM) -> BOOL {
+            unsafe { (*(lp.0 as *mut Vec<HWND>)).push(h) };
+            BOOL(1)
+        }
+        unsafe {
+            let _ = EnumChildWindows(Some(root), Some(collect), LPARAM(&mut hwnds as *mut Vec<HWND> as isize));
+        }
+        let mut out: Vec<HWND> = Vec::new();
+        for h in hwnds {
+            let ime = unsafe { ImmGetDefaultIMEWnd(h) };
+            if !ime.0.is_null() && !out.contains(&ime) {
+                out.push(ime);
+            }
+        }
+        out
+    }
+
+    /// WHY: 대상 IME 창은 WebView2 프로세스 소속이라 동기 SendMessage 는 그쪽이 멈추면 메인 스레드까지 끌려간다 —
+    ///      상한을 두고, 이미 응답 없는 창이면 바로 포기한다. 시간 초과·실패는 None (읽기는 닫힘으로 친다)
+    fn ime_control(h: HWND, cmd: usize, arg: isize) -> Option<isize> {
+        let mut result = 0usize;
+        let ok = unsafe {
+            SendMessageTimeoutW(h, WM_IME_CONTROL, WPARAM(cmd), LPARAM(arg), SMTO_ABORTIFHUNG, IME_TIMEOUT_MS, Some(&mut result))
+        };
+        (ok.0 != 0).then_some(result as isize)
+    }
+
+    const IME_TIMEOUT_MS: u32 = 200;
+
+    fn get_open(targets: &[HWND]) -> bool {
+        targets.iter().any(|&h| ime_control(h, IMC_GETOPENSTATUS, 0).is_some_and(|r| r != 0))
+    }
+
+    fn set_open(targets: &[HWND], open: bool) {
+        for &h in targets {
+            ime_control(h, IMC_SETOPENSTATUS, open as isize);
+        }
+    }
+}
+
 /// 빈 세션 root 판정 — None(로컬 시작 페이지) 또는 경로 없는 원격 `ssh://host`(원격 시작
 /// 페이지 — 그 호스트 탐색만, relay 참조). 둘 다 폴더 열기가 제자리 교체하는 대상이다
 fn is_empty_root(root: Option<&std::path::Path>) -> bool {
@@ -726,6 +823,50 @@ async fn local_write(path: String, data: String, append: bool) -> Result<(), Str
 #[tauri::command]
 fn local_mkdir(path: String) -> Result<(), String> {
     std::fs::create_dir_all(&path).map_err(|e| e.to_string())
+}
+
+/// 다운로드 완료 알림의 "폴더 열기"(ticket download-conveniences) — OS 파일 관리자로 path 를
+/// 드러낸다. 파일이면 그 파일이 든 폴더를 열어 선택 표시(Windows explorer /select, macOS open -R),
+/// 폴더면 그 폴더 자체를 연다. Linux 는 선택 표시 없이 폴더 열기(xdg-open). 임의 로컬 경로를
+/// 받는 근거는 open_folder_path 와 같다. 프로세스 종료는 기다리지 않는다 — explorer 는
+/// 성공해도 종료 코드가 1 이라 결과를 신뢰할 수 없다
+#[tauri::command]
+fn reveal_in_folder(path: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if !p.exists() {
+        return Err(format!("경로가 없다: {path}"));
+    }
+    let is_dir = p.is_dir();
+    #[cfg(windows)]
+    let mut cmd = {
+        use std::os::windows::process::CommandExt as _;
+        // explorer 는 "/select," 와 경로가 한 인자여야 하고 '/' 구분자를 받지 않는다
+        let win = path.replace('/', "\\");
+        let mut c = std::process::Command::new("explorer");
+        if is_dir {
+            c.raw_arg(format!("\"{win}\""));
+        } else {
+            c.raw_arg(format!("/select,\"{win}\""));
+        }
+        c
+    };
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("open");
+        if !is_dir {
+            c.arg("-R");
+        }
+        c.arg(&path);
+        c
+    };
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let mut cmd = {
+        let dir = if is_dir { p } else { p.parent().unwrap_or(p) };
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(dir);
+        c
+    };
+    cmd.spawn().map(|_| ()).map_err(|e| format!("파일 관리자 실행 실패: {e}"))
 }
 
 /// front 폴더 퀵인풋(Ctrl+O)이 확정한 절대 경로로 이 창에 새 세션 탭 추가. 경로 지목 통로
@@ -1827,6 +1968,7 @@ fn main() {
             open_group,
             open_groups,
             set_zoom,
+            set_ime,
             get_workspace_state,
             set_workspace_state,
             set_workspace_sub_state,
@@ -1834,7 +1976,8 @@ fn main() {
             reload_window,
             pick_save_target,
             local_write,
-            local_mkdir
+            local_mkdir,
+            reveal_in_folder
         ])
         // 창 닫힘(X·close_if_empty) = 그 창의 세션만 정리 (메인 창이면 서브 창도 함께 닫는다)
         .on_window_event(|window, event| {

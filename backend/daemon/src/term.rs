@@ -455,7 +455,11 @@ fn program(root: &Path, session: Option<&str>, attach: Option<&str>) -> Program 
     cmd.cwd(root);
     // ConPTY 세계엔 TERM 규약이 없다 — 심어두면 Windows 태생 도구들이 오판한다
     #[cfg(unix)]
-    cmd.env("TERM", "xterm-256color");
+    {
+        cmd.env("TERM", "xterm-256color");
+        // tmux 방식은 base.conf 의 전역 환경이 준다 — plain 도 같은 값 (프론트 xterm.js 는 truecolor)
+        cmd.env("COLORTERM", "truecolor");
+    }
     for (k, v) in env {
         cmd.env(k, v);
     }

@@ -12,9 +12,10 @@
  * nvim 이 아직 없으면 relay 가 GitHub 릴리스에서 내려받는데(ticket nvim-on-demand), 그때는 바이너리에
  * 앞서 텍스트 프레임 `downloading <버전> <MB>` 하나가 온다 — 알림만 띄우고 기다린다 (진행률 없음).
  */
-import { reactive } from '@vue/reactivity';
+import { reactive, watch } from '@vue/reactivity';
 import { Encoder, ExtensionCodec, decode, decodeMultiStream } from '@msgpack/msgpack';
 import { notify } from './notifications';
+import { setIme } from './window';
 import { activeGroup, activeTab, closeTab, saveActive } from './editors';
 import { refreshScm } from './scm';
 
@@ -49,6 +50,16 @@ export const vimMode = reactive({
 
 
 /** 상태바 라벨 — 모드 문자열 → vim 표기 */
+/** insert·replace 계열 — Monaco 가 타이핑을 맡고 OS IME 가 살아 있어야 하는 모드 */
+export const isInsertLike = (mode: string): boolean => mode.startsWith('i') || mode.startsWith('R');
+
+// OS 입력기 전환 (ticket editor-vim-ime-imswitch): ready 인 동안 non-insert 모드면 영문 강제, insert 로
+// 들어가거나 vim 모드가 꺼지면 복원. 모드는 창(nvim 프로세스) 단위라 편집기가 아니라 여기서 지켜본다
+watch(
+  () => vimMode.status === 'ready' && !isInsertLike(vimMode.mode),
+  (english) => setIme(!english),
+);
+
 export function vimModeLabel(mode: string): string {
   if (mode.startsWith('i')) return 'INSERT';
   if (mode.startsWith('R')) return 'REPLACE';

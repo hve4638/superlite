@@ -3,9 +3,13 @@ role: 알림 토스트 상태 — VS Code notifications 근사. 우하단 스택
 export val notifications
 export type Severity
 export type Notification
+export type NotifyAction
 
-export fn notify(severity, message) {
-  role: 알림 추가 — 에러 표면화의 단일 진입점. model 계층의 backend 실패 catch 가 호출한다
+export fn notify(severity, message, action?) {
+  role: 알림 추가 — 에러 표면화의 단일 진입점. model 계층의 backend 실패 catch 가 호출한다. action({label, run}) 은 토스트에 버튼 하나로 그려지는 선택 액션 (ticket download-conveniences — 다운로드 완료의 "Open Folder". 다른 알림도 쓸 수 있는 공통 표면)
+}
+export fn runNotificationAction(id) {
+  role: 액션 버튼 — 토스트를 닫고 action.run 실행 (VS Code notification action 동일)
 }
 export fn errText(e) -> Text {
   role: unknown 에러를 표시 문자열로 (Error.message 우선)

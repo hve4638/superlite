@@ -188,6 +188,10 @@ async fn main() {
     if n > 0 {
         log_line(&format!("superlite-daemon: 헬퍼 캐시의 다른 빌드 {n}개 삭제"));
     }
+    // 살아 있던 tmux 서버에 이 빌드의 base.conf 를 다시 적용 (서버는 데몬보다 오래 산다)
+    if let tmux::Mode::Tmux { bin } = tmux::mode() {
+        tmux::resource_base(bin);
+    }
     #[cfg(unix)]
     let listener = {
         let _ = std::fs::remove_file(&sock); // 락을 쥐었으니 기존 소켓은 crash 잔재다

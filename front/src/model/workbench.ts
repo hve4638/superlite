@@ -1,6 +1,6 @@
-import { reactive } from '@vue/reactivity';
+import { reactive, watch } from '@vue/reactivity';
 import type { ThinBackend } from '../backend/types';
-import { ctx, viewOf } from './ctx';
+import { activeCtx, ctx, viewOf } from './ctx';
 import { subWindow } from './window';
 
 export type ViewletId = 'explorer' | 'search' | 'scm' | 'remote' | 'terminals';
@@ -118,6 +118,17 @@ export const workbench = viewOf(() => ctx().workbench.workbench);
  *  세션 스냅샷(핸드오프)에 실리지 않는다 — 서브 창에서 잠시 펼친 것이 메인 창의 세션에 번지지
  *  않는다 (ticket window-secondary-no-sidebar). 기본 접힘 — VS Code auxiliary window 처럼 편집기 위주 */
 export const subShell = reactive({ sideBarVisible: false });
+
+// 서브 창의 세션은 트리·SCM 을 미뤄 둔다(lazy) — 사이드바를 펼치는 순간(활성 세션이 바뀌어도) 그 세션의
+// 트리·SCM 을 읽는다. 이미 읽은 세션은 무동작 (ticket window-detach-reload)
+if (subWindow) {
+  watch(
+    () => [subShell.sideBarVisible, activeCtx.value] as const,
+    ([shown, c]) => {
+      if (shown && c) void c.loadWorkspace();
+    },
+  );
+}
 
 /** 이 창에서 사이드바를 그리는가 — 메인 창은 세션 상태, 서브 창은 창 단위 상태 */
 export function sideBarShown(): boolean {

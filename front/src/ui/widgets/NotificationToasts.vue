@@ -8,6 +8,7 @@ import {
   notifications,
   pauseNotification,
   resumeNotification,
+  runNotificationAction,
 } from '../../model/notifications';
 
 function onKeydown(e: KeyboardEvent) {
@@ -33,6 +34,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
       <button class="toast-close" aria-label="Close" @click="dismissNotification(n.id)">
         <span class="codicon codicon-close" />
       </button>
+    </div>
+    <div v-if="n.action" class="toast-actions">
+      <button class="toast-action" @click="runNotificationAction(n.id)">{{ n.action.label }}</button>
     </div>
   </div>
 </template>
@@ -68,6 +72,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
 }
 .toast-message {
   flex: 1;
+  /* min-width 0 — flex 기본 min-width:auto 라 공백 없는 긴 경로가 상자를 밀고 나간다.
+     anywhere — 구분자 없는 경로도 상자 폭에서 꺾는다 (VS Code word-break: break-word 상당) */
+  min-width: 0;
+  overflow-wrap: anywhere;
   line-height: 18px;
   user-select: text;
 }
@@ -82,5 +90,24 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown));
 }
 .toast-close:hover {
   opacity: 1;
+}
+/* VS Code notification-list-item-buttons-container 근사 — 본문 아래 오른쪽 정렬 버튼 */
+.toast-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 8px 10px 36px;
+}
+.toast-action {
+  padding: 2px 10px;
+  border: none;
+  border-radius: 2px;
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  font-size: 13px;
+  line-height: 18px;
+  cursor: pointer;
+}
+.toast-action:hover {
+  background: var(--vscode-button-hoverBackground);
 }
 </style>

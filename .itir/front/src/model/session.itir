@@ -13,6 +13,8 @@ role: 세션 컨텍스트 조립 — 세션(워크스페이스) 하나가 쓰는
 export type SessionCtx
 export type SessionSnapshot
 
-export fn createSessionCtx(backend, browseOnly?) -> SessionCtx {
-  role: 모듈 팩토리들을 의존 순서(files·editors → scm·search·workbench → terminals(editors 에 탭을 연다)·fileops → watch)로 생성해 컨텍스트로 묶는다. editors 에는 isActive(활성 세션 판별)를 넘긴다 — monaco 훅이 활성 세션에서만 발화해 배경 재로드가 활성 모델을 덮지 않게. init() 은 초기 로드(워크스페이스 정보·트리·SCM)+감시 구독의 멱등 진입점 — 단 실패(원격 접속 실패로 첫 요청 reject)하면 다음 init 이 처음부터 다시 돈다 (연결 상태 구독만 한 번). sessions.reconnectSession 이 Retry 때 부른다 (ticket remote-connect-retry). browseOnly(원격 빈 세션)면 연결 확인과 워크스페이스 정보만 — 트리·SCM·감시는 열지 않는다 (시작 페이지의 폴더 열기가 browseDir 만 쓴다). snapshot/restore 는 세션 탭 창 이동 핸드오프(SessionSnapshot = editors·workbench·terminals 스냅샷) — 연결·트리·SCM 은 새 창이 같은 session id 로 재-attach 해 스스로 로드하므로 나르지 않는다
+export type SessionInitMode
+
+export fn createSessionCtx(backend, mode?) -> SessionCtx {
+  role: 모듈 팩토리들을 의존 순서(files·editors → scm·search·workbench → terminals(editors 에 탭을 연다)·fileops → watch)로 생성해 컨텍스트로 묶는다. editors 에는 isActive(활성 세션 판별)를 넘긴다 — monaco 훅이 활성 세션에서만 발화해 배경 재로드가 활성 모델을 덮지 않게. init() 은 초기 로드(워크스페이스 정보·트리·SCM)+감시 구독의 멱등 진입점 — 단 실패(원격 접속 실패로 첫 요청 reject)하면 다음 init 이 처음부터 다시 돈다 (연결 상태 구독만 한 번). sessions.reconnectSession 이 Retry 때 부른다 (ticket remote-connect-retry). mode 'browse'(원격 빈 세션)면 연결 확인과 워크스페이스 정보만 — 트리·SCM·감시는 열지 않는다 (시작 페이지의 폴더 열기가 browseDir 만 쓴다). mode 'lazy'(서브 창의 미러 세션, ticket window-detach-reload)는 워크스페이스 정보·감시만 열고 트리·SCM 첫 로드(loadWorkspace, 멱등)는 사이드바를 펼치거나(workbench 의 subShell 감시) diff 탭이 생길 때(original 이 scm.repoOf 에 의존)로 미룬다 — 그 전까지 watch 의 트리·git 소비자는 workspaceLoaded 게이트로 건너뛴다 (fs 이벤트가 미룬 로드를 되살리지 않게). snapshot/restore 는 세션 탭 창 이동 핸드오프(SessionSnapshot = editors·workbench·terminals·files·scm 스냅샷) — 연결은 새 창이 같은 session id 로 재-attach 한다. 트리·SCM 스냅샷(ticket window-detach-reload)은 새 창이 즉시 그리게 하고, restore 가 오면 'full' init 은 재조회(loadWorkspace)와 스냅샷 도착 중 먼저 오는 쪽으로 끝나 탭 스피너가 attach·워크스페이스 정보까지만 돈다. 재조회는 배경에서 계속 돌고(initFiles 는 병합) restore 뒤 init 완료 시점에 refreshTree·refreshScm 으로 한 번 더 따라잡는다 (스냅샷~새 워처 사이의 변경)
 }

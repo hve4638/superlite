@@ -170,7 +170,8 @@ export function withHost(name: string, root: string): string {
 }
 
 function addLocal(tab: SessionTab, backend?: ThinBackend): SessionCtx {
-  const ctx = createSessionCtx(backend ?? env.backendFor(tab), isRemoteEmpty(tab.root));
+  // 서브 창은 사이드바가 없으니 트리·SCM 은 미룬다 (lazy — 펼칠 때 loadWorkspace, ticket window-detach-reload)
+  const ctx = createSessionCtx(backend ?? env.backendFor(tab), isRemoteEmpty(tab.root) ? 'browse' : subWindow ? 'lazy' : 'full');
   ctxs.set(tab.id, ctx);
   sessions.list.push({ ...tab });
   // 요청자 요청은 그 세션의 연결로 오므로 컨텍스트에 묶어 처리기로 넘긴다 (탭은 id 로 재조회 —

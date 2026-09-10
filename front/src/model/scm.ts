@@ -36,6 +36,12 @@ export interface ScmRepo {
   syncing: string;
 }
 
+/** 창 이동 핸드오프의 SCM 몫 (JSON 직렬화 가능) — 저장소 목록과 선택. 확인 대기(discard)는 나르지 않는다 */
+export interface ScmSnapshot {
+  repos: ScmRepo[];
+  selected: string;
+}
+
 /** 세션별 SCM 모듈 — git 상태·커밋이 세션의 backend·editors 에 묶인다 */
 export function createScm(backend: ThinBackend, editorsM: ReturnType<typeof createEditors>) {
   const { openDiff, openFile } = editorsM;
@@ -170,6 +176,20 @@ export function createScm(backend: ThinBackend, editorsM: ReturnType<typeof crea
     for (const p of found) if (!repoAt(p)) insertRepo(p);
   }
 
+  function snapshot(): ScmSnapshot {
+    return { repos: JSON.parse(JSON.stringify(scm.repos)) as ScmRepo[], selected: scm.selected };
+  }
+
+  /** 스냅샷 적용 — 새 창이 재조회 없이 즉시 그린다 (ticket window-detach-reload). 기존 항목에는 덮어쓰고 없는
+   *  것은 넣는다 (교체가 아니다 — 진행 중인 refreshRepo 가 든 참조가 고아가 되지 않게). 원격 동기화 진행
+   *  표시는 출처 창의 것이라 지운다. 자동 탐색은 스냅샷이 대신한 것으로 본다 */
+  function restore(s: ScmSnapshot): void {
+    for (const r of s.repos) Object.assign(repoAt(r.path) ?? insertRepo(r.path), r, { syncing: '' });
+    scm.selected = s.selected;
+    scanned = true;
+    rebuildAggregate();
+  }
+
   /** 재탐색 (SCM 뷰 액션) — 자동 탐색이 놓친 저장소를 다시 찾는다 */
   async function rescanRepos(): Promise<void> {
     scanned = false;
@@ -297,7 +317,7 @@ export function createScm(backend: ThinBackend, editorsM: ReturnType<typeof crea
   }
 
   return {
-    scm, refreshScm, rescanRepos, noteDirEntries, repoOf, relPath, activeRepo, selectRepo, openChange, openChangeFile, commit,
+    scm, refreshScm, snapshot, restore, rescanRepos, noteDirEntries, repoOf, relPath, activeRepo, selectRepo, openChange, openChangeFile, commit,
     decorationFor, stage, unstage, requestDiscard, confirmDiscard, cancelDiscard, branches, checkout, sync,
   };
 }

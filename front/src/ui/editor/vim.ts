@@ -22,7 +22,7 @@
  */
 import { watch } from 'vue';
 import { KeyCode, Range, Selection, SelectionDirection, Uri, editor as monacoEditor, type IDisposable } from 'monaco-editor';
-import { cmdlineKey, nvim, runEx, toNvimKey, vimMode, type NvimClient } from '../../model/nvim';
+import { cmdlineKey, isInsertLike, nvim, runEx, toNvimKey, vimMode, type NvimClient } from '../../model/nvim';
 import { isWorkbenchChord } from '../../model/commands';
 
 type CodeEditor = monacoEditor.IStandaloneCodeEditor;
@@ -39,8 +39,6 @@ let boundClient: NvimClient | null = null;
 let applying = false;
 /** 포커스된(=nvim 현재 버퍼인) 편집기 */
 let current: CodeEditor | null = null;
-
-const isInsertLike = (mode: string) => mode.startsWith('i') || mode.startsWith('R');
 
 function pathOfModel(model: TextModel): string {
   return model.uri.path.replace(/^\//, '');

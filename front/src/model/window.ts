@@ -85,6 +85,15 @@ export function reloadWindow(): void {
   });
 }
 
+/**
+ * OS 입력기(IME) 전환 — vim 모드가 non-insert 로 들어갈 때 false(영문 강제, 그때 상태를 native 가 창 단위로
+ * 기억), insert 진입·vim 모드 해제에 true(복원). 편집기 안에서는 OS IME 를 이길 수 없어 VSCodeVim 의
+ * im-select 처럼 밖에서 바꾼다 (app/src/main set_ime, ticket editor-vim-ime-imswitch). Windows 앱만 — 웹은 무동작
+ */
+export function setIme(enabled: boolean): void {
+  void tauri?.core.invoke('set_ime', { enabled });
+}
+
 /** 이 창의 웹뷰 줌 — 레벨·저장·적용은 native (set_zoom) 몫, 부른 창에만 적용된다 (ticket zoom-per-window). 웹은 브라우저 줌이 있어 무동작 */
 export function zoomWindow(action: 'in' | 'out' | 'reset'): void {
   void tauri?.core.invoke('set_zoom', { action });

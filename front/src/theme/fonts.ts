@@ -4,10 +4,11 @@
 //      terminal.ts (DEFAULT_LINE_HEIGHT: Linux 1.1), terminalConfiguration.ts (fontSize 14).
 //      터미널 fontFamily 기본값은 editor.fontFamily 를 따른다 (VS Code 동일).
 
-// Consolas 는 Windows 쪽 고정폭(라틴), 맑은 고딕은 그 뒤 한글 폴백 —
-// 순서가 뒤집히면 라틴까지 비례폭으로 렌더링되므로 고정폭이 먼저 온다.
+// Consolas 는 Windows 쪽 고정폭(라틴), 그 뒤 한글은 동봉 'Superlite Hangul'(D2Coding 한글 서브셋, base.css
+// @font-face — unicode-range 라 한글에만 걸린다. 사용자 결정 2026-09-10: 영문 Consolas + 한글 D2Coding),
+// 없으면 맑은 고딕. 순서가 뒤집히면 라틴까지 비례폭으로 렌더링되므로 고정폭이 먼저 온다.
 export const MONO_FONT_FAMILY =
-  "'Droid Sans Mono', Consolas, 'Malgun Gothic', '맑은 고딕', monospace";
+  "'Droid Sans Mono', Consolas, 'Superlite Hangul', 'Malgun Gothic', '맑은 고딕', monospace";
 
 export const EDITOR_FONT_SIZE = 14;
 

@@ -90,13 +90,33 @@ fn user_conf_path() -> PathBuf {
     conf_dir().join("user.conf")
 }
 
+/// pane 안 TERM — 그 머신 terminfo 에 tmux-256color 가 있으면 그것 (이탤릭 sitm·커서 모양 Ss/Se·스타일 밑줄 Smulx 가
+/// 있어 pane 안 프로그램이 쓴다), 없으면 어디나 있는 screen-256color (그 기능들이 terminfo 에 없어 프로그램이 안 쓴다).
+/// 데몬당 한 번 판정 (ticket terminal-font-color)
+fn default_terminal() -> &'static str {
+    static TERM: OnceLock<&'static str> = OnceLock::new();
+    TERM.get_or_init(|| {
+        let ok = std::process::Command::new("infocmp")
+            .arg("tmux-256color")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        if ok { "tmux-256color" } else { "screen-256color" }
+    })
+}
+
 /// base.conf 를 캐시 폴더에 (재)기록하고 경로를 돌려준다 — 내용이 같으면 쓰지 않는다.
-/// 끝에 사용자 conf source 한 줄을 붙여 사용자 값이 기본값을 덮게 한다
+/// 끝에 default-terminal 판정값과 사용자 conf source 한 줄을 붙여 사용자 값이 기본값을 덮게 한다
 fn base_conf_path() -> Result<PathBuf, String> {
     let dir = conf_dir();
     std::fs::create_dir_all(&dir).map_err(err)?;
     let path = dir.join("base.conf");
-    let content = format!("{BASE_CONF}\nsource-file -q \"{}\"\n", user_conf_path().display());
+    let content = format!(
+        "{BASE_CONF}\nset -g default-terminal \"{}\"\nsource-file -q \"{}\"\n",
+        default_terminal(),
+        user_conf_path().display()
+    );
     if std::fs::read_to_string(&path).ok().as_deref() != Some(content.as_str()) {
         std::fs::write(&path, content).map_err(err)?;
     }
@@ -310,6 +330,16 @@ pub(crate) async fn rename(bin: &Path, id: &str, name: &str) -> Result<(), Strin
 
 /// 클라이언트의 tmux.conf 를 사용자 conf 로 기록하고, 서버가 떠 있으면 즉시 적용 (source-file).
 /// 반환: tmux 가 낸 경고·오류 텍스트 (문법 오류를 프론트가 알림으로 보인다). 서버 없음은 빈 문자열
+/// 데몬 시작 시 살아 있는 서버에 base.conf 를 다시 source — 서버는 데몬보다 오래 살아 -f 로 준 옛 base.conf 값
+/// (default-terminal·COLORTERM 등)을 그대로 들고 있다. 이후 새 pane 부터 적용된다 (기존 pane 은 TERM 이 이미 넘어갔다).
+/// base.conf 는 재적용해도 값이 불어나지 않게 써 두었고, 끝의 user.conf source 로 사용자 덮어쓰기 순서도 유지된다.
+/// 서버가 없으면 무동작 (ticket terminal-font-color)
+pub(crate) fn resource_base(bin: &Path) {
+    if let (Ok(mut c), Ok(path)) = (command(bin), base_conf_path()) {
+        let _ = c.arg("source-file").arg(path).output();
+    }
+}
+
 pub(crate) async fn apply_conf(bin: &Path, content: &str) -> Result<String, String> {
     let path = user_conf_path();
     std::fs::create_dir_all(path.parent().unwrap()).map_err(err)?;

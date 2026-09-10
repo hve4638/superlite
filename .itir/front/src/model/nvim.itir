@@ -1,11 +1,15 @@
 import { notify } from './notifications'
+import { setIme } from './window'
 import { activeGroup, activeTab, closeTab, saveActive } from './editors'
 import { refreshScm } from './scm'
 
-role: 임베드 Neovim 클라이언트 — 편집기 vim 모드의 실체 (ticket editor-vim-mode). relay 의 /nvim WebSocket(고정 버전 nvim --embed --headless --clean 의 stdio 를 바이트 그대로 잇는다) 위에서 msgpack-RPC(@msgpack/msgpack — 요청·응답·알림·nvim 발 요청, 프레임이 메시지 중간에서 끊겨도 스트림 디코드) 를 말하고, UI 를 붙여(nvim_ui_attach, ext_cmdline·ext_messages) 모드·명령줄·메시지·showcmd 를 반응형 vimMode 로 든다. 버퍼 ↔ Monaco 동기화와 편집기 키 전달은 ui/editor/vim.ts 몫 — 이 모듈은 편집기를 모른다. 페이지(창)당 nvim 프로세스 하나. 켜기는 사용자 설정(localStorage superlite.vimMode, 기본 꺼짐) — 켜면 status starting→ready, 실패(close 4503 바이너리 없음·프로세스 종료)는 알림을 띄우고 설정을 끈 상태로 되돌린다. 초기화 Lua(INIT_LUA)는 옵션·클립보드 provider('+' '*' → 프론트 navigator.clipboard, rpcrequest sl_clip_get / rpcnotify sl_clip_set)·ZZ/ZQ 알림(sl_ex)·헬퍼(sl_open: acwrite 버퍼 + 초기 로드는 undolevels 로 undo 밖, sl_set_lines: undojoin 으로 insert 한 번 = undo 한 단위, sl_focus: 버퍼가 바뀔 때만 커서 전달, sl_select: Monaco 선택 → visual, sl_state: mode·커서·visual 시작 조회)
+role: 임베드 Neovim 클라이언트 — 편집기 vim 모드의 실체 (ticket editor-vim-mode). relay 의 /nvim WebSocket(고정 버전 nvim --embed --headless --clean 의 stdio 를 바이트 그대로 잇는다) 위에서 msgpack-RPC(@msgpack/msgpack — 요청·응답·알림·nvim 발 요청, 프레임이 메시지 중간에서 끊겨도 스트림 디코드) 를 말하고, UI 를 붙여(nvim_ui_attach, ext_cmdline·ext_messages) 모드·명령줄·메시지·showcmd 를 반응형 vimMode 로 든다. 버퍼 ↔ Monaco 동기화와 편집기 키 전달은 ui/editor/vim.ts 몫 — 이 모듈은 편집기를 모른다. 페이지(창)당 nvim 프로세스 하나. 켜기는 사용자 설정(localStorage superlite.vimMode, 기본 꺼짐) — 켜면 status starting→ready, 실패(close 4503 바이너리 없음·프로세스 종료)는 알림을 띄우고 설정을 끈 상태로 되돌린다. 초기화 Lua(INIT_LUA)는 옵션·클립보드 provider('+' '*' → 프론트 navigator.clipboard, rpcrequest sl_clip_get / rpcnotify sl_clip_set)·ZZ/ZQ 알림(sl_ex)·헬퍼(sl_open: acwrite 버퍼 + 초기 로드는 undolevels 로 undo 밖, sl_set_lines: undojoin 으로 insert 한 번 = undo 한 단위, sl_focus: 버퍼가 바뀔 때만 커서 전달, sl_select: Monaco 선택 → visual, sl_state: mode·커서·visual 시작 조회). OS 입력기 전환(ticket editor-vim-ime-imswitch, 2026-09-08 사용자 결정 — 한글이 켜져 있으면 normal 모드 키가 조합키로 와서 명령이 안 먹고 편집기 안 처리는 부작용만 냈다): 모듈 수준 watch 가 status ready 이고 non-insert 모드면 window.setIme(false)(영문 강제), insert 진입·vim 모드 꺼짐이면 setIme(true)(복원) — 모드는 창(nvim 프로세스) 단위라 편집기(vim.ts)가 아니라 여기서 지켜본다. 명령줄(c) 모드도 영문. 앱(Windows)만 실제 동작, 웹은 무동작
 
 export val vimMode
 export type CmdlineState
+export fn isInsertLike(mode) -> bool {
+  role: insert·replace 계열(i*·R*) — Monaco 가 타이핑을 맡고 OS IME 가 살아 있어야 하는 모드. vim.ts 와 IME 전환 watch 가 공유
+}
 export fn vimModeLabel(mode) -> label {
   role: mode() 문자열 → NORMAL/INSERT/VISUAL/V-LINE/V-BLOCK/REPLACE/COMMAND/O-PENDING
 }

@@ -15,6 +15,9 @@ export fn minimizeWindow() {
 export fn toggleMaximizeWindow() {
   role: 최대화/복원 토글
 }
+export fn setIme(enabled) {
+  role: OS 입력기(IME) 전환 — native set_ime 커맨드 호출. vim 모드가 non-insert 로 들어갈 때 false(영문 강제, 그때 상태를 native 가 창 단위로 기억), insert 진입·vim 모드 해제에 true(복원). 편집기 안에서는 OS IME 를 이길 수 없어 VSCodeVim 의 im-select 처럼 밖에서 바꾼다 (app/src/main set_ime, ticket editor-vim-ime-imswitch). Windows 앱만 — 웹·다른 OS 는 무동작
+}
 export fn zoomWindow(action) {
   role: 이 창의 웹뷰 줌 — native set_zoom 커맨드 호출 ('in'·'out'·'reset'). 레벨·저장·적용은 native 몫이고 부른 창에만 적용된다 (app/src/main set_zoom, ticket zoom-per-window). 웹은 무동작
 }

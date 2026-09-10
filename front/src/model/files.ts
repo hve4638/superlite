@@ -11,6 +11,12 @@ export interface TreeNode {
   children: TreeNode[] | null;
 }
 
+/** 창 이동 핸드오프의 탐색기 트리 몫 (JSON 직렬화 가능) */
+export interface FilesSnapshot {
+  root: TreeNode[];
+  expanded: string[];
+}
+
 export function parentOf(path: string): string {
   const slash = path.lastIndexOf('/');
   return slash === -1 ? '' : path.slice(0, slash);
@@ -107,9 +113,23 @@ export function createFiles(backend: ThinBackend) {
     }));
   }
 
+  /** 루트 첫 로드 — 병합으로 넣는다: 창 이동 핸드오프의 트리 스냅샷(restore)이 먼저 들어와 있으면 그 노드·
+   *  펼침·로드된 자식을 보존해야 한다 (ticket window-detach-reload). 실패는 그대로 던진다 (원격 접속 실패 판정) */
   async function initFiles(): Promise<void> {
     const entries = await readDir('');
-    files.root = entries.map((e) => ({ name: e.name, path: e.path, kind: e.kind, depth: 0, children: null }));
+    mergeChildren(null, entries);
+    files.loading = false;
+  }
+
+  /** 창 이동 핸드오프의 트리 몫 — 로드된 노드 전체(자식 포함)와 펼침 집합. 선택·폴더 탭 나열은 나르지 않는다 */
+  function snapshot(): FilesSnapshot {
+    return { root: JSON.parse(JSON.stringify(files.root)) as TreeNode[], expanded: [...files.expanded] };
+  }
+
+  /** 스냅샷을 그대로 세운다 — 새 창이 재조회를 기다리지 않고 즉시 그린다. 이후 refreshTree 가 병합으로 따라잡는다 */
+  function restore(s: FilesSnapshot): void {
+    files.root = s.root;
+    files.expanded = new Set(s.expanded);
     files.loading = false;
   }
 
@@ -213,6 +233,11 @@ export function createFiles(backend: ThinBackend) {
     if (!inTree) return;
     // WHY: await 사이에 부모 리프레시가 이 노드를 갈아끼웠을 수 있다 — 고아에 쓰면 조용히 증발
     if (node && findNode(path) !== node) return;
+    mergeChildren(node, entries);
+  }
+
+  /** 나열 결과를 node(null = 루트)의 자식에 병합 — path/kind 가 같은 노드를 재사용해 하위 펼침·로드 상태를 보존 */
+  function mergeChildren(node: TreeNode | null, entries: DirEntry[]): void {
     const oldNodes = node ? node.children! : files.root;
     const old = new Map(oldNodes.map((n) => [n.path, n]));
     const depth = node ? node.depth + 1 : 0;
@@ -345,7 +370,7 @@ export function createFiles(backend: ThinBackend) {
   }
 
   return {
-    files, initFiles, toggleDir, refreshDir, loadedDirPaths, onDirLoaded,
+    files, initFiles, snapshot, restore, toggleDir, refreshDir, loadedDirPaths, onDirLoaded,
     quickOpen, invalidateQuickOpen, refreshTree, collapseAll, visibleNodes, revealPath, expandPaths,
     acquireDir, releaseDir, select, toggleSelect, rangeSelect, selectAll, selectedNodes,
   };

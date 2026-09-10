@@ -42,6 +42,9 @@ export function createWatch(
   filesM: ReturnType<typeof createFiles>,
   scmM: ReturnType<typeof createScm>,
   searchM: ReturnType<typeof createSearch>,
+  /** 트리·SCM 이 읽힌 뒤인가 — false 면 트리·git 소비자를 건너뛴다 (서브 창의 미룬 로드를 fs 이벤트가
+   *  되살리지 않게, ticket window-detach-reload). 편집기 재로드·검색 재실행은 영향 없다 */
+  workspaceLoaded: () => boolean = () => true,
 ) {
   const { editors, reloadDocFromDisk, setOrphaned } = editorsM;
   const { loadedDirPaths, invalidateQuickOpen, refreshDir } = filesM;
@@ -91,6 +94,7 @@ export function createWatch(
   const tree = consumer<{ dirs: Set<string>; list: boolean; all: boolean }>(
     500,
     (acc) => {
+      if (!workspaceLoaded()) return;
       const dirs = acc.all ? loadedDirPaths() : [...acc.dirs];
       for (const d of dirs) void refreshDir(d); // refreshDir 는 내부에서 실패를 삼킨다
       if (acc.list || acc.all) invalidateQuickOpen();
@@ -102,7 +106,9 @@ export function createWatch(
   // 담당한다 — .git 이벤트 → refreshScm → head 변화 → monaco 캐시 키 불일치
   const git = consumer<null>(
     1000,
-    () => swallow(refreshScm()),
+    () => {
+      if (workspaceLoaded()) swallow(refreshScm());
+    },
     () => null,
   );
 

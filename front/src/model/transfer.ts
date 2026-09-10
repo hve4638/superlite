@@ -13,7 +13,7 @@ import type { ThinBackend } from '../backend/types';
 import { ctx } from './ctx';
 import { baseName, base64Bytes } from './editors';
 import { blobToBase64 } from './fileops';
-import { errText, notify } from './notifications';
+import { errText, notify, type NotifyAction } from './notifications';
 import { sessionsKind } from './sessions';
 import { tauri } from './tauri';
 import { ZipWriter } from './zip';
@@ -72,8 +72,8 @@ interface Sink {
   mkdir(rel: string): Promise<void>;
   /** base64 조각 — append 는 같은 rel 의 두 번째 조각부터 */
   write(rel: string, data: string, append: boolean): Promise<void>;
-  /** 완료 통지 문구 */
-  finish(): Promise<string>;
+  /** 완료 통지 문구 (+ 선택 액션 — 앱의 "폴더 열기") */
+  finish(): Promise<{ message: string; action?: NotifyAction }>;
 }
 
 function base64ToBytes(b64: string): Uint8Array {
@@ -102,7 +102,14 @@ async function appSink(kind: 'file' | 'directory', name: string): Promise<Sink |
   return {
     mkdir: async (rel) => void (await t.core.invoke('local_mkdir', { path: local(rel) })),
     write: async (rel, data, append) => void (await t.core.invoke('local_write', { path: local(rel), data, append })),
-    finish: async () => `Downloaded to ${target}`,
+    finish: async () => ({
+      message: `Downloaded to ${target}`,
+      // OS 파일 관리자로 저장 위치를 드러낸다 (파일은 선택 표시) — ticket download-conveniences
+      action: {
+        label: 'Open Folder',
+        run: () => void t.core.invoke('reveal_in_folder', { path: target }).catch((e: unknown) => notify('error', `Open folder: ${errText(e)}`)),
+      },
+    }),
   };
 }
 
@@ -114,7 +121,7 @@ function webFileSink(name: string): Sink {
     write: async (_rel, data) => void parts.push(base64ToBytes(data)),
     finish: async () => {
       saveBlob(name, parts);
-      return `Downloaded ${name}`;
+      return { message: `Downloaded ${name}` };
     },
   };
 }
@@ -138,7 +145,7 @@ function webZipSink(name: string): Sink {
     },
     finish: async () => {
       saveBlob(`${name}.zip`, zip.finish());
-      return `Downloaded ${name}.zip`;
+      return { message: `Downloaded ${name}.zip` };
     },
   };
 }
@@ -186,7 +193,8 @@ async function collectDir(backend: ThinBackend, dir: string, rel: string, sink: 
 export async function downloadEntry(path: string, kind: 'file' | 'directory'): Promise<void> {
   const backend = ctx().backend;
   const name = checkName(baseName(path));
-  let message = '';
+  // as — 클로저 안 대입이라 초기값 null 로 좁혀지지 않게
+  let done = null as { message: string; action?: NotifyAction } | null;
   // dialog 대기도 run 안 — 그 사이 두 번째 Download 가 dialog 를 하나 더 띄우지 않게
   const ok = await run(`Downloading ${name}`, async (progress) => {
     const sink =
@@ -202,9 +210,9 @@ export async function downloadEntry(path: string, kind: 'file' | 'directory'): P
         await copyFile(backend, list[i].path, list[i].rel, sink);
       }
     }
-    message = await sink.finish();
+    done = await sink.finish();
   });
-  if (ok && message !== '') notify('info', message);
+  if (ok && done !== null) notify('info', done.message, done.action);
 }
 
 // ---- 업로드

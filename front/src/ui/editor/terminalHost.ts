@@ -2,6 +2,7 @@ import { watch } from 'vue';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { SerializeAddon } from '@xterm/addon-serialize';
+import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
 import { setTerminalSerializer, setTerminalZoom, stepTerminalZoom, terminalView } from '../../model/terminal';
 import type { TerminalInstance } from '../../model/terminal';
@@ -118,6 +119,12 @@ const CAMPBELL = {
   brightWhite: '#F2F2F2',
 };
 
+// 동봉 Cascadia(base.css @font-face)는 비동기로 온다 — xterm 은 open 때 셀 크기를 재고 다시 재지 않아, 시스템 Cascadia 가
+// 없는 기기(리눅스·웹·Windows 10)에서 첫 터미널이 폴백 글꼴 폭으로 잰 칸(8px)에 9.4px 글리프를 그려 글자가 겹치고 열 수가
+// 틀린다 (ime-composition-window 워커 실측). 모듈 로드 때 미리 받아 두고, 터미널을 연 뒤 로드가 끝나면 다시 잰다
+// (ticket terminal-font-color). 시스템 Cascadia 가 있으면 동봉본은 쓰이지 않지만 로드 자체는 무해하다
+const bundledFont: Promise<unknown> = document.fonts?.load(`${TERMINAL_FONT_SIZE}px 'Cascadia Mono Bundled'`).catch(() => undefined) ?? Promise.resolve();
+
 const ZOOM_KEYS: Record<string, 1 | -1 | 0> = { Equal: 1, NumpadAdd: 1, Minus: -1, NumpadSubtract: -1, Digit0: 0, Numpad0: 0 };
 function terminalFontSize(): number {
   return Math.round((TERMINAL_FONT_SIZE * terminalView.zoom) / 100);
@@ -198,6 +205,16 @@ function open(inst: TerminalInstance, b: Binding): void {
     return true;
   });
   term.open(b.el);
+  // 렌더러는 WebGL (VS Code 기본과 같다). 기본 DOM 렌더러는 글자마다 letter-spacing 으로 칸을 맞추고 브라우저 텍스트
+  // AA(Windows 는 서브픽셀)를 타서 Windows Terminal(셀 격자 + 회색 AA 글리프 아틀라스)과 글꼴이 다르게 보인다 — WebGL 은
+  // WT 와 같은 방식이다. 컨텍스트를 잃으면(GPU 재설정·컨텍스트 상한) addon 을 버려 DOM 렌더러로 돌아간다 (ticket terminal-font-color)
+  try {
+    const webgl = new WebglAddon();
+    webgl.onContextLoss(() => webgl.dispose());
+    term.loadAddon(webgl);
+  } catch {
+    /* WebGL 불가 — DOM 렌더러 */
+  }
   // WHY: IME 조합창 위치 (ticket ime-composition-window). xterm 6.0.0 은 숨은 textarea 를 커서 이동 때만
   //      커서 칸으로 옮기고 조합 중엔 잠근다 — 부분 렌더·리사이즈·포커스 복귀 뒤 첫 조합이면 textarea 가
   //      옛 자리(초기 CSS 는 창 왼쪽 밖·top 0)라 WebView2 가 IME 창을 창 왼쪽 위에 앉힌다. upstream 수정
@@ -207,8 +224,15 @@ function open(inst: TerminalInstance, b: Binding): void {
   //      조합 시작은 키 입력과 같이 맨 아래로 스크롤한다 (xterm scrollOnUserInput 은 keydown 에만 적용) — 뷰포트가
   //      한두 줄 위로 밀린 채면 커서가 뷰포트 밖이라 xterm 이 조합 상자·textarea 위치를 갱신하지 않아, 조합
   //      글자가 입력줄과 다른 행에 그려진다 (2026-09-10 Windows 실기: tmux 안 claude 에서 한두 줄 위)
-  const core = (term as unknown as { _core: { _syncTextArea?: () => void } })._core;
+  const core = (term as unknown as { _core: { _syncTextArea?: () => void; _charSizeService: { measure(): void } } })._core;
   const syncTextArea = (): void => core._syncTextArea?.();
+  // 동봉 글꼴 로드 뒤 셀 크기 재측정 (위 bundledFont) — xterm 은 fontFamily/fontSize 가 바뀔 때만 재는데 같은 값 대입은
+  // 무동작이라 측정 서비스를 직접 부른다. 크기가 달라졌으면 xterm 이 렌더러 치수·아틀라스를 갱신하고 fit 이 열 수를 고친다
+  void bundledFont.then(() => {
+    if (b.term !== term) return;
+    core._charSizeService.measure();
+    fitTerminal(inst.id);
+  });
   term.textarea?.addEventListener(
     'compositionstart',
     () => {

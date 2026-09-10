@@ -7,6 +7,8 @@ role: 탐색기 파일 트리 — lazy 디렉토리 로드, 외부 변경 시 �
 export type TreeNode
 export val files
 
+export type FilesSnapshot
+
 export fn createFiles(backend) {
   role: 세션별 트리 모듈 생성 — 트리·펼침·선택 집합(selected + 포커스 selectedPath, Shift 앵커)·로딩 상태가 팩토리 클로저에 산다 (한 페이지에 세션 여럿). 인스턴스 전용 expandPaths(paths)는 펼침 집합 복원(ticket workspace-state-restore) — 얕은 경로부터 자식을 읽어 expanded 에 넣고 사라진 경로·읽기 실패는 건너뛴다 (shim 없음, workspaceState.restoreWorkspace 가 ctx 로 부른다). 초기 로드(initFiles)는 루트 readDir 만 — 빠른 열기 목록은 나르지 않는다 (와이어 v12). onDirLoaded: 디렉토리 나열(readDir) 결과 구독 — SCM 이 repo 표식으로 하위 저장소를 즉시 등록한다 (session 조립 지점에서 연결). loading(루트 첫 로드, 진행 막대)·slowDirs(자식 로드 800ms 초과 디렉토리, twistie 스피너 — VS Code asyncDataTree slow 규칙)
 }

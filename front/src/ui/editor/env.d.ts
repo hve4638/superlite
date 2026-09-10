@@ -14,3 +14,9 @@ declare module 'monaco-editor/editor/common/config/fontInfo' {
   }
   export const SERIALIZED_FONT_INFO_VERSION: number;
 }
+// 내장 markdown monarch 정의 — 제목 토큰 교체(monaco.ts)용
+declare module 'monaco-editor/languages/definitions/markdown/markdown' {
+  import type { languages } from 'monaco-editor';
+  export const language: languages.IMonarchLanguage;
+  export const conf: languages.LanguageConfiguration;
+}

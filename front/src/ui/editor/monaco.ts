@@ -11,6 +11,7 @@ import tsWorker from 'monaco-editor/languages/features/typescript/ts.worker?work
 import jsonWorker from 'monaco-editor/languages/features/json/json.worker?worker';
 import cssWorker from 'monaco-editor/languages/features/css/css.worker?worker';
 import htmlWorker from 'monaco-editor/languages/features/html/html.worker?worker';
+import { language as markdownLanguage } from 'monaco-editor/languages/definitions/markdown/markdown';
 import { editors, languageOf, setApplyExternalEdit, setDisposeModels, updateContent } from '../../model/editors';
 import { backend } from '../../model/host';
 import { repoOf, relPath } from '../../model/scm';
@@ -110,8 +111,27 @@ monaco.editor.defineTheme('superlite-dark', {
     { token: 'regexp', foreground: 'D16969' },
     // markdown 인라인 코드 — 레퍼런스에서 string 색으로 렌더된다
     { token: 'variable.md', foreground: 'CE9178' },
+    // markdown 제목 — VS Code(markup.heading)처럼 굵게, 색은 keyword 상속. 토큰은 아래 토크나이저 교체가 만든다
+    { token: 'keyword.heading', fontStyle: 'bold' },
   ],
 });
+
+// md 제목(#~######)을 굵게 (사용자 결정 2026-09-10, ticket terminal-font-color). 내장 monarch 는 제목 줄과 목록
+// 기호·표 구분선을 같은 keyword 토큰으로 내보내 테마 규칙만으로는 제목만 굵게 할 수 없다 — ATX 제목 규칙의
+// 토큰만 keyword.heading 으로 바꿔 다시 등록한다. 첫 markdown 모델이 토큰화되기 전에 등록하므로 내장 lazy
+// 팩토리보다 이쪽이 쓰인다 (TokenizationRegistry.getOrCreate 는 등록된 provider 를 우선)
+{
+  const lang = markdownLanguage;
+  const root = (lang.tokenizer.root as unknown[]).map((r) =>
+    Array.isArray(r) && r[0] instanceof RegExp && r[0].source.includes('(#+)')
+      ? [r[0], ['white', 'keyword.heading', 'keyword.heading', 'keyword.heading']]
+      : r,
+  );
+  monaco.languages.setMonarchTokensProvider('markdown', {
+    ...lang,
+    tokenizer: { ...lang.tokenizer, root: root as monaco.languages.IMonarchLanguageRule[] },
+  });
+}
 
 /** 공유 옵션 — 폰트 기본값은 theme/fonts.ts 단일 소스, 라인 하이라이트 border(#282828) */
 export const EDITOR_OPTIONS: monaco.editor.IStandaloneEditorConstructionOptions = {

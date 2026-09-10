@@ -6,10 +6,16 @@
 import { reactive } from '@vue/reactivity';
 
 export type Severity = 'error' | 'warning' | 'info';
+/** 토스트의 선택 액션 하나 — 누르면 run 하고 토스트를 닫는다 (VS Code notification action 동일) */
+export interface NotifyAction {
+  label: string;
+  run: () => void;
+}
 export interface Notification {
   id: number;
   severity: Severity;
   message: string;
+  action?: NotifyAction;
 }
 
 // VS Code notificationsToasts.ts 실측값 — 심각도별 자동 숨김(ms), 동시 표시 상한 3
@@ -26,9 +32,9 @@ export function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-export function notify(severity: Severity, message: string): void {
+export function notify(severity: Severity, message: string, action?: NotifyAction): void {
   const id = nextId++;
-  notifications.list.push({ id, severity, message });
+  notifications.list.push({ id, severity, message, action });
   // 상한 초과분은 오래된 것부터 밀어낸다 — VS Code 는 큐에 대기시키지만 알림 센터가 없어
   // 대기시킬 곳이 없다 (ponytail). hover 로 정지된 토스트(timers 에 없음)는 읽는 중이므로
   // 건너뛴다 — 전부 정지 상태면 상한을 잠시 넘긴다 (VS Code 의 hover 중 purge 유예와 동일)
@@ -38,6 +44,14 @@ export function notify(severity: Severity, message: string): void {
     dismissNotification(oldest.id);
   }
   resumeNotification(id);
+}
+
+/** 액션 버튼 — 실행 후 토스트를 닫는다 */
+export function runNotificationAction(id: number): void {
+  const n = notifications.list.find((x) => x.id === id);
+  if (!n?.action) return;
+  dismissNotification(id);
+  n.action.run();
 }
 
 /** 수동 닫기 (X·Escape) — 자동 숨김 타이머도 해제 */

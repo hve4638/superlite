@@ -1,6 +1,6 @@
 import { err } from '.'
 
-role: 내장 tmux 통합 (ticket term-list-reconnect, ws decision/process-topology.md 2026-09-07 개정) — 터미널의 "꺼지지 않는 실행 요소"를 tmux 서버에 위임한다. 데몬은 PTY 안에서 tmux 클라이언트(attach-session)를 띄울 뿐, 셸 생존·스크롤백·다중 attach·detach 는 tmux 서버 몫. 세션 원장도 tmux 다 — 별도 DB 없이 세션 환경변수 SUPERLITE_TMUX_WORKSPACE_PATH(ENV_ROOT)가 워크스페이스를 가리키고 기본 키는 #{session_id}. 서버는 -L <SLUG> 전용 소켓(사용자의 tmux 서버·~/.tmux.conf 와 격리, SUPERLITE_TMUX_SOCK 이면 -S — check 하니스), 설정은 내장 base.conf(tmux-base.conf — 로그인 셸·TMUX/TMUX_PANE 제거·SUPERLITE_TMUX_SOCKET·status off·prefix None·mouse on·MouseDown2Pane(휠클릭 paste) 해제 등)를 캐시 폴더에 써 두고 -f 로, 끝에 사용자 conf(user.conf — 클라이언트 tmux.conf 를 tmuxConf 로 받은 것)를 source. unix 전용 — Windows 는 Unsupported (터미널 보존 없음, 사용자 결정)
+role: 내장 tmux 통합 (ticket term-list-reconnect, ws decision/process-topology.md 2026-09-07 개정) — 터미널의 "꺼지지 않는 실행 요소"를 tmux 서버에 위임한다. 데몬은 PTY 안에서 tmux 클라이언트(attach-session)를 띄울 뿐, 셸 생존·스크롤백·다중 attach·detach 는 tmux 서버 몫. 세션 원장도 tmux 다 — 별도 DB 없이 세션 환경변수 SUPERLITE_TMUX_WORKSPACE_PATH(ENV_ROOT)가 워크스페이스를 가리키고 기본 키는 #{session_id}. 서버는 -L <SLUG> 전용 소켓(사용자의 tmux 서버·~/.tmux.conf 와 격리, SUPERLITE_TMUX_SOCK 이면 -S — check 하니스), 설정은 내장 base.conf(tmux-base.conf — 로그인 셸·TMUX/TMUX_PANE 제거·SUPERLITE_TMUX_SOCKET·status off·prefix None·mouse on·MouseDown2Pane(휠클릭 paste) 해제·바깥 xterm-256color 에 RGB·전역 환경 COLORTERM=truecolor(pane 안 프로그램의 truecolor 판정 — 없으면 256 색 양자화) 등)를 캐시 폴더에 써 두고 -f 로, 그 뒤에 default-terminal(그 머신 terminfo 에 tmux-256color 가 있으면 그것 — 이탤릭·커서 모양·스타일 밑줄 — 없으면 screen-256color, 데몬당 한 번 infocmp 판정)과 사용자 conf(user.conf — 클라이언트 tmux.conf 를 tmuxConf 로 받은 것) source 를 붙인다 (ticket terminal-font-color). unix 전용 — Windows 는 Unsupported (터미널 보존 없음, 사용자 결정)
 
 export val ENV_ROOT
 export class Mode {
@@ -17,6 +17,9 @@ export fn locale_fallback() -> lang? {
 }
 export fn base_args() -> args {
   role: 공통 앞부분 -L/-S 소켓 + -f base.conf (base.conf 재기록 포함)
+}
+export fn resource_base(bin) {
+  role: 데몬 시작 시 살아 있는 서버에 base.conf 를 다시 source (main) — 서버는 데몬보다 오래 살아 옛 빌드의 값을 들고 있다. 새 pane 부터 적용. base.conf 는 재적용해도 불어나지 않게(append 없음) 써 두었고 끝의 user.conf source 로 사용자 덮어쓰기 순서가 유지된다. 서버 없음은 무동작
 }
 export fn new_session(bin, root, env) -> id_and_name {
   role: 새 tmux 세션 detached 로 — 이름은 <폴더명>-<n> (충돌 시 n 증가), cwd root, -e 로 세션 환경변수(셸 심 좌표·ENV_ROOT). -P -F 로 session_id 를 받아 돌려준다. 명령의 cwd 는 / 로 고정 — 서버가 여기서 처음 뜨면 이 cwd 를 물려받아 데몬보다 오래 살고, 워크트리에서 뜬 서버는 폴더 삭제 뒤 -c 를 무시한다 (tmux 3.7b, ticket tmux-server-cwd-utf8)

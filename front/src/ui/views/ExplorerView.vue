@@ -196,7 +196,7 @@ function menuFor(node: TreeNode, sel: TreeNode[]): ContextMenuItem[] {
     { label: 'Copy', keybinding: 'Ctrl+C', enabled: false },
     { label: 'Copy Path', run: () => void navigator.clipboard.writeText(sel.map((n) => n.path).join('\n')) },
     ...(isRemote.value
-      ? [{ separator: true }, { label: 'Download...', run: () => void downloadAll(sel) }]
+      ? [{ separator: true }, { label: 'Download... (D)', key: 'd', run: () => void downloadAll(sel) }]
       : []),
     { separator: true },
     { label: 'Rename...', keybinding: 'F2', enabled: !multi, run: () => startRename(node) },
