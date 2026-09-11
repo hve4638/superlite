@@ -5,7 +5,7 @@
 // 폼(ticket config-editors) — select 로 적용 프로필을 고르면 접속 중인 모든 데몬에 즉시 적용되고,
 // 편집은 편집기 탭(openTmuxConf)에서. default 는 내장 기본값(읽기 전용)이고 + 는 그것을 복사해 시작, 복제는 선택된
 // 프로필 복사 — 둘 다 인라인 이름 입력. 삭제는 확인 대화상자 (default 불가)
-import { onMounted, onUnmounted, ref } from 'vue';
+import { onMounted, ref } from 'vue';
 import type { TerminalInfo } from '../../backend/types';
 import {
   terminalState, terminals, refreshTerminals, attachTerminal, killListedTerminal, renameListedTerminal,
@@ -18,16 +18,10 @@ import { errText, notify } from '../../model/notifications';
 import InlineNameInput from '../widgets/InlineNameInput.vue';
 import { confirm } from '../../model/dialog';
 
-// 목록은 tmux 서버가 원장 — 뷰가 보이는 동안 3초마다 다시 읽는다 (다른 창·PC 의 attach 수, 실행 중
-// 명령 변화). 열기·닫기·종료는 즉시 갱신한다 (model)
-let timer: ReturnType<typeof setInterval> | null = null;
+// 목록은 tmux 서버가 원장 — 3초 폴링은 model 이 한다 (활동바 배지도 같은 목록을 쓴다). 여기서는 열릴 때 한 번
 onMounted(() => {
   void refreshTerminals();
   if (configEnabled()) refreshTmuxProfiles().catch((e) => notify('error', `tmux profiles: ${errText(e)}`));
-  timer = setInterval(() => void refreshTerminals(), 3000);
-});
-onUnmounted(() => {
-  if (timer !== null) clearInterval(timer);
 });
 
 /** 이 창에서 열려 있는 세션인가 */

@@ -1,4 +1,4 @@
-role: ThinBackend 계약 — 와이어 프로토콜(백엔드 /ws JSON-RPC, v6 부터 대형 readFile 응답은 바이너리 payload 프레임 — 계약 표면(content=string)은 불변, 복원은 ws.ts 몫. v10 adoptTerminal — 세션 간 터미널 이동. v11 readFile 범위 읽기 offset + stat size — hex 뷰어 청크. v12 listFiles → quickOpen: 빠른 열기 목록을 나르지 않고 데몬 캐시에서 검색. v14 writeFile append — 청크 업로드. v16 readDir 절대 경로 + 항목 mtime·size — 폴더 탭의 워크스페이스 밖 탐색·자세히 보기 (v15 는 폐기된 termd 분리 빌드가 소켓 충돌 방지로 건너뛴 번호). v17 내장 tmux — createTerminal attach·listTerminals·killTerminal·renameTerminal·applyTmuxConf·onTerminalMode·TerminalSession.onTmux. v19 copy — 탐색기 드래그 복사)의 TS 사영. 와이어 쪽 대응은 daemon/src 참조
+role: ThinBackend 계약 — 와이어 프로토콜(백엔드 /ws JSON-RPC, v6 부터 대형 readFile 응답은 바이너리 payload 프레임 — 계약 표면(content=string)은 불변, 복원은 ws.ts 몫. v10 adoptTerminal — 세션 간 터미널 이동. v11 readFile 범위 읽기 offset + stat size — hex 뷰어 청크. v12 listFiles → quickOpen: 빠른 열기 목록을 나르지 않고 데몬 캐시에서 검색. v14 writeFile append — 청크 업로드. v16 readDir 절대 경로 + 항목 mtime·size — 폴더 탭의 워크스페이스 밖 탐색·자세히 보기 (v15 는 폐기된 termd 분리 빌드가 소켓 충돌 방지로 건너뛴 번호). v17 내장 tmux — createTerminal attach·listTerminals·killTerminal·renameTerminal·applyTmuxConf·onTerminalMode·TerminalSession.onTmux. v19 copy — 탐색기 드래그 복사. v20 gitCommitFiles + gitOriginalContent rev — SCM 커밋 상세(ticket scm-commit-detail))의 TS 사영. 와이어 쪽 대응은 daemon/src 참조
 
 export class TerminalMode {
   role: 데몬의 터미널 방식 (attach 응답, 와이어 v17) — 'tmux'(내장 tmux 서버) | 'plain'(unix 인데 tmux 를 못 써 PTY 직접 — 경고 배지) | 'unsupported'(Windows — 아이콘 없음)
@@ -59,8 +59,8 @@ port ThinBackend {
   fn gitStatus(repo) -> GitStatus {
     role: 브랜치 + HEAD 커밋 해시 + 변경 목록 (항목마다 staged 플래그 — 한 파일이 인덱스·워킹트리 양쪽에 변경이 있으면 항목 둘). head 는 diff original 캐시 무효화 키 — 앱 밖 커밋(터미널 git)도 잡는다. 저장소가 아니면 branch·head 둘 다 '' (unborn 은 branch 가 있다)
   }
-  fn gitOriginalContent(repo, path) -> content {
-    role: diff 의 original 쪽 — HEAD 시점 내용
+  fn gitOriginalContent(repo, path, rev?) -> content {
+    role: diff 의 original 쪽 — rev(기본 HEAD) 시점 내용. rev 는 커밋 해시 또는 '<hash>^' 만 (와이어 v20, 커밋 diff 의 양쪽). 그 시점에 없으면 빈 문자열
   }
   fn gitCommit(repo, message) {
     role: 인덱스(staged)만 커밋 — 전체 커밋은 호출측이 gitStage 로 먼저 올린다
@@ -76,6 +76,9 @@ port ThinBackend {
   }
   fn gitLog(repo, limit) -> GitLogItem[] {
     role: HEAD 부터 최근 커밋 (해시·제목·작성자·상대 시각). unborn/비 git 은 빈 배열
+  }
+  fn gitCommitFiles(repo, hash) -> GitCommitFile[] {
+    role: 커밋의 변경 파일 목록 (와이어 v20) — 첫 부모 대비 (병합은 첫 부모 한쪽만, 루트 커밋은 전부 added). 이름 변경은 modified + from(옛 경로), 복사는 added. Graph pane 커밋 펼침의 재료
   }
   fn gitBranches(repo) -> name[] {
     role: 로컬 브랜치 이름 목록
@@ -147,6 +150,7 @@ export type GitChangeKind
 export type GitChange
 export type GitStatus
 export type GitLogItem
+export type GitCommitFile
 export type FsChange
 export type QuickOpenItem
 export type QuickOpenResult

@@ -12,7 +12,7 @@
  * 끊기는 순간 진행 중이던 요청만 실패한다 (실행 여부 불명 — 네트워크 실패의 본질).
  */
 import type {
-  ConnectStage, DirEntry, FileContent, FileSearchResult, FileStat, FsChange, GitLogItem, GitStatus, QuickOpenResult, TerminalInfo, TerminalMode, TerminalSession, ThinBackend, WorkspaceInfo, WriteResult,
+  ConnectStage, DirEntry, FileContent, FileSearchResult, FileStat, FsChange, GitCommitFile, GitLogItem, GitStatus, QuickOpenResult, TerminalInfo, TerminalMode, TerminalSession, ThinBackend, WorkspaceInfo, WriteResult,
 } from './types';
 
 interface Pending {
@@ -423,8 +423,8 @@ export class WsBackend implements ThinBackend {
   gitStatus(repo: string): Promise<GitStatus> {
     return this.call('gitStatus', { repo });
   }
-  gitOriginalContent(repo: string, path: string): Promise<string> {
-    return this.call('gitOriginalContent', { repo, path });
+  gitOriginalContent(repo: string, path: string, rev?: string): Promise<string> {
+    return this.call('gitOriginalContent', { repo, path, rev });
   }
   gitCommit(repo: string, message: string): Promise<void> {
     return this.call('gitCommit', { repo, message });
@@ -440,6 +440,9 @@ export class WsBackend implements ThinBackend {
   }
   gitLog(repo: string, limit: number): Promise<GitLogItem[]> {
     return this.call('gitLog', { repo, limit });
+  }
+  gitCommitFiles(repo: string, hash: string): Promise<GitCommitFile[]> {
+    return this.call('gitCommitFiles', { repo, hash });
   }
   gitBranches(repo: string): Promise<string[]> {
     return this.call('gitBranches', { repo });

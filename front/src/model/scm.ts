@@ -1,5 +1,5 @@
 import { reactive, watch } from '@vue/reactivity';
-import type { DirEntry, GitChangeKind, GitLogItem, ThinBackend } from '../backend/types';
+import type { DirEntry, GitChangeKind, GitCommitFile, GitLogItem, ThinBackend } from '../backend/types';
 import { ctx, viewOf } from './ctx';
 import { confirm } from './dialog';
 import type { createEditors } from './editors';
@@ -220,6 +220,17 @@ export function createScm(backend: ThinBackend, editorsM: ReturnType<typeof crea
     await openFile(change.path);
   }
 
+  /** 커밋의 변경 파일 목록 (Graph pane 의 커밋 펼침, ticket scm-commit-detail) */
+  function commitFiles(repo: ScmRepo, hash: string): Promise<GitCommitFile[]> {
+    return backend.gitCommitFiles(repo.path, hash);
+  }
+
+  /** 커밋 변경 파일 클릭 → 부모 대비 diff 탭 (양쪽 다 git 내용, 읽기 전용). 경로는 저장소 상대라 워크스페이스
+   *  경로로 바꿔 넘긴다 — 중첩 저장소의 파일도 repoOf 가 그 저장소를 찾는다 */
+  async function openCommitFile(repo: ScmRepo, hash: string, file: GitCommitFile): Promise<void> {
+    await openDiff(wsPath(repo.path, file.path), { commit: hash, from: file.from && wsPath(repo.path, file.from) });
+  }
+
   /** staged 항목만 커밋 — staged 가 없으면 no-op (UI 는 버튼을 비활성화한다) */
   async function commit(repo: ScmRepo): Promise<void> {
     if (!repo.commitMessage.trim() || !repo.changes.some((c) => c.staged)) return;
@@ -323,7 +334,7 @@ export function createScm(backend: ThinBackend, editorsM: ReturnType<typeof crea
 
   return {
     scm, refreshScm, snapshot, restore, rescanRepos, noteDirEntries, repoOf, relPath, activeRepo, selectRepo, openChange, openChangeFile, commit,
-    decorationFor, stage, unstage, requestDiscard, branches, checkout, sync,
+    commitFiles, openCommitFile, decorationFor, stage, unstage, requestDiscard, branches, checkout, sync,
   };
 }
 
@@ -351,6 +362,9 @@ export const selectRepo = (path: string): void => ctx().scm.selectRepo(path);
 export const openChange = (change: ScmChange): Promise<void> => ctx().scm.openChange(change);
 export const openChangeFile = (change: ScmChange): Promise<void> => ctx().scm.openChangeFile(change);
 export const commit = (repo: ScmRepo): Promise<void> => ctx().scm.commit(repo);
+export const commitFiles = (repo: ScmRepo, hash: string): Promise<GitCommitFile[]> => ctx().scm.commitFiles(repo, hash);
+export const openCommitFile = (repo: ScmRepo, hash: string, file: GitCommitFile): Promise<void> =>
+  ctx().scm.openCommitFile(repo, hash, file);
 export const decorationFor = (path: string, isDir: boolean): { letter: string; color: string } | null =>
   ctx().scm.decorationFor(path, isDir);
 export const stage = (changes?: ScmChange[]): Promise<void> => ctx().scm.stage(changes);

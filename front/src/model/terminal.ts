@@ -57,9 +57,16 @@ export function createTerminals(backend: ThinBackend, editorsM: ReturnType<typeo
     error: null as string | null,
     list: [] as TerminalInfo[],
   });
+  // 서버 목록은 tmux 서버가 원장 — 활동바 배지가 늘 보이므로 사이드바가 닫혀 있어도 3초마다 다시 읽는다
+  // (다른 창·PC 에서 만들거나 죽인 세션). 열기·닫기·종료·이름 바꾸기는 즉시 갱신 (ticket terminal-count-badge)
+  let poll: ReturnType<typeof setInterval> | null = null;
   backend.onTerminalMode?.((mode, error) => {
     state.mode = mode;
     state.error = error;
+    if (mode === 'tmux' && poll === null) {
+      void refreshTerminals();
+      poll = setInterval(() => void refreshTerminals(), 3000);
+    }
   });
 
   editorsM.setTerminalCloser((term) => disposeTerminal(term));
@@ -191,7 +198,27 @@ export function createTerminals(backend: ThinBackend, editorsM: ReturnType<typeo
       state.list = [];
       return;
     }
-    state.list = await backend.listTerminals().catch(() => []);
+    state.list = await backend.listTerminals().catch((e: unknown) => {
+      console.warn(`listTerminals 실패: ${errText(e)}`);
+      return [];
+    });
+  }
+
+  /** 복원용 목록 조회 (workspaceState) — 조회가 실패(예외)하면 500ms 뒤 한 번만 재시도한다 (ssh 재접속 등
+   *  일시적 실패 대비). 성공한 결과는 비어 있어도 그대로 반환한다 — 재부팅처럼 세션이 진짜 없어진 경우를
+   *  지연 없이 즉시 접기 위함. 재시도도 실패하면 throw — 복원이 실패를 빈 목록으로 오인해 저장된 자리를
+   *  접지 않게. 받은 목록은 state.list 에도 반영한다 (ticket term-layout-restore-flaky) */
+  async function listTerminalsFor(): Promise<TerminalInfo[]> {
+    if (!backend.listTerminals) return [];
+    try {
+      state.list = await backend.listTerminals();
+      return state.list;
+    } catch (e) {
+      console.warn(`listTerminals 실패, 500ms 뒤 재시도: ${errText(e)}`);
+      await new Promise((r) => setTimeout(r, 500));
+      state.list = await backend.listTerminals();
+      return state.list;
+    }
   }
 
   /** 강제 종료 확인 (Ctrl+닫기) — tmux 세션이 없는 탭(plain)은 그냥 닫는다. "다시 묻지 않기" 를
@@ -270,7 +297,7 @@ export function createTerminals(backend: ThinBackend, editorsM: ReturnType<typeo
 
   return {
     terminals, state, createTerminal, toggleTerminal, attachTerminal, disposeTerminal, snapshot, releaseTerminal, adoptTerminals,
-    refreshTerminals, requestKill, killListed, renameListed,
+    refreshTerminals, listTerminalsFor, requestKill, killListed, renameListed,
   };
 }
 

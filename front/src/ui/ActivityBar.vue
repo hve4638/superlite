@@ -3,7 +3,7 @@ import { computed } from 'vue';
 import { workbench, showViewlet, sideBarShown, type ViewletId } from '../model/workbench';
 import { scm } from '../model/scm';
 import { remoteEnabled } from '../model/remote';
-import { terminalState } from '../model/terminal';
+import { terminals, terminalState } from '../model/terminal';
 
 // 터미널 뷰 — 데몬이 tmux 방식(또는 tmux 를 못 써 plain 으로 대체 — 경고 배지)일 때만. Windows
 // (unsupported)와 attach 응답 전(unknown)·mock 은 아이콘 자체가 없다 (ticket term-list-reconnect)
@@ -19,6 +19,10 @@ const items = computed<{ id: ViewletId; icon: string; label: string }[]>(() => [
     ? [{ id: 'terminals' as ViewletId, icon: 'codicon-terminal', label: 'Terminals' }]
     : []),
 ]);
+
+const liveTerminals = computed(() =>
+  terminalState.mode === 'tmux' ? terminalState.list.length : terminals.list.length,
+);
 
 function isActive(id: ViewletId): boolean {
   return sideBarShown() && workbench.activeViewlet === id;
@@ -46,6 +50,11 @@ function isActive(id: ViewletId): boolean {
           class="badge warn codicon codicon-error"
           :title="`tmux 를 쓸 수 없어 일반 터미널로 동작 중: ${terminalState.error}`"
         />
+        <!-- 살아 있는 터미널 수 — tmux 면 서버 세션 수(사이드바 목록, 붙지 않은 것 포함), plain 이면 이 창의 탭 수.
+             tmux 경고가 있으면 경고가 우선 (ticket terminal-count-badge) -->
+        <span v-else-if="item.id === 'terminals' && liveTerminals" class="badge">
+          {{ liveTerminals }}
+        </span>
       </div>
     </div>
     <div class="actions-bottom">

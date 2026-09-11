@@ -27,6 +27,11 @@ export interface DiffTab {
   preview: boolean;
   /** 워킹트리에서 지워진 파일 — diff 가 아니라 HEAD 내용을 읽기 전용 편집기로 보여 준다 (문서 없음, dirty 불가) */
   deleted?: boolean;
+  /** 커밋 diff (ticket scm-commit-detail) — 이 해시의 부모 대비 diff. 양쪽 다 git 내용이라 문서가 없고
+   *  읽기 전용이며 id 는 'diff:'+hash+':'+path (같은 파일의 워킹트리 diff 와 공존). rename 이관 대상 아님 */
+  commit?: string;
+  /** commit 과 함께 — 이름 변경된 파일의 부모 시점 경로 (original 쪽). 없으면 path */
+  from?: string;
 }
 
 /** hex 뷰어 탭 — 바이트는 docs 가 아니라 editors.hex 에 산다 (텍스트 문서와 공존). 편집 없음 */
@@ -351,7 +356,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
      *  (탭은 유지 — VS Code closeOnFileDelete=false. 앱 내 삭제는 closePathTabs 가 닫는다) */
     orphaned: new Set<string>(),
     /** 닫은 탭 복원 이력 (최근이 뒤) — Ctrl+Shift+T 가 pop 한다 */
-    recentlyClosed: [] as { kind: Tab['kind']; path: string; deleted?: boolean }[],
+    recentlyClosed: [] as { kind: Tab['kind']; path: string; deleted?: boolean; commit?: string; from?: string }[],
     /** 닫기 확인 대기 — dirty 문서의 마지막 탭을 닫을 때 Save/Don't Save/Cancel 대화상자
      *  (VS Code 동일 — 조용히 닫으면 버퍼가 몰래 살아남아 "닫았는데 편집이 남는" 혼동을 낳는다) */
     /** 에디터 포커스 요청 — MonacoHost 가 소비. 트리 단일 클릭(preview)은 세우지 않아
@@ -541,10 +546,11 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
 
   /** SCM 에서 diff 탭 열기 (original: HEAD, modified: 워킹트리).
    *  deleted: 워킹트리에서 지워진 파일 — 워킹트리 문서가 없으므로 diff 대신 HEAD 내용을
-   *  읽기 전용 편집기로 보여 준다 (MonacoHost 가 분기). 문서를 만들지 않아 dirty·저장 경로가 없다 */
-  async function openDiff(path: string, opts?: { deleted?: boolean }): Promise<void> {
+   *  읽기 전용 편집기로 보여 준다 (MonacoHost 가 분기). 문서를 만들지 않아 dirty·저장 경로가 없다.
+   *  commit: 그 커밋의 부모 대비 diff — 양쪽 다 git 내용(문서 없음, 읽기 전용), 탭 라벨은 짧은 해시 */
+  async function openDiff(path: string, opts?: { deleted?: boolean; commit?: string; from?: string }): Promise<void> {
     let dirty = false;
-    if (!opts?.deleted) {
+    if (!opts?.deleted && !opts?.commit) {
       try {
         const doc = await ensureDoc(path);
         dirty = doc.content !== doc.savedContent;
@@ -554,11 +560,12 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
       }
     }
     const group = activeGroup();
-    const id = `diff:${path}`;
+    const id = opts?.commit ? `diff:${opts.commit}:${path}` : `diff:${path}`;
     if (!group.tabs.some((t) => t.id === id)) {
+      const suffix = opts?.commit ? opts.commit.slice(0, 7) : opts?.deleted ? 'Deleted' : 'Working Tree';
       group.tabs.push({
-        kind: 'diff', id, path, name: `${baseName(path)} (${opts?.deleted ? 'Deleted' : 'Working Tree'})`,
-        dirty, preview: false, deleted: opts?.deleted,
+        kind: 'diff', id, path, name: `${baseName(path)} (${suffix})`,
+        dirty, preview: false, deleted: opts?.deleted, commit: opts?.commit, from: opts?.from,
       });
     }
     group.activeTabId = id;
@@ -875,7 +882,8 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
       // preview·hex 탭은 savedContent·디스크만 그려 참조로 세지 않는다 (세면 미저장 버퍼가
       // 보이지 않은 채 살아남는다, review-front-model C2). 남는 편집 표면이 없으면 닫는 탭이
       // preview 여도 확인한다 — 버퍼가 닿을 곳이 없어지는 것은 같다
-      const isEditor = (t: Tab) => t.kind === 'file' || t.kind === 'diff';
+      // 커밋 diff 탭은 문서를 그리지 않는다 — 참조로 세지 않는다
+      const isEditor = (t: Tab) => t.kind === 'file' || (t.kind === 'diff' && !t.commit);
       const editorRefs = editors.groups.reduce(
         (n, g) => n + g.tabs.filter((t) => t.path === target.path && isEditor(t)).length,
         0,
@@ -892,7 +900,9 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
       // 복원 이력 없음 — 죽은 셸은 되살릴 수 없다. 훅이 PTY 를 정리한다 (removeAt 경유면 이미 없어 무해)
       terminalCloser?.(tab.term);
     } else {
-      editors.recentlyClosed.push({ kind: tab.kind, path: tab.path, deleted: tab.kind === 'diff' ? tab.deleted : undefined });
+      editors.recentlyClosed.push(tab.kind === 'diff'
+        ? { kind: tab.kind, path: tab.path, deleted: tab.deleted, commit: tab.commit, from: tab.from }
+        : { kind: tab.kind, path: tab.path });
       if (editors.recentlyClosed.length > RECENTLY_CLOSED_CAP) editors.recentlyClosed.shift();
     }
     collapseIfEmpty(groupId);
@@ -923,7 +933,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
   async function reopenClosedEditor(): Promise<void> {
     const entry = editors.recentlyClosed.pop();
     if (!entry) return;
-    if (entry.kind === 'diff') await openDiff(entry.path, { deleted: entry.deleted });
+    if (entry.kind === 'diff') await openDiff(entry.path, { deleted: entry.deleted, commit: entry.commit, from: entry.from });
     else if (entry.kind === 'hex') openHex(entry.path);
     else if (entry.kind === 'preview') await openHtmlPreview(entry.path);
     else if (entry.kind === 'folder') openFolderTab(entry.path);
@@ -993,7 +1003,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     for (const g of editors.groups) {
       for (const t of g.tabs) {
         // hex·preview 탭은 편집 표면이 아니다 — dirty 점을 받지 않는다
-        if (t.path === path && (t.kind === 'file' || t.kind === 'diff')) {
+        if (t.path === path && (t.kind === 'file' || (t.kind === 'diff' && !t.commit))) {
           t.dirty = dirty;
           if (dirty) t.preview = false;
         }
@@ -1032,6 +1042,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     disposeModelsHook(from);
     for (const g of editors.groups) {
       for (const t of g.tabs) {
+        if (t.kind === 'diff' && t.commit) continue; // 커밋 시점 경로 — 워킹트리 rename 을 따르지 않는다
         const np = mapPath(t.path);
         if (np === null) continue;
         const newId = tabIdOf(t.kind, np);
@@ -1260,7 +1271,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
   async function hydrate(): Promise<string[]> {
     const order: { groupId: number; tab: Tab }[] = [];
     const push = (g: EditorGroup, t: Tab) => {
-      if (t.kind !== 'file' && t.kind !== 'preview' && !(t.kind === 'diff' && !t.deleted)) return;
+      if (t.kind !== 'file' && t.kind !== 'preview' && !(t.kind === 'diff' && !t.deleted && !t.commit)) return;
       if (editors.docs.has(t.path)) return;
       if (!order.some((o) => o.tab.path === t.path)) order.push({ groupId: g.id, tab: t });
     };
@@ -1325,7 +1336,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     // hex·folder 탭은 문서가 필요 없다 — 바이트·나열은 받는 쪽 뷰가 다시 읽는다
     if (!editors.docs.has(h.tab.path) && h.tab.kind !== 'hex' && h.tab.kind !== 'folder') {
       if (!h.doc) {
-        void (h.tab.kind === 'diff' ? openDiff(h.tab.path, { deleted: h.tab.deleted })
+        void (h.tab.kind === 'diff' ? openDiff(h.tab.path, { deleted: h.tab.deleted, commit: h.tab.commit, from: h.tab.from })
           : h.tab.kind === 'preview' ? openHtmlPreview(h.tab.path)
             : openFile(h.tab.path, { groupId: group.id }));
         return;
@@ -1333,7 +1344,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
       editors.docs.set(h.tab.path, h.doc);
     }
     const doc = editors.docs.get(h.tab.path);
-    const editable = h.tab.kind === 'file' || h.tab.kind === 'diff';
+    const editable = h.tab.kind === 'file' || (h.tab.kind === 'diff' && !h.tab.commit);
     const tab: Tab = { ...h.tab, dirty: editable && doc !== undefined && doc.content !== doc.savedContent, preview: false };
     if (!group.tabs.some((t) => t.id === tab.id)) {
       group.tabs.splice(Math.min(index ?? group.tabs.length, group.tabs.length), 0, tab);

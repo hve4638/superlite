@@ -1,4 +1,4 @@
-//! RPC 요청 처리 — fs 읽기/쓰기(etag 낙관적 충돌 검사)·rg 검색·git 상태/스테이징/커밋/로그/브랜치.
+//! RPC 요청 처리 — fs 읽기/쓰기(etag 낙관적 충돌 검사)·rg 검색·git 상태/스테이징/커밋/로그/브랜치/커밋 상세.
 //! 경로는 safe_join 관문(루트 상대)을 지난다 — 단 파일 단건(readFile/stat/writeFile)과 readDir 절대 경로는
 //! file_path 를 거쳐 절대 경로도 허용한다 (워크스페이스 밖 파일 열기, VS Code 파리티).
 
@@ -392,11 +392,47 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
             let dir = git_dir(root, p)?;
             let path = req_path(p)?;
             safe_join(&dir, path)?; // 검증만 — git 에는 상대 경로를 그대로 넘긴다
-            // untracked/신규 파일이면 git show 가 실패한다 → 빈 문자열 (계약)
-            match run(&dir, "git", &["show", &format!("HEAD:{path}")]).await {
+            // rev(와이어 v20, 기본 HEAD): 커밋 diff 의 양쪽 — "<hash>"·"<hash>^". 해시 문자와 ^ 만
+            // 허용 (옵션·ref 이름이 새지 않게)
+            let rev = match p["rev"].as_str() {
+                None | Some("") => "HEAD",
+                Some(r) if !r.is_empty() && r.chars().all(|c| c.is_ascii_hexdigit() || c == '^') => r,
+                Some(_) => return Err("rev 는 커밋 해시(+^)만".into()),
+            };
+            // untracked/신규 파일·루트 커밋의 부모면 git show 가 실패한다 → 빈 문자열 (계약)
+            match run(&dir, "git", &["show", &format!("{rev}:{path}")]).await {
                 Ok(s) => Ok(json!(s)),
                 Err(_) => Ok(json!("")),
             }
+        }
+        // 커밋의 변경 파일 목록 (와이어 v20) — 첫 부모 대비 (병합 커밋은 -m --first-parent 로 첫 부모
+        // 한쪽만, 루트 커밋은 --root 로 전부 added). 이름 변경(R)은 modified + from, 복사(C)는 added
+        "gitCommitFiles" => {
+            let hash = p["hash"].as_str().ok_or("hash 필요")?;
+            if hash.is_empty() || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Err("hash 는 커밋 해시만".into());
+            }
+            let out = run(&git_dir(root, p)?, "git", &[
+                "diff-tree", "--no-commit-id", "-m", "--first-parent", "--root", "-r", "-M", "-z", "--name-status", hash,
+            ]).await?;
+            let mut items = Vec::new();
+            let mut f = out.split('\0');
+            while let Some(status) = f.next() {
+                let Some(path) = f.next() else { break };
+                let letter = status.chars().next().unwrap_or('M');
+                let (kind, from, path) = match letter {
+                    'A' => ("added", None, path),
+                    'D' => ("deleted", None, path),
+                    // R·C 는 옛 경로 다음에 새 경로 — 복사는 옛 파일이 남으므로 added
+                    'R' => ("modified", Some(path), f.next().unwrap_or("")),
+                    'C' => ("added", None, f.next().unwrap_or("")),
+                    _ => ("modified", None, path),
+                };
+                let mut item = json!({"path": path, "kind": kind});
+                if let Some(from) = from { item["from"] = json!(from); }
+                items.push(item);
+            }
+            Ok(json!(items))
         }
         // 인덱스(스테이징) 만 커밋 — 전체 커밋은 프론트가 gitStage(전부) 를 먼저 보낸다
         "gitCommit" => {

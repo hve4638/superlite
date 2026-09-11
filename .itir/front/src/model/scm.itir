@@ -2,7 +2,7 @@ import { ctx, viewOf } from './ctx'
 import { confirm } from './dialog'
 import { createEditors } from './editors'
 import { notify, errText } from './notifications'
-import { DirEntry, GitChangeKind, GitLogItem, ThinBackend } from '../backend/types'
+import { DirEntry, GitChangeKind, GitCommitFile, GitLogItem, ThinBackend } from '../backend/types'
 
 role: SCM 뷰 상태 — 저장소 목록(루트·하위·중첩, 각각 ScmRepo)·선택 저장소와 저장소별 git 변경 목록(staged/unstaged 분리), 스테이징·discard·커밋, 최근 커밋 로그, 브랜치 전환, 트리·탭 장식(색/문자). 저장소는 자동 탐색(gitRepos) + 트리 펼침(readDir repo 표식) + 재탐색의 합집합. 변경 항목은 워크스페이스 경로(path)와 저장소 상대 경로(rel)를 함께 가진다. 세션별 팩토리(createScm) + 활성 세션 전달 shim
 
@@ -40,6 +40,12 @@ export fn openChange(change) {
 }
 export fn openChangeFile(change) {
   role: 행의 Open File 액션 — diff 가 아니라 파일 자체를 연다
+}
+export fn commitFiles(repo, hash) -> GitCommitFile[] {
+  role: 커밋의 변경 파일 목록 (Graph pane 커밋 펼침, ticket scm-commit-detail) — backend.gitCommitFiles 그대로
+}
+export fn openCommitFile(repo, hash, file) {
+  role: 커밋 변경 파일 클릭 — 저장소 상대 경로를 워크스페이스 경로로 바꿔 editors.openDiff(path, {commit: hash, from}) 로 부모 대비 diff 탭 (양쪽 git 내용, 읽기 전용). 이름 변경은 from 이 original 쪽 경로
 }
 export fn commit(repo) {
   role: 저장소의 staged 항목만 커밋 — staged 가 없으면 no-op (ScmView 가 버튼·Ctrl+Enter 를 비활성화). 후 상태 재조회, 실패는 notify

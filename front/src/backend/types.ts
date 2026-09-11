@@ -51,6 +51,14 @@ export interface GitChange {
   staged: boolean;
 }
 
+/** 커밋 하나의 변경 파일 (와이어 v20) — 첫 부모 대비 */
+export interface GitCommitFile {
+  path: string;
+  kind: 'modified' | 'added' | 'deleted';
+  /** 이름 변경이면 부모 시점의 옛 경로 (diff original 쪽은 이 경로로 읽는다) */
+  from?: string;
+}
+
 export interface GitLogItem {
   hash: string;
   subject: string;
@@ -203,8 +211,9 @@ export interface ThinBackend {
   gitRepos(): Promise<string[]>;
   /** 저장소가 아니면 branch·head 둘 다 '' (unborn 은 branch 가 있다) */
   gitStatus(repo: string): Promise<GitStatus>;
-  /** HEAD 시점 파일 내용 (diff 뷰의 original 쪽). untracked 면 빈 문자열. */
-  gitOriginalContent(repo: string, path: string): Promise<string>;
+  /** rev(기본 HEAD) 시점 파일 내용 (diff 뷰의 original 쪽). 그 시점에 없으면(untracked·루트 커밋의
+   *  부모) 빈 문자열. rev 는 커밋 해시 또는 '<hash>^' 만 (와이어 v20) */
+  gitOriginalContent(repo: string, path: string, rev?: string): Promise<string>;
   /** 인덱스(staged)만 커밋. 전체 커밋은 호출측이 gitStage 로 먼저 올린다 (VS Code smart commit). */
   gitCommit(repo: string, message: string): Promise<void>;
   /** 파일들을 인덱스에 올린다 (삭제도 스테이징). 빈 배열은 no-op */
@@ -215,6 +224,8 @@ export interface ThinBackend {
   gitDiscard(repo: string, paths: string[], untracked: string[]): Promise<void>;
   /** HEAD 부터 최근 커밋 목록 (unborn/비 git 은 빈 배열) */
   gitLog(repo: string, limit: number): Promise<GitLogItem[]>;
+  /** 커밋의 변경 파일 목록 (와이어 v20) — 첫 부모 대비. 병합은 첫 부모 한쪽만, 루트 커밋은 전부 added */
+  gitCommitFiles(repo: string, hash: string): Promise<GitCommitFile[]>;
   /** 로컬 브랜치 이름 목록 */
   gitBranches(repo: string): Promise<string[]>;
   /** 브랜치 전환 (git checkout). 충돌 등 실패는 reject */

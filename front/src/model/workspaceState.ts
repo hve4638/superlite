@@ -176,12 +176,13 @@ export async function applyWorkspaceState(ctx: SessionCtx, s: WorkspaceState): P
   const tasks: Promise<unknown>[] = [ctx.files.expandPaths(s.expanded)];
   const termGroups = new Set(s.terminals.map((t) => t.groupId));
   if (s.terminals.length > 0) {
-    tasks.push(ctx.terminals.refreshTerminals().then(() => {
+    const wanted = s.terminals.map((t) => t.tmux);
+    tasks.push(ctx.terminals.listTerminalsFor().then((list) => {
       const ed = ctx.editors.editors;
       const active = ed.activeGroupId;
       const termActive = new Set<number>();
       for (const t of s.terminals) {
-        const info = ctx.terminals.state.list.find((i) => i.id === t.tmux);
+        const info = list.find((i) => i.id === t.tmux);
         if (!info) continue;
         // newTab 없음 — 창 이동 핸드오프가 같은 tmux 세션을 먼저 붙였으면 중복 탭 대신 그 탭으로
         ctx.terminals.attachTerminal(info, { at: { groupId: t.groupId, index: t.index } });
@@ -194,8 +195,20 @@ export async function applyWorkspaceState(ctx: SessionCtx, s: WorkspaceState): P
         if (g && !termActive.has(g.id) && sg.activeTabId !== null && g.tabs.some((t) => t.id === sg.activeTabId)) g.activeTabId = sg.activeTabId;
       }
       if (ed.groups.some((g) => g.id === active)) ed.activeGroupId = active;
+      // 목록에 없는 세션은 사유가 보이게 (간헐적 미복원의 단서 — ticket term-layout-restore-flaky): 저장 id·
+      // 살아 있는 id·데몬 방식을 알림 한 줄에. 재부팅 뒤처럼 전부 죽은 경우도 한 번은 알린다
+      const missing = wanted.filter((id) => !list.some((i) => i.id === id));
+      if (missing.length > 0) {
+        const mode = ctx.terminals.state.mode;
+        const alive = list.map((i) => i.id).join(', ') || 'none';
+        notify('warning', `Could not restore ${missing.length} terminal tab(s): tmux session ${missing.join(', ')} not found (alive: ${alive}${mode === 'tmux' ? '' : `; terminal mode ${mode}`})`);
+      }
       // 터미널이 죽어(kill·재부팅) 끝내 비어 있는 pane 은 접는다 — 저장 시점부터 비어 있던 그룹은 그대로
       for (const gid of termGroups) ctx.editors.closeEmptyGroup(gid);
+    }, (e: unknown) => {
+      // 조회 자체가 끝내 실패 — 죽은 것으로 단정하지 않는다: 빈 pane 은 남겨 두고(사이드바에서 다시 붙일 수
+      // 있다) 사유를 알린다. 종전엔 실패가 빈 목록으로 삼켜져 조용히 접혔고 다음 저장이 터미널 자리를 잃었다
+      notify('warning', `Could not list terminals, ${s.terminals.length} saved terminal tab(s) not restored: ${String(e)}`);
     }));
   }
   tasks.push(ctx.editors.hydrate().then((failed) => {

@@ -1,5 +1,5 @@
 import type {
-  DirEntry, FileContent, FileSearchResult, FileStat, GitLogItem, GitStatus, QuickOpenItem, QuickOpenResult, TerminalSession, ThinBackend, WorkspaceInfo, WriteResult,
+  DirEntry, FileContent, FileSearchResult, FileStat, GitCommitFile, GitLogItem, GitStatus, QuickOpenItem, QuickOpenResult, TerminalSession, ThinBackend, WorkspaceInfo, WriteResult,
 } from './types';
 
 // WHY: 이 픽스처는 ws 워크스페이스(이 repo 밖, code-superlight-ws/tools/refspec/mock-workspace)와
@@ -144,6 +144,14 @@ let INDEX: Record<string, string> = { ...HEAD };
 const MOCK_LOG: GitLogItem[] = [
   { hash: 'mock-0', subject: 'initial', author: 'fixture', date: '2 days ago' },
 ];
+/** 커밋별 트리 스냅샷 (hash → path → 내용) — 커밋 상세(gitCommitFiles)·rev 지정 내용 읽기의 재료 */
+const SNAPSHOTS: Record<string, Record<string, string>> = { 'mock-0': { ...HEAD } };
+/** rev('<hash>' 또는 '<hash>^') 시점 스냅샷 — 없으면(루트의 부모) 빈 트리 */
+function snapshotAt(rev: string): Record<string, string> {
+  if (!rev.endsWith('^')) return SNAPSHOTS[rev] ?? {};
+  const i = MOCK_LOG.findIndex((l) => l.hash === rev.slice(0, -1));
+  return i === -1 ? {} : (SNAPSHOTS[MOCK_LOG[i + 1]?.hash] ?? {});
+}
 
 function delay<T>(v: T): Promise<T> {
   // WHY: 실제 백엔드는 네트워크 왕복이 있다. 0ms resolve 로도 마이크로태스크 경계가 생겨,
@@ -348,14 +356,15 @@ export class MockBackend implements ThinBackend {
     return delay({ branch: 'main', head: `mock-${headSerial}`, dirty: changes.length > 0, changes });
   }
 
-  gitOriginalContent(_repo: string, path: string): Promise<string> {
-    return delay(HEAD[path] ?? '');
+  gitOriginalContent(_repo: string, path: string, rev?: string): Promise<string> {
+    return delay((rev ? snapshotAt(rev) : HEAD)[path] ?? '');
   }
 
   gitCommit(_repo: string, message: string): Promise<void> {
     HEAD = { ...INDEX };
     headSerial += 1;
     MOCK_LOG.unshift({ hash: `mock-${headSerial}`, subject: message, author: 'you', date: 'now' });
+    SNAPSHOTS[`mock-${headSerial}`] = { ...HEAD };
     return delay(undefined);
   }
 
@@ -386,6 +395,19 @@ export class MockBackend implements ThinBackend {
 
   gitLog(_repo: string, limit: number): Promise<GitLogItem[]> {
     return delay(MOCK_LOG.slice(0, limit));
+  }
+
+  gitCommitFiles(_repo: string, hash: string): Promise<GitCommitFile[]> {
+    const before = snapshotAt(`${hash}^`);
+    const after = snapshotAt(hash);
+    const files: GitCommitFile[] = [];
+    for (const path of Object.keys(after)) {
+      if (!(path in before)) files.push({ path, kind: 'added' });
+      else if (after[path] !== before[path]) files.push({ path, kind: 'modified' });
+    }
+    for (const path of Object.keys(before)) if (!(path in after)) files.push({ path, kind: 'deleted' });
+    files.sort((a, b) => a.path.localeCompare(b.path));
+    return delay(files);
   }
 
   gitBranches(_repo: string): Promise<string[]> {

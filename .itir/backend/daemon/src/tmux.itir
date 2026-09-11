@@ -31,7 +31,7 @@ export fn name_of(bin, id) -> name {
   role: attach 시 프론트 탭 제목용 세션 이름 (display-message) — 실패면 id
 }
 export fn list(bin, root?) -> items[] {
-  role: 살아 있는 세션 [{id, name, root, attached, activity(ms), created(ms), command}] — ls -F 뒤 세션마다 show-environment 로 ENV_ROOT 를 붙여 root 로 거른다 (없는 세션은 우리 것이 아님). 서버 없음은 빈 목록
+  role: 살아 있는 세션 [{id, name, root, attached, activity(ms), created(ms), command}] — ls -F 뒤 세션마다 show-environment 로 ENV_ROOT 를 붙여 root 로 거른다 (없는 세션은 우리 것이 아님). 서버 없음은 빈 목록. ls 실패·show-environment 실패(unknown variable 제외)는 stderr(daemon.log)에 남긴다 (ticket term-layout-restore-flaky)
 }
 export fn detach_args(tty) -> args {
   role: 특정 클라이언트(그 pty tty)를 clean detach 하는 인자 — 탭 닫기 정리(term::kill_term)용

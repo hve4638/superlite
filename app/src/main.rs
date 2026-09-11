@@ -497,6 +497,11 @@ fn build_window(
         // WHY: Tauri 의 drag-drop 핸들러가 켜져 있으면 WebView2(Windows)가 HTML5 DnD
         //      이벤트를 가로채 내부 DnD(pane 분할·탭·탐색기 드래그)가 DOM 에 도달하지 않는다.
         .disable_drag_drop_handler()
+        // WHY: WebView2 152 부터 Windows 의 "입력하는 동안 포인터 숨기기" 를 Chromium 기능
+        //      (HideCursorWhileTyping)으로 구현하는데, 숨긴 포인터가 마우스를 움직여도 안 돌아오는
+        //      회귀가 있다 (ticket editor-cursor-vanish, WebView2Feedback #5687). 기능을 끈다 —
+        //      앞의 셋은 wry 기본값이라 이 호출로 덮이므로 그대로 옮긴다. 다른 OS 는 무시
+        .additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,HideCursorWhileTyping")
         // 첫 페인트 전 흰 플래시 방지 — 테마 배경(--vscode-editor-background)과 일치
         .background_color(tauri::window::Color(0x1f, 0x1f, 0x1f, 0xff))
         .initialization_script(format!(

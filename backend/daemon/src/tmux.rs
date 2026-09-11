@@ -253,7 +253,11 @@ pub(crate) async fn list(bin: &Path, root: Option<&Path>) -> Result<Vec<Value>, 
     let text = match out_text(o) {
         Ok(t) => t,
         Err(e) if no_server(&e) => return Ok(Vec::new()),
-        Err(e) => return Err(e),
+        Err(e) => {
+            // daemon.log 에 남긴다 — 프론트는 실패를 빈 목록으로 오인하기 쉽다 (ticket term-layout-restore-flaky)
+            eprintln!("superlite-daemon: tmux ls 실패: {e}");
+            return Err(e);
+        }
     };
     let want = root.map(|r| r.to_string_lossy().into_owned());
     let mut out = Vec::new();
@@ -263,9 +267,17 @@ pub(crate) async fn list(bin: &Path, root: Option<&Path>) -> Result<Vec<Value>, 
             continue;
         }
         let env = async_command(bin)?.args(["show-environment", "-t", f[0], ENV_ROOT]).output().await.map_err(err)?;
-        let Some(r) = out_text(env).ok().and_then(|s| s.split_once('=').map(|(_, v)| v.to_string())) else {
-            continue;
+        let r = match out_text(env) {
+            Ok(s) => s.split_once('=').map(|(_, v)| v.to_string()),
+            Err(e) => {
+                // "unknown variable" = 우리 것이 아닌 세션(정상 제외). 그 외(ls 뒤 사라짐 등)는 목록 누락의 단서라 기록
+                if !e.contains("unknown variable") {
+                    eprintln!("superlite-daemon: tmux show-environment {} 실패: {e}", f[0]);
+                }
+                None
+            }
         };
+        let Some(r) = r else { continue };
         if want.as_deref().is_some_and(|w| w != r) {
             continue;
         }

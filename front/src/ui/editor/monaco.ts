@@ -301,7 +301,28 @@ setBeforeSessionSwitch(() => {
     originals.delete(p);
     detachAndDispose(model);
   }
+  for (const [k, model] of [...revisions]) {
+    revisions.delete(k);
+    detachAndDispose(model);
+  }
 });
+
+/** 커밋 시점 모델 (ticket scm-commit-detail) — rev('<hash>'·'<hash>^') 의 path 내용. (rev,path) 가 내용을
+ *  고정하므로 해시가 바뀔 일이 없어 한 번 만들면 세션 전환까지 산다 (본 커밋 수만큼의 소규모 누수 — ponytail) */
+const revisions = new Map<string, monaco.editor.ITextModel>();
+
+export async function revisionModelFor(path: string, rev: string): Promise<monaco.editor.ITextModel> {
+  const key = `${rev}:${path}`;
+  const cached = revisions.get(key);
+  if (cached) return cached;
+  const repo = repoOf(path);
+  const content = repo ? await backend.gitOriginalContent(repo.path, relPath(repo, path), rev) : '';
+  const again = revisions.get(key); // WHY: await 중 동시 호출이 먼저 만들었을 수 있다
+  if (again) return again;
+  const model = monaco.editor.createModel(content, languageOf(path), monaco.Uri.parse(`git-original://${rev}/${path}`));
+  revisions.set(key, model);
+  return model;
+}
 
 /** diff original(HEAD 시점) 모델 — 소속 저장소의 HEAD 해시가 바뀌면 무효화되는 버전 키 캐시.
  *  이전 버전 모델은 살아 있는 diff 에디터에 물려 있을 수 있어 dispose 하지 않는다

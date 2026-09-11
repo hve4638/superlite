@@ -78,7 +78,7 @@ export fn toggleHtmlPreview(groupId, tabId) {
   role: HTML 편집기 ↔ 프리뷰 제자리 전환 (Ctrl+Shift+V, 탭바 아이콘) — 탭을 같은 자리에서 다른 종류(id 가 다름)로 바꾼다. 문서 공유라 dirty 버퍼 유지, 프리뷰 상태에서 탐색기로 같은 파일을 열면 편집기 탭이 따로 열린다. 바꿀 종류의 탭이 그 그룹에 이미 있으면 현재 탭을 접고 그쪽 활성화. .html 이 아닌 file 탭·diff·hex 는 no-op
 }
 export fn openDiff(path, opts?) {
-  role: SCM diff 탭 열기 — modified 쪽은 워킹트리 문서 그 자체. opts.deleted 면 워킹트리에 없는 파일 — 문서를 만들지 않고 deleted 탭으로 열어 HEAD 내용을 읽기 전용 편집기로 보여 준다 (MonacoHost 분기, dirty·저장 없음)
+  role: SCM diff 탭 열기 — modified 쪽은 워킹트리 문서 그 자체. opts.deleted 면 워킹트리에 없는 파일 — 문서를 만들지 않고 deleted 탭으로 열어 HEAD 내용을 읽기 전용 편집기로 보여 준다 (MonacoHost 분기, dirty·저장 없음). opts.commit(ticket scm-commit-detail)이면 그 커밋의 부모 대비 diff — 양쪽 다 git 내용이라 문서 없음·읽기 전용, id 'diff:'+hash+':'+path 로 같은 파일의 워킹트리 diff 와 공존, 라벨 접미는 짧은 해시, opts.from 은 이름 변경된 파일의 original 쪽 경로. 커밋 diff 탭은 문서 참조(닫기 확인·dirty)·rename 이관·hydrate 대상이 아니다 — 닫기 이력·창 이동은 commit·from 을 나른다
 }
 export fn setActiveTab(groupId, tabId) {
   role: 탭·그룹 활성화 + 에디터 포커스 요청 (탭 클릭은 항상 에디터로 포커스 — VS Code 동일)

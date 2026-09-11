@@ -2,9 +2,10 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import {
   scm, activeRepo, selectRepo, openChange, openChangeFile, commit, refreshScm, rescanRepos, stage, unstage,
-  requestDiscard, branches, checkout, sync, CHANGE_LETTER, CHANGE_COLOR,
+  requestDiscard, branches, checkout, sync, commitFiles, openCommitFile, CHANGE_LETTER, CHANGE_COLOR,
   type ScmChange, type ScmRepo,
 } from '../../model/scm';
+import type { GitCommitFile } from '../../backend/types';
 import { gitAuth, signInGithub, removeCredential, refreshCredentials } from '../../model/gitauth';
 import { openContextMenu, showViewlet, workbench } from '../../model/workbench';
 import { revealPath } from '../../model/files';
@@ -103,6 +104,43 @@ async function open(c: ScmChange): Promise<void> {
   await openChange(c);
 }
 
+// ---- 커밋 펼침 (ticket scm-commit-detail) — Graph 행 클릭이 그 커밋의 변경 파일을 아래에 인라인으로 편다
+//      (한 번에 하나, 다시 클릭하면 접힘). 파일 클릭은 부모 대비 diff 탭. 저장소가 바뀌면 접는다
+const expanded = reactive({ hash: '', files: [] as GitCommitFile[], loading: false, selected: '' });
+async function toggleCommit(hash: string): Promise<void> {
+  const r = repo.value;
+  if (!r || expanded.hash === hash) {
+    expanded.hash = '';
+    expanded.files = [];
+    return;
+  }
+  expanded.hash = hash;
+  expanded.files = [];
+  expanded.selected = '';
+  expanded.loading = true;
+  try {
+    const files = await commitFiles(r, hash);
+    if (expanded.hash === hash) expanded.files = files;
+  } catch (err) {
+    notify('error', `Failed to load commit ${hash.slice(0, 7)}: ${errText(err)}`);
+    if (expanded.hash === hash) expanded.hash = '';
+  } finally {
+    if (expanded.hash === hash) expanded.loading = false;
+  }
+}
+watch(() => repo.value?.path, () => {
+  expanded.hash = '';
+  expanded.files = [];
+});
+function onCommitFileClick(hash: string, f: GitCommitFile): void {
+  const r = repo.value;
+  if (!r) return;
+  selected.clear(); // 변경 목록 선택과 배타 — 한 리스트만 활성 선택을 가진다
+  expanded.selected = f.path;
+  void openCommitFile(r, hash, f);
+}
+const fileName = (p: string): string => p.slice(p.lastIndexOf('/') + 1);
+const fileDir = (p: string): string => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '');
 /** 브랜치 전환 — 라벨 아래에 브랜치 목록 메뉴 (현재 브랜치는 비활성) */
 async function pickBranch(e: MouseEvent): Promise<void> {
   const r = repo.value;
@@ -313,25 +351,52 @@ onMounted(() => {
         </div>
       </div>
       <div v-show="!collapsed.has('graph')" class="pane-body">
-        <div
-          v-for="(item, i) in repo.log"
-          :key="item.hash"
-          class="history-row"
-          :class="{ current: i === 0 }"
-          :title="`${item.hash.slice(0, 7)} · ${item.author} · ${item.date}`"
-        >
-          <svg class="graph" width="22" height="22" viewBox="0 0 22 22">
-            <line v-if="i > 0" x1="11" y1="0" x2="11" y2="7" />
-            <circle cx="11" cy="11" r="4" />
-            <line v-if="i < repo.log.length - 1" x1="11" y1="15" x2="11" y2="22" />
-          </svg>
-          <span class="hist-name">{{ item.subject }}</span>
-          <span class="hist-desc">{{ item.author }}, {{ item.date }}</span>
-          <span v-if="i === 0 && repo.branch" class="ref-pill">
-            <span class="codicon codicon-target" />
-            <span class="ref-name">{{ repo.branch }}</span>
-          </span>
-        </div>
+        <template v-for="(item, i) in repo.log" :key="item.hash">
+          <div
+            class="history-row"
+            :class="{ current: i === 0, selected: expanded.hash === item.hash }"
+            :title="`${item.hash.slice(0, 7)} · ${item.author} · ${item.date}`"
+            @click="toggleCommit(item.hash)"
+          >
+            <svg class="graph" width="22" height="22" viewBox="0 0 22 22">
+              <line v-if="i > 0" x1="11" y1="0" x2="11" y2="7" />
+              <circle cx="11" cy="11" r="4" />
+              <line v-if="i < repo.log.length - 1" x1="11" y1="15" x2="11" y2="22" />
+            </svg>
+            <span class="hist-name">{{ item.subject }}</span>
+            <span class="hist-desc">{{ item.author }}, {{ item.date }}</span>
+            <span v-if="i === 0 && repo.branch" class="ref-pill">
+              <span class="codicon codicon-target" />
+              <span class="ref-name">{{ repo.branch }}</span>
+            </span>
+          </div>
+          <!-- 펼친 커밋의 변경 파일 — 그래프 선은 아래로 이어 그린다 (마지막 커밋이면 없음) -->
+          <template v-if="expanded.hash === item.hash">
+            <div v-if="expanded.loading" class="history-row commit-file">
+              <svg class="graph" width="22" height="22" viewBox="0 0 22 22"><line v-if="i < repo.log.length - 1" x1="11" y1="0" x2="11" y2="22" /></svg>
+              <span class="codicon codicon-loading codicon-modifier-spin" />
+            </div>
+            <div v-else-if="!expanded.files.length" class="history-row commit-file">
+              <svg class="graph" width="22" height="22" viewBox="0 0 22 22"><line v-if="i < repo.log.length - 1" x1="11" y1="0" x2="11" y2="22" /></svg>
+              <span class="hist-desc">No changes</span>
+            </div>
+            <div
+              v-for="f in expanded.files"
+              v-else
+              :key="f.path"
+              class="history-row commit-file"
+              :class="{ selected: expanded.selected === f.path }"
+              :title="f.from ? `${f.from} → ${f.path}` : f.path"
+              @click="onCommitFileClick(item.hash, f)"
+            >
+              <svg class="graph" width="22" height="22" viewBox="0 0 22 22"><line v-if="i < repo.log.length - 1" x1="11" y1="0" x2="11" y2="22" /></svg>
+              <FileIcon :name="fileName(f.path)" />
+              <span class="res-name">{{ fileName(f.path) }}</span>
+              <span v-if="fileDir(f.path)" class="res-desc">{{ fileDir(f.path) }}</span>
+              <span class="letter" :style="{ color: `var(${CHANGE_COLOR[f.kind]})` }">{{ CHANGE_LETTER[f.kind] }}</span>
+            </div>
+          </template>
+        </template>
       </div>
     </section>
     <GitAuthDialog v-if="authOpen" />
@@ -675,6 +740,21 @@ onMounted(() => {
 }
 .history-row:hover {
   background: var(--vscode-list-hoverBackground);
+}
+.history-row.selected {
+  background: var(--vscode-list-inactiveSelectionBackground);
+}
+.scm-view.list-active .history-row.selected {
+  background: var(--vscode-list-activeSelectionBackground);
+  color: var(--vscode-list-activeSelectionForeground);
+}
+/* 펼친 커밋의 파일 행 — 그래프 열 다음에 변경 목록과 같은 아이콘·이름·디렉토리·상태 글자 */
+.commit-file .file-icon {
+  margin: 0 6px 0 4px;
+}
+.commit-file > .codicon-loading {
+  margin-left: 4px;
+  font-size: 16px;
 }
 .graph {
   flex: none;

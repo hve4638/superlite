@@ -5,7 +5,7 @@
  * 지나가게 하고, 변경 계열은 reject 한다 — 빈 세션에 쓰기가 도달하면 버그다
  * (UI 가 진입로를 막는다). 폴더를 열면 이 백엔드째로 세션이 교체된다.
  */
-import type { FileContent, FileSearchResult, FileStat, GitLogItem, GitStatus, QuickOpenResult, TerminalSession, ThinBackend, WorkspaceInfo, WriteResult } from './types';
+import type { FileContent, FileSearchResult, FileStat, GitCommitFile, GitLogItem, GitStatus, QuickOpenResult, TerminalSession, ThinBackend, WorkspaceInfo, WriteResult } from './types';
 
 const NO_FOLDER = '빈 세션 — 열린 폴더가 없다';
 
@@ -70,6 +70,9 @@ export class EmptyBackend implements ThinBackend {
     return Promise.reject(new Error(NO_FOLDER));
   }
   gitLog(): Promise<GitLogItem[]> {
+    return Promise.resolve([]);
+  }
+  gitCommitFiles(): Promise<GitCommitFile[]> {
     return Promise.resolve([]);
   }
   gitBranches(): Promise<string[]> {

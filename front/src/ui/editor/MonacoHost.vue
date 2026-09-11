@@ -4,7 +4,7 @@ import type { EditorGroup } from '../../model/editors';
 import { editorView, editors, indentOf } from '../../model/editors';
 import { scm } from '../../model/scm';
 import { openQuickInput } from '../../model/workbench';
-import { EDITOR_OPTIONS, modelFor, monaco, originalModelFor } from './monaco';
+import { EDITOR_OPTIONS, modelFor, monaco, originalModelFor, revisionModelFor } from './monaco';
 import { EDITOR_FONT_SIZE } from '../../theme/fonts';
 import { bindVim } from './vim';
 
@@ -102,6 +102,21 @@ async function sync() {
   // 자체를 피해야 한다
   // hex·preview·terminal 탭도 모델 없음 — 전용 뷰가 편집기를 가린다
   if (tab.kind === 'hex' || tab.kind === 'preview' || tab.kind === 'terminal' || tab.kind === 'folder') return;
+  if (tab.kind === 'diff' && tab.commit) {
+    // 커밋 diff — 양쪽 다 git 내용 (문서 없음). 이름 변경이면 original 은 옛 경로(from)
+    const ed = ensureDiffEditor();
+    const original = await revisionModelFor(tab.from ?? tab.path, `${tab.commit}^`);
+    const modified = await revisionModelFor(tab.path, tab.commit);
+    if (active.value?.id !== tab.id) return; // WHY: await 사이에 탭이 바뀌었을 수 있다
+    ed.updateOptions({ readOnly: true });
+    const cur = ed.getModel();
+    if (!cur || cur.modified !== modified || cur.original !== original) ed.setModel({ original, modified });
+    if (editors.activeGroupId === props.group.id && editors.pendingFocus) {
+      editors.pendingFocus = false;
+      focusLater(ed.getModifiedEditor());
+    }
+    return;
+  }
   const doc = editors.docs.get(tab.path);
   if (doc?.unopenable !== undefined || doc?.image !== undefined) return;
   // 아직 안 읽힌 파일 탭 — 모델을 만들면 '' 로 굳는다. docs 워처가 도착 시 다시 sync 한다
@@ -145,6 +160,7 @@ async function sync() {
     const modified = modelFor(tab.path);
     const original = await originalModelFor(tab.path);
     if (active.value?.id !== tab.id) return; // WHY: await 사이에 탭이 바뀌었을 수 있다
+    ed.updateOptions({ readOnly: false }); // 커밋 diff 탭에서 돌아오는 경우
     const cur = ed.getModel();
     if (!cur || cur.modified !== modified || cur.original !== original) {
       ed.setModel({ original, modified });
