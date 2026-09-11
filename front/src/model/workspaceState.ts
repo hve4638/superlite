@@ -62,6 +62,8 @@ function serialize(ctx: SessionCtx, sub: boolean): SubSnapshot {
     });
     g.tabs = g.tabs.filter((t) => t.kind !== 'terminal');
     if (g.activeTabId !== null && !g.tabs.some((t) => t.id === g.activeTabId)) g.activeTabId = g.tabs[0]?.id ?? null;
+    // MRU 도 터미널 id 를 뺀다 — 인스턴스 id 는 창마다 달라 복원 때 의미가 없다 (ticket tab-open-next-mru-close)
+    g.mru = g.mru?.filter((id) => g.tabs.some((t) => t.id === id));
   }
   const open = new Set(s.groups.flatMap((g) => g.tabs.map((t) => t.path)));
   return {
@@ -192,7 +194,7 @@ export async function applyWorkspaceState(ctx: SessionCtx, s: WorkspaceState): P
       // 활성 탭으로, 활성 그룹도 저장된 것으로 되돌린다
       for (const sg of s.groups) {
         const g = ed.groups.find((x) => x.id === sg.id);
-        if (g && !termActive.has(g.id) && sg.activeTabId !== null && g.tabs.some((t) => t.id === sg.activeTabId)) g.activeTabId = sg.activeTabId;
+        if (g && !termActive.has(g.id) && sg.activeTabId !== null && g.tabs.some((t) => t.id === sg.activeTabId)) ctx.editors.setActiveTab(g.id, sg.activeTabId);
       }
       if (ed.groups.some((g) => g.id === active)) ed.activeGroupId = active;
       // 목록에 없는 세션은 사유가 보이게 (간헐적 미복원의 단서 — ticket term-layout-restore-flaky): 저장 id·

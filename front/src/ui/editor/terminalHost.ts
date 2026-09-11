@@ -159,6 +159,10 @@ function open(inst: TerminalInstance, b: Binding): void {
     lineHeight: TERMINAL_LINE_HEIGHT,
     cursorBlink: true,
     cursorStyle: 'bar', // Windows Terminal 기본
+    // WHY: xterm 기본(true)은 Alt+클릭을 "커서를 클릭 셀로" 로 보고 방향키 시퀀스를 수백 개 셸에
+    //      보낸다 (Alt+Shift+클릭도 아래 Shift 제거 재전송을 거쳐 같은 경로). WT 는 Alt+클릭에 아무
+    //      동작이 없고 Alt+드래그만 블록 선택이라 그 규칙을 따른다 (ticket alt-shift-click-odd)
+    altClickMovesCursor: false,
     theme: CAMPBELL,
   });
   const fit = new FitAddon();

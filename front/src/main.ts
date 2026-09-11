@@ -9,6 +9,7 @@ import './theme/base.css';
 import './model/host';
 import Workbench from './ui/Workbench.vue';
 import { installKeybindings, setupCommands } from './model/commands';
+import { inApp } from './model/window';
 import { initOsDrop } from './model/osdrop';
 import { initRecents } from './model/recents';
 import { hasAnyDirty, initSessions } from './model/sessions';
@@ -27,6 +28,18 @@ window.addEventListener('beforeunload', (e) => {
   // 워크스페이스 상태 마지막 저장 — 웹(localStorage)은 동기로 끝나고, 앱은 닿는 데까지 (디바운스 보완)
   void flushAllWorkspaces();
 });
+
+// WHY: 앱에서는 WebView2 기본 컨텍스트 메뉴(뒤로·새로고침·검사)를 어디서도 띄우지 않는다 (VS Code 동일).
+//      자체 메뉴를 여는 자리는 각자 .prevent 하므로 영향 없고, 웹은 개발·디버깅용으로 브라우저 메뉴를 둔다.
+//      일반 input·textarea 는 예외 — 붙여넣기 메뉴가 필요하다 (사용자 결정 2026-09-12, ticket app-contextmenu-suppress).
+//      Monaco·xterm 은 contenteditable/textarea 를 숨겨 쓰지만 자체 메뉴 자리에서 이미 .prevent 한다
+if (inApp) {
+  document.addEventListener('contextmenu', (e) => {
+    const t = e.target;
+    if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement) return;
+    e.preventDefault();
+  });
+}
 
 // WHY: 초기 로드(트리·git status)를 기다리지 않고 바로 마운트한다 — 큰 워크스페이스는
 //      첫 readDir 가 수 초라, 기다리면 그동안 배경색만 보인다. 로드 중임은

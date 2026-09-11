@@ -170,13 +170,11 @@ async function rescan(): Promise<void> {
 }
 
 /** "More Actions..." — 원격 동기화(pull/push/fetch)와 git 계정 관리 (VS Code SCM 제목 메뉴의 자리).
- *  동기화 진행 중이면 그 저장소의 동기화 항목은 비활성. 저장된 자격은 호스트별 Forget 항목으로 */
-function moreActions(e: MouseEvent): void {
-  const r = repo.value;
-  if (!r) return;
-  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+ *  동기화 진행 중이면 그 저장소의 동기화 항목은 비활성. 저장된 자격은 호스트별 Forget 항목으로.
+ *  changes 헤더의 ... 는 활성 저장소를, Repositories 행 우클릭은 그 행의 저장소를 대상으로 같은 메뉴를 연다 */
+function repoActions(r: ScmRepo, x: number, y: number): void {
   const idle = !r.syncing;
-  openContextMenu(rect.left, rect.bottom + 4, [
+  openContextMenu(x, y, [
     { label: 'Pull', enabled: idle, run: () => void sync(r, 'pull') },
     { label: 'Push', enabled: idle, run: () => void sync(r, 'push') },
     { label: 'Fetch', enabled: idle, run: () => void sync(r, 'fetch') },
@@ -188,6 +186,16 @@ function moreActions(e: MouseEvent): void {
       run: () => void removeCredential(c.host).catch((e) => notify('error', `Failed to forget: ${errText(e)}`)),
     })),
   ]);
+}
+function moreActions(e: MouseEvent): void {
+  const r = repo.value;
+  if (!r) return;
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  repoActions(r, rect.left, rect.bottom + 4);
+}
+/** 저장소 행 우클릭 — 활성 저장소는 바꾸지 않고 그 행의 저장소만 대상으로 (사용자 결정 2026-09-12) */
+function onRepoContextMenu(e: MouseEvent, r: ScmRepo): void {
+  repoActions(r, e.clientX, e.clientY);
 }
 const authOpen = computed(() => gitAuth.prompt !== null || gitAuth.device !== null || gitAuth.manual);
 
@@ -218,6 +226,7 @@ onMounted(() => {
           :class="{ selected: r === repo }"
           :title="r.path || workbench.workspaceName"
           @click="selectRepo(r.path)"
+          @contextmenu.prevent="onRepoContextMenu($event, r)"
         >
           <span class="codicon codicon-repo" />
           <span class="repo-name">{{ repoTitle(r) }}</span>

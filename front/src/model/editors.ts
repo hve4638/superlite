@@ -147,6 +147,10 @@ export interface EditorGroup {
   id: number;
   tabs: Tab[];
   activeTabId: string | null;
+  /** 최근 본 순서(MRU) — 앞이 최근. 활성화(activate)마다 앞으로 올리고, 활성 탭을 닫으면 이웃이 아니라
+   *  여기 다음 탭이 활성이 된다 (VS Code focusRecentEditorAfterClose). 스냅샷(창 이동·워크스페이스 복원)에
+   *  그대로 실린다. 옛 저장본엔 없어 optional — 없으면 빈 것으로 본다 (ticket tab-open-next-mru-close) */
+  mru?: string[];
   /** 그룹 잠금 — 다른 그룹이 마지막 탭을 잃어도 자동으로 접히지 않게 배치를 지킨다 (삭제로 인한
    *  자동 병합 방지만 — 사용자가 직접 닫거나 드래그로 재배치하는 것은 막지 않는다). 잠긴 그룹
    *  자신이 비면 종전대로 접히고 잠금도 사라진다 — 잠금은 탭이 있는 그룹에만 존재한다.
@@ -429,8 +433,8 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
   function openTerminalTab(term: number, name: string, at?: { groupId?: number; index?: number }): void {
     const group = (at?.groupId !== undefined ? editors.groups.find((g) => g.id === at.groupId) : undefined) ?? activeGroup();
     const tab: TerminalTab = { kind: 'terminal', id: `terminal:${term}`, path: '', name, dirty: false, preview: false, term };
-    group.tabs.splice(Math.min(at?.index ?? group.tabs.length, group.tabs.length), 0, tab);
-    group.activeTabId = tab.id;
+    group.tabs.splice(Math.min(at?.index ?? openIndex(group), group.tabs.length), 0, tab);
+    activate(group, tab.id);
     editors.activeGroupId = group.id;
   }
 
@@ -448,7 +452,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     for (const g of editors.groups) {
       const t = g.tabs.find((t) => t.kind === 'terminal' && t.term === term);
       if (t) {
-        g.activeTabId = t.id;
+        activate(g, t.id);
         editors.activeGroupId = g.id;
         return true;
       }
@@ -472,6 +476,34 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
   function activeTab(): Tab | null {
     const g = activeGroup();
     return g.tabs.find((t) => t.id === g.activeTabId) ?? null;
+  }
+
+  /** 탭 활성화 — activeTabId 를 세우고 MRU 맨 앞으로 올린다. activeTabId 를 직접 대입하지 않고 이것만 쓴다 */
+  function activate(group: EditorGroup, tabId: string | null): void {
+    group.activeTabId = tabId;
+    if (tabId === null) return;
+    const mru = (group.mru ??= []);
+    const i = mru.indexOf(tabId);
+    if (i !== -1) mru.splice(i, 1);
+    mru.unshift(tabId);
+  }
+
+  function forgetMru(group: EditorGroup, tabId: string): void {
+    const i = group.mru?.indexOf(tabId) ?? -1;
+    if (i !== -1) group.mru!.splice(i, 1);
+  }
+
+  /** 탭 id 가 제자리에서 바뀔 때(rename·폴더 이동·프리뷰 전환) MRU 의 자리도 따라간다 */
+  function renameMru(group: EditorGroup, from: string, to: string): void {
+    const i = group.mru?.indexOf(from) ?? -1;
+    if (i !== -1) group.mru![i] = to;
+  }
+
+  /** 자리를 지정하지 않은 새 탭의 삽입 위치 — 활성 탭 바로 오른쪽, 활성 탭이 없으면 끝
+   *  (VS Code openPositioning: right) */
+  function openIndex(group: EditorGroup): number {
+    const i = group.tabs.findIndex((t) => t.id === group.activeTabId);
+    return i === -1 ? group.tabs.length : i + 1;
   }
 
   // WHY: 클라이언트 설정 파일(superlite:/ 가상 경로)은 데몬 파일이 아니라 relay HTTP 로 읽고 쓴다 —
@@ -521,7 +553,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     const existing = group.tabs.find((t) => t.id === path);
     if (existing) {
       if (!opts?.preview) existing.preview = false;
-      group.activeTabId = existing.id;
+      activate(group, existing.id);
       editors.activeGroupId = group.id;
       if (opts?.focus !== false) editors.pendingFocus = true;
       return true;
@@ -537,11 +569,12 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     };
     const previewIdx = group.tabs.findIndex((t) => t.preview);
     if (tab.preview && previewIdx !== -1) {
-      group.tabs.splice(previewIdx, 1, tab);
+      const [replaced] = group.tabs.splice(previewIdx, 1, tab);
+      forgetMru(group, replaced.id);
     } else {
-      group.tabs.push(tab);
+      group.tabs.splice(openIndex(group), 0, tab);
     }
-    group.activeTabId = tab.id;
+    activate(group, tab.id);
     editors.activeGroupId = group.id;
     if (opts?.focus !== false) editors.pendingFocus = true;
 
@@ -584,25 +617,25 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     const id = opts?.commit ? `diff:${opts.commit}:${path}` : `diff:${path}`;
     if (!group.tabs.some((t) => t.id === id)) {
       const suffix = opts?.commit ? opts.commit.slice(0, 7) : opts?.deleted ? 'Deleted' : 'Working Tree';
-      group.tabs.push({
+      group.tabs.splice(openIndex(group), 0, {
         kind: 'diff', id, path, name: `${baseName(path)} (${suffix})`,
         dirty, preview: false, deleted: opts?.deleted, commit: opts?.commit, from: opts?.from,
       });
     }
-    group.activeTabId = id;
+    activate(group, id);
     editors.pendingFocus = true;
   }
 
   /** hex 뷰어 탭 열기 — 활성 그룹에 고정 탭. 바이트 로드는 HexView 가 ensureHex 로 한다
    *  (창 이동·복원·재열기 모두 같은 경로로 수렴) */
-  /** URL 탭 열기 — 활성 그룹 끝에 새 탭. url 이 없으면 빈 탭(주소칸에 포커스, UrlView 몫). 같은 URL 의 탭이
+  /** URL 탭 열기 — 활성 그룹의 활성 탭 오른쪽에 새 탭. url 이 없으면 빈 탭(주소칸에 포커스, UrlView 몫). 같은 URL 의 탭이
    *  있어도 새로 연다 (주소칸으로 URL 이 바뀌므로 중복 판정에 의미가 없다) */
   function openUrl(url = ''): void {
     const group = activeGroup();
     const id = `url:${Math.random().toString(36).slice(2, 10)}`;
     const tab: UrlTab = { kind: 'url', id, path: '', name: urlTabName(url), dirty: false, preview: false, url };
-    group.tabs.push(tab);
-    group.activeTabId = id;
+    group.tabs.splice(openIndex(group), 0, tab);
+    activate(group, id);
     editors.pendingFocus = true;
   }
 
@@ -622,9 +655,9 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     const group = activeGroup();
     const id = tabIdOf('hex', path);
     if (!group.tabs.some((t) => t.id === id)) {
-      group.tabs.push({ kind: 'hex', id, path, name: tabNameOf('hex', path), dirty: false, preview: false });
+      group.tabs.splice(openIndex(group), 0, { kind: 'hex', id, path, name: tabNameOf('hex', path), dirty: false, preview: false });
     }
-    group.activeTabId = id;
+    activate(group, id);
   }
 
   /** 폴더 탭 열기 — 탐색기 폴더 드래그 드롭(중앙)·탭바 폴더 버튼(루트). 같은 폴더 탭이 그 그룹에
@@ -639,9 +672,9 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
         kind: 'folder', id, path, name: tabNameOf('folder', path), dirty: false, preview: false,
         style: folderPrefs.style, history: [path], histIndex: 0, sort: { key: 'name', asc: true },
       };
-      group.tabs.splice(Math.min(opts.index ?? group.tabs.length, group.tabs.length), 0, tab);
+      group.tabs.splice(Math.min(opts.index ?? openIndex(group), group.tabs.length), 0, tab);
     }
-    group.activeTabId = id;
+    activate(group, id);
     editors.activeGroupId = group.id;
     editors.pendingFocus = true;
   }
@@ -672,7 +705,9 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     const id = tabIdOf('folder', path);
     if (group.tabs.some((t) => t.id === id)) {
       group.tabs.splice(group.tabs.indexOf(tab), 1);
+      forgetMru(group, tabId);
     } else {
+      renameMru(group, tabId, id);
       tab.id = id;
       tab.path = path;
       tab.name = tabNameOf('folder', path);
@@ -684,7 +719,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
         tab.histIndex = tab.history.length - 1;
       }
     }
-    group.activeTabId = id;
+    activate(group, id);
   }
 
   /** 폴더 탭 보기 스타일 — 그 탭만 바꾸고, 새 탭의 기본값으로 기억한다 */
@@ -750,14 +785,14 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     const id = tabIdOf('preview', path);
     for (const g of editors.groups) {
       if (g.tabs.some((t) => t.id === id)) {
-        g.activeTabId = id;
+        activate(g, id);
         editors.activeGroupId = g.id;
         return;
       }
     }
     const group = activeGroup();
-    group.tabs.push({ kind: 'preview', id, path, name: tabNameOf('preview', path), dirty: false, preview: false });
-    group.activeTabId = id;
+    group.tabs.splice(openIndex(group), 0, { kind: 'preview', id, path, name: tabNameOf('preview', path), dirty: false, preview: false });
+    activate(group, id);
     if (editors.docs.has(path)) return;
     try {
       await trackLoad(id, ensureDoc(path));
@@ -782,19 +817,21 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     const existing = group.tabs.find((t) => t.id === id);
     if (existing) {
       group.tabs.splice(idx, 1);
-      group.activeTabId = id;
+      forgetMru(group, tabId);
+      activate(group, id);
       return;
     }
     const doc = editors.docs.get(cur.path);
     const dirty = kind === 'file' && doc !== undefined && doc.content !== doc.savedContent;
     group.tabs.splice(idx, 1, { kind, id, path: cur.path, name: tabNameOf(kind, cur.path), dirty, preview: false });
-    if (group.activeTabId === tabId) group.activeTabId = id;
+    renameMru(group, tabId, id);
+    if (group.activeTabId === tabId) activate(group, id);
   }
 
   function setActiveTab(groupId: number, tabId: string): void {
     const group = editors.groups.find((g) => g.id === groupId);
     if (!group) return;
-    group.activeTabId = tabId;
+    activate(group, tabId);
     editors.activeGroupId = groupId;
     editors.pendingFocus = true;
   }
@@ -864,16 +901,19 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     }
   }
 
-  /** 그룹에서 탭을 떼어낸다 — 활성 탭이었으면 이웃(같은 인덱스, 없으면 왼쪽)으로 활성 이동 */
+  /** 그룹에서 탭을 떼어낸다 — 활성 탭이었으면 최근 본 탭(MRU 다음)으로 활성 이동. MRU 에 남은 탭이 없으면
+   *  (옛 저장본) 이웃(같은 인덱스, 없으면 왼쪽) */
   function takeTab(groupId: number, tabId: string): Tab | null {
     const group = editors.groups.find((g) => g.id === groupId);
     if (!group) return null;
     const idx = group.tabs.findIndex((t) => t.id === tabId);
     if (idx === -1) return null;
     const [tab] = group.tabs.splice(idx, 1);
+    forgetMru(group, tabId);
     if (group.activeTabId === tabId) {
-      const next = group.tabs[Math.min(idx, group.tabs.length - 1)];
-      group.activeTabId = next?.id ?? null;
+      const recent = group.mru?.find((id) => group.tabs.some((t) => t.id === id));
+      const next = recent ?? group.tabs[Math.min(idx, group.tabs.length - 1)]?.id ?? null;
+      activate(group, next);
     }
     return tab;
   }
@@ -998,7 +1038,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
       if (from < insert) insert -= 1;
       tab.preview = false;
       to.tabs.splice(insert, 0, tab);
-      to.activeTabId = tab.id;
+      activate(to, tab.id);
       editors.activeGroupId = toGroupId;
       return;
     }
@@ -1009,7 +1049,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     if (!to.tabs.some((t) => t.id === tab.id)) {
       to.tabs.splice(Math.min(index ?? to.tabs.length, to.tabs.length), 0, tab);
     }
-    to.activeTabId = tab.id;
+    activate(to, tab.id);
     editors.activeGroupId = toGroupId;
     editors.pendingFocus = true;
     collapseIfEmpty(fromGroupId);
@@ -1024,7 +1064,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     const tab = takeTab(fromGroupId, tabId);
     if (!tab) return;
     tab.preview = false;
-    const group: EditorGroup = { id: nextGroupId++, tabs: [tab], activeTabId: tab.id };
+    const group: EditorGroup = { id: nextGroupId++, tabs: [tab], activeTabId: tab.id, mru: [tab.id] };
     editors.groups.splice(editors.groups.indexOf(ref) + 1, 0, group);
     insertIntoLayout(refGroupId, group.id, side);
     editors.activeGroupId = group.id;
@@ -1091,6 +1131,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
         if (np === null) continue;
         const newId = tabIdOf(t.kind, np);
         if (g.activeTabId === t.id) g.activeTabId = newId;
+        renameMru(g, t.id, newId);
         t.id = newId;
         t.path = np;
         t.name = t.kind === 'diff' ? `${baseName(np)} (${t.deleted ? 'Deleted' : 'Working Tree'})` : tabNameOf(t.kind, np);
@@ -1297,6 +1338,9 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
       g.tabs = g.tabs.filter((t) => t.kind !== 'terminal');
       if (n > 0 && g.tabs.length === 0) emptied.push(g.id);
       if (g.activeTabId !== null && !g.tabs.some((t) => t.id === g.activeTabId)) g.activeTabId = g.tabs[0]?.id ?? null;
+      // MRU 도 터미널·없는 id 를 걷어내고 활성 탭이 맨 앞이 되게 맞춘다 (옛 저장본은 mru 가 없다)
+      g.mru = (g.mru ?? []).filter((id) => g.tabs.some((t) => t.id === id));
+      activate(g, g.activeTabId);
     }
     editors.groups = s.groups;
     editors.layout = s.layout;
@@ -1391,9 +1435,9 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     const editable = h.tab.kind === 'file' || (h.tab.kind === 'diff' && !h.tab.commit);
     const tab: Tab = { ...h.tab, dirty: editable && doc !== undefined && doc.content !== doc.savedContent, preview: false };
     if (!group.tabs.some((t) => t.id === tab.id)) {
-      group.tabs.splice(Math.min(index ?? group.tabs.length, group.tabs.length), 0, tab);
+      group.tabs.splice(Math.min(index ?? openIndex(group), group.tabs.length), 0, tab);
     }
-    group.activeTabId = tab.id;
+    activate(group, tab.id);
     editors.activeGroupId = group.id;
     editors.pendingFocus = true;
   }

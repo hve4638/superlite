@@ -1,6 +1,6 @@
 import { openQuickInput, showViewlet, toggleSideBar } from './workbench'
 import { openFolderDialog } from './host'
-import { closeTab, editors, reopenClosedEditor, saveActive, splitGroup, toggleGroupLock, activeGroup, activeTab, openHex, toggleHtmlPreview, isHtml, openUrl, toggleWordWrap, stepEditorZoom, setEditorZoom } from './editors'
+import { closeTab, reopenClosedEditor, saveActive, splitGroup, toggleGroupLock, activeGroup, activeTab, openHex, toggleHtmlPreview, isHtml, openUrl, toggleWordWrap, stepEditorZoom, setEditorZoom, setActiveTab } from './editors'
 import { createTerminal, toggleTerminal } from './terminal'
 import { openSshConfig, openTmuxConf } from './configfiles'
 import { refreshScm } from './scm'

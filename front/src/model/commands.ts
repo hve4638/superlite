@@ -1,7 +1,7 @@
 import { reactive } from '@vue/reactivity';
 import { openQuickInput, showViewlet, toggleSideBar } from './workbench';
 import { openFolderDialog } from './host';
-import { closeTab, editors, reopenClosedEditor, saveActive, splitGroup, toggleGroupLock, activeGroup, activeTab, openHex, toggleHtmlPreview, isHtml, openUrl, toggleWordWrap, stepEditorZoom, setEditorZoom } from './editors';
+import { closeTab, reopenClosedEditor, saveActive, splitGroup, toggleGroupLock, activeGroup, activeTab, openHex, toggleHtmlPreview, isHtml, openUrl, toggleWordWrap, stepEditorZoom, setEditorZoom, setActiveTab } from './editors';
 import { createTerminal, toggleTerminal } from './terminal';
 import { openSshConfig, openTmuxConf } from './configfiles';
 import { refreshScm } from './scm';
@@ -374,6 +374,6 @@ function cycleTab(dir: 1 | -1): void {
   if (g.tabs.length < 2 || !g.activeTabId) return;
   const idx = g.tabs.findIndex((t) => t.id === g.activeTabId);
   const next = g.tabs[(idx + dir + g.tabs.length) % g.tabs.length];
-  g.activeTabId = next.id;
-  editors.activeGroupId = g.id;
+  setActiveTab(g.id, next.id); // MRU 갱신까지 — activeTabId 직접 대입은 editors 안에서만
+
 }
