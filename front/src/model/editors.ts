@@ -96,7 +96,23 @@ export interface FolderTab {
 export type FolderStyle = 'columns' | 'details' | 'icons';
 export type FolderSortKey = 'name' | 'mtime' | 'type' | 'size';
 
-export type Tab = FileTab | DiffTab | HexTab | PreviewTab | TerminalTab | FolderTab;
+/** URL 탭 — sandbox iframe 으로 임의 URL 을 띄운다 (ticket browser-tab-iframe, dev 서버 미리보기 용도).
+ *  문서 없음(path ''). id 는 탭마다 유일('url:'+난수) — url 은 주소칸 입력으로 바뀌므로 id 에 넣지 않는다.
+ *  url 은 사용자가 입력한 값('' = 빈 탭, 주소칸만) — iframe 안에서 링크를 따라간 현재 URL 은 cross-origin 이라
+ *  읽을 수 없어 추적하지 않는다 (browser-tab-full 의 자식 웹뷰 몫). 창 이동·워크스페이스 복원에는 이 값이 실린다 */
+export interface UrlTab {
+  kind: 'url';
+  /** 'url:'+난수 */
+  id: string;
+  path: '';
+  /** 주소칸 값에서 스킴을 뗀 것, 빈 탭은 'New Tab' */
+  name: string;
+  dirty: boolean;
+  preview: boolean;
+  url: string;
+}
+
+export type Tab = FileTab | DiffTab | HexTab | PreviewTab | TerminalTab | FolderTab | UrlTab;
 
 /** hex 뷰어 청크 크기 — 범위 읽기(readFile offset) 단위. 4KB 이상이라 항상 payload 프레임으로 온다 */
 export const HEX_CHUNK = 64 * 1024;
@@ -107,6 +123,11 @@ const HEX_CHUNK_CAP = 64;
 export interface HexDoc {
   size: number;
   chunks: Map<number, Uint8Array>;
+}
+
+/** URL 탭 이름 — 스킴을 뗀 주소, 빈 주소는 'New Tab' */
+export function urlTabName(url: string): string {
+  return url === '' ? 'New Tab' : url.replace(/^https?:\/\//, '');
 }
 
 /** 탭 id 규칙 — kind 별 접두 (file 은 path 그대로) */
@@ -574,6 +595,29 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
 
   /** hex 뷰어 탭 열기 — 활성 그룹에 고정 탭. 바이트 로드는 HexView 가 ensureHex 로 한다
    *  (창 이동·복원·재열기 모두 같은 경로로 수렴) */
+  /** URL 탭 열기 — 활성 그룹 끝에 새 탭. url 이 없으면 빈 탭(주소칸에 포커스, UrlView 몫). 같은 URL 의 탭이
+   *  있어도 새로 연다 (주소칸으로 URL 이 바뀌므로 중복 판정에 의미가 없다) */
+  function openUrl(url = ''): void {
+    const group = activeGroup();
+    const id = `url:${Math.random().toString(36).slice(2, 10)}`;
+    const tab: UrlTab = { kind: 'url', id, path: '', name: urlTabName(url), dirty: false, preview: false, url };
+    group.tabs.push(tab);
+    group.activeTabId = id;
+    editors.pendingFocus = true;
+  }
+
+  /** 주소칸 확정 — 탭의 url·name 을 바꾼다 (iframe 교체는 UrlView 가 url 을 지켜보다 한다) */
+  function navigateUrlTab(tabId: string, url: string): void {
+    for (const g of editors.groups) {
+      const t = g.tabs.find((t) => t.id === tabId);
+      if (t?.kind === 'url') {
+        t.url = url;
+        t.name = urlTabName(url);
+        return;
+      }
+    }
+  }
+
   function openHex(path: string): void {
     const group = activeGroup();
     const id = tabIdOf('hex', path);
@@ -899,7 +943,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     if (tab.kind === 'terminal') {
       // 복원 이력 없음 — 죽은 셸은 되살릴 수 없다. 훅이 PTY 를 정리한다 (removeAt 경유면 이미 없어 무해)
       terminalCloser?.(tab.term);
-    } else {
+    } else if (tab.kind !== 'url') { // URL 탭은 path 가 없어 최근 닫은 탭 이력 밖
       editors.recentlyClosed.push(tab.kind === 'diff'
         ? { kind: tab.kind, path: tab.path, deleted: tab.deleted, commit: tab.commit, from: tab.from }
         : { kind: tab.kind, path: tab.path });
@@ -1307,8 +1351,8 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
   function takeTabForHandoff(groupId: number, tabId: string): TabHandoff | null {
     const tab = takeTab(groupId, tabId);
     if (!tab) return null;
-    if (tab.kind === 'terminal') {
-      // 문서가 없다 — 탭만 뗀다. PTY 스냅샷·해제는 호출측(sessions)이 terminals 로 한다
+    if (tab.kind === 'terminal' || tab.kind === 'url') {
+      // 문서가 없다 — 탭만 뗀다. PTY 스냅샷·해제는 호출측(sessions)이 terminals 로 한다. URL 탭은 url 만 실린다
       collapseIfEmpty(groupId);
       return { tab, doc: null };
     }
@@ -1333,8 +1377,8 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
       // 넘어온 쪽이 미저장인데 이쪽 버퍼를 지킨다 — 조용히 버리지 않고 알린다
       notify('warning', `Unsaved changes of '${baseName(h.tab.path)}' from the other window were discarded (already open here)`);
     }
-    // hex·folder 탭은 문서가 필요 없다 — 바이트·나열은 받는 쪽 뷰가 다시 읽는다
-    if (!editors.docs.has(h.tab.path) && h.tab.kind !== 'hex' && h.tab.kind !== 'folder') {
+    // hex·folder·url 탭은 문서가 필요 없다 — 바이트·나열·페이지는 받는 쪽 뷰가 다시 읽는다
+    if (!editors.docs.has(h.tab.path) && h.tab.kind !== 'hex' && h.tab.kind !== 'folder' && h.tab.kind !== 'url') {
       if (!h.doc) {
         void (h.tab.kind === 'diff' ? openDiff(h.tab.path, { deleted: h.tab.deleted, commit: h.tab.commit, from: h.tab.from })
           : h.tab.kind === 'preview' ? openHtmlPreview(h.tab.path)
@@ -1355,7 +1399,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
   }
 
   return {
-    editors, activeGroup, activeTab, openFile, openFileAt, openDiff, openHex, ensureHex, loadHexChunk, openHtmlPreview, toggleHtmlPreview, setActiveTab, pinTab,
+    editors, activeGroup, activeTab, openFile, openFileAt, openDiff, openHex, openUrl, navigateUrlTab, ensureHex, loadHexChunk, openHtmlPreview, toggleHtmlPreview, setActiveTab, pinTab,
     openFolderTab, openFolderTabSplit, navigateFolderTab, addGroupBeside, setFolderStyle, setFolderSort,
     openFileSplit, closeTab,
     reopenClosedEditor, moveTabToGroup, moveTabSplit,
@@ -1395,6 +1439,8 @@ export const openFileAt = (path: string, line: number): Promise<void> =>
 export const openDiff = (path: string, opts?: { deleted?: boolean }): Promise<void> =>
   ctx().editors.openDiff(path, opts);
 export const openHex = (path: string): void => ctx().editors.openHex(path);
+export const openUrl = (url?: string): void => ctx().editors.openUrl(url);
+export const navigateUrlTab = (tabId: string, url: string): void => ctx().editors.navigateUrlTab(tabId, url);
 export const openFolderTab = (path: string, opts: { groupId?: number; index?: number } = {}): void => ctx().editors.openFolderTab(path, opts);
 export const addGroupBeside = (refGroupId: number, side: SplitSide): number | null => ctx().editors.addGroupBeside(refGroupId, side);
 export const openFolderTabSplit = (path: string, refGroupId: number, side: SplitSide): void =>

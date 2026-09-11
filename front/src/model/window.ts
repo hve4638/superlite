@@ -107,3 +107,13 @@ export function openUrl(url: string): void {
 export function zoomWindow(action: 'in' | 'out' | 'reset'): void {
   void tauri?.core.invoke('set_zoom', { action });
 }
+
+/** 외부 브라우저로 열기 (ticket browser-tab-iframe) — 앱은 tauri-plugin-opener(capability opener:allow-open-url),
+ *  웹은 새 탭 window.open. URL 탭 주소칸의 입력값이 대상이다 (iframe 안 현재 URL 은 못 읽는다) */
+export function openExternal(url: string): void {
+  if (tauri !== undefined) {
+    tauri.core.invoke('plugin:opener|open_url', { url }).catch((e) => notify('error', `Open in browser failed: ${errText(e)}`));
+    return;
+  }
+  window.open(url, '_blank', 'noopener');
+}

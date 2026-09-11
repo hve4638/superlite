@@ -19,7 +19,7 @@ const branchLabel = computed(() => (repo.value ? (repo.value.dirty ? `${repo.val
 /** 텍스트 편집기가 아닌 전용 뷰 탭 — 이 종류에는 Ln/Col·언어 같은 텍스트 항목을 그리지 않는다. 종류가 늘면 여기 한 곳 */
 const viewerTab = computed(() => {
   const t = fileTab.value;
-  return t !== null && (t.kind === 'hex' || t.kind === 'preview' || t.kind === 'terminal' || t.kind === 'folder');
+  return t !== null && (t.kind === 'hex' || t.kind === 'preview' || t.kind === 'terminal' || t.kind === 'folder' || t.kind === 'url');
 });
 const image = computed(() => {
   const t = fileTab.value;

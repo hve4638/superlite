@@ -12,6 +12,7 @@ import ImageView from './ImageView.vue';
 import HexView from './HexView.vue';
 import HtmlPreview from './HtmlPreview.vue';
 import TerminalView from './TerminalView.vue';
+import UrlView from './UrlView.vue';
 import FolderView from './FolderView.vue';
 import FileIcon from '../widgets/FileIcon.vue';
 import ProgressBar from '../widgets/ProgressBar.vue';
@@ -102,6 +103,7 @@ const crumbs = computed(() =>
 type Overlay =
   | { kind: 'hex' | 'preview'; path: string }
   | { kind: 'terminal'; term: number }
+  | { kind: 'url' }
   | { kind: 'folder'; tabId: string; path: string }
   | { kind: 'image'; path: string; data: string }
   | { kind: 'unopenable'; reason: NonNullable<Doc['unopenable']> }
@@ -111,6 +113,7 @@ const overlay = computed<Overlay | null>(() => {
   if (!t) return null;
   if (t.kind === 'hex' || t.kind === 'preview') return { kind: t.kind, path: t.path };
   if (t.kind === 'terminal') return { kind: 'terminal', term: t.term };
+  if (t.kind === 'url') return { kind: 'url' }; // 뷰는 아래 v-show 목록이 그린다 — 여기서는 monaco 가림만
   if (t.kind === 'folder') return { kind: 'folder', tabId: t.id, path: t.path };
   const doc = editors.docs.get(t.path);
   // 문서가 아직 안 읽힌 파일 탭(openFile 이 탭을 먼저 띄운다) — 빈 본문으로 이전 탭의 모델을 가린다
@@ -149,6 +152,11 @@ const SHORTCUTS = [
     <div class="editor-body">
       <!-- 활성 탭의 로드가 800ms 를 넘김 — 제목 영역(탭바·breadcrumbs) 아래 2px 진행선 (VS Code editor progress) -->
       <ProgressBar v-if="active && editors.slowTabs.has(active.id)" />
+      <!-- URL 탭은 그룹의 모든 URL 탭을 마운트한 채 v-show 로 활성 것만 보인다 — v-if 로 갈아 끼우면 탭을 오갈 때마다
+           iframe 이 파괴되어 페이지를 처음부터 다시 로드한다 (browser-tab-iframe) -->
+      <template v-for="t in group.tabs" :key="t.id">
+        <UrlView v-if="t.kind === 'url'" v-show="t.id === group.activeTabId" :group-id="group.id" :tab-id="t.id" :url="t.url" @focus="focusGroup" />
+      </template>
       <!-- overlay 종류별 뷰 (hex·preview 는 path 키라 탭 전환 시 컴포넌트가 갈린다) -->
       <HexView v-if="overlay?.kind === 'hex'" :key="overlay.path" :path="overlay.path" />
       <HtmlPreview v-else-if="overlay?.kind === 'preview'" :key="overlay.path" :path="overlay.path" @focus="focusGroup" />

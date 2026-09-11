@@ -2030,6 +2030,8 @@ fn main() {
         // WHY: single-instance 는 맨 먼저 등록 — 두 번째 실행이 다른 초기화를 밟기 전에
         //      argv·cwd 를 첫 프로세스로 넘기고 즉시 종료해야 한다 (공식 권고).
         .plugin(tauri_plugin_single_instance::init(open_second_instance))
+        // URL 탭의 외부 브라우저 열기 (browser-tab-iframe) — front 가 plugin:opener|open_url 을 invoke
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             open_folder,
             open_folder_path,

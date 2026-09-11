@@ -207,7 +207,7 @@ function onForeignDrop(e: DragEvent) {
           'drop-before': tabDragging && dropIndex === i,
           'drop-after': tabDragging && dropIndex === i + 1 && i === group.tabs.length - 1,
         }"
-        :title="tab.kind === 'terminal' ? tab.name : isConfigPath(tab.path) ? configTooltip(tab.path) : tab.path"
+        :title="tab.kind === 'terminal' || tab.kind === 'url' ? tab.name : isConfigPath(tab.path) ? configTooltip(tab.path) : tab.path"
         draggable="true"
         @dragstart="onDragStart($event, tab)"
         @dragend="onDragEnd($event)"
@@ -220,6 +220,7 @@ function onForeignDrop(e: DragEvent) {
         <ProgressBar v-if="editors.loadingTabs.has(tab.id)" class="tab-progress" />
         <span v-if="tab.kind === 'terminal'" class="codicon codicon-terminal tab-icon" />
         <span v-else-if="tab.kind === 'folder'" class="codicon codicon-folder tab-icon" />
+        <span v-else-if="tab.kind === 'url'" class="codicon codicon-globe tab-icon" />
         <span v-else-if="isConfigPath(tab.path)" class="codicon codicon-settings-gear tab-icon" />
         <FileIcon v-else :name="iconName(tab)" />
         <span class="tab-label">{{ tab.name }}</span>

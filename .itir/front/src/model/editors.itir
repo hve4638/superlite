@@ -18,6 +18,7 @@ export fn toggleFolderPreviewPane() {
   role: 폴더 탭 미리보기 창(details·icons 스타일의 오른쪽 창) 토글 — 전역 folderPrefs.previewPane, localStorage 기억
 }
 export type TerminalTab
+export type UrlTab
 export type Tab
 export type EditorGroup
 export type LayoutNode
@@ -64,6 +65,15 @@ export fn setFolderStyle(groupId, tabId, style) {
 }
 export fn setFolderSort(groupId, tabId, key) {
   role: 폴더 탭 정렬(FolderSortKey: name·mtime·type·size, details·icons 전용) — 같은 열이면 방향 토글, 다른 열이면 오름차순 (Windows 탐색기 머리글 동일). columns 는 항상 이름순
+}
+export fn urlTabName(url) {
+  role: URL 탭 이름 — 스킴을 뗀 주소, 빈 주소는 'New Tab'
+}
+export fn openUrl(url?) {
+  role: URL 탭('url:'+난수, ticket browser-tab-iframe) 열기 — 활성 그룹 끝에 새 탭, url 없으면 빈 탭(UrlView 가 주소칸에 포커스). 같은 URL 이 열려 있어도 새로 연다 — 주소칸으로 url 이 바뀌므로 id 에 url 을 넣지 않고 중복 판정도 없다. 문서 없음(path '') — 닫기는 최근 닫은 탭 이력 밖, 핸드오프는 탭만(url 이 실린다), acceptTab 은 hex·folder 처럼 문서 없이 붙인다, 워크스페이스 저장·복원에는 그대로 실린다(hydrate 대상 아님). 팔레트 'View: Open URL...' 이 진입점
+}
+export fn navigateUrlTab(tabId, url) {
+  role: URL 탭 주소칸 확정 — 탭의 url·name 만 바꾼다. iframe 교체는 UrlView 가 url 을 지켜보다 한다
 }
 export fn openHex(path) {
   role: hex 뷰어 탭('hex:'+path, "x (Hex)") 열기 — 활성 그룹에 고정 탭. 바이트는 docs 와 분리된 path 키 hex 맵(HexDoc)에 두고 HexView 가 ensureHex·loadHexChunk 로 lazy 로드한다 (창 이동·복원·재열기가 같은 경로로 수렴). 텍스트 문서와 공존 — 이진 unopenable 안내의 "Open in Hex Editor" 와 명령 팔레트가 진입점

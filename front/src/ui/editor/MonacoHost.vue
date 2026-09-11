@@ -101,7 +101,7 @@ async function sync() {
   // 뷰어(EditorGroupView)가 편집기를 가리고 있고, diff 쪽은 이진의 gitOriginalContent 요청
   // 자체를 피해야 한다
   // hex·preview·terminal 탭도 모델 없음 — 전용 뷰가 편집기를 가린다
-  if (tab.kind === 'hex' || tab.kind === 'preview' || tab.kind === 'terminal' || tab.kind === 'folder') return;
+  if (tab.kind === 'hex' || tab.kind === 'preview' || tab.kind === 'terminal' || tab.kind === 'folder' || tab.kind === 'url') return;
   if (tab.kind === 'diff' && tab.commit) {
     // 커밋 diff — 양쪽 다 git 내용 (문서 없음). 이름 변경이면 original 은 옛 경로(from)
     const ed = ensureDiffEditor();

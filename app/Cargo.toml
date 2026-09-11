@@ -12,6 +12,8 @@ superlite-common = { path = "../backend/common" }
 tauri = { version = "2", features = [] }
 # 프로세스 1개 강제 — 두 번째 실행의 argv·cwd 를 첫 프로세스에 전달하고 종료
 tauri-plugin-single-instance = "2"
+# URL 탭의 "외부 브라우저로 열기" (ticket browser-tab-iframe) — capability opener:allow-open-url 만 연다
+tauri-plugin-opener = "2"
 tokio = { version = "1", features = ["rt-multi-thread"] }
 getrandom = "0.3"
 # 세션 탭 payload(list_sessions·sessions-changed)와 상태 지속(state.json,

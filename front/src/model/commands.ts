@@ -1,7 +1,7 @@
 import { reactive } from '@vue/reactivity';
 import { openQuickInput, showViewlet, toggleSideBar } from './workbench';
 import { openFolderDialog } from './host';
-import { closeTab, editors, reopenClosedEditor, saveActive, splitGroup, toggleGroupLock, activeGroup, activeTab, openHex, toggleHtmlPreview, isHtml, toggleWordWrap, stepEditorZoom, setEditorZoom } from './editors';
+import { closeTab, editors, reopenClosedEditor, saveActive, splitGroup, toggleGroupLock, activeGroup, activeTab, openHex, toggleHtmlPreview, isHtml, openUrl, toggleWordWrap, stepEditorZoom, setEditorZoom } from './editors';
 import { createTerminal, toggleTerminal } from './terminal';
 import { openSshConfig, openTmuxConf } from './configfiles';
 import { refreshScm } from './scm';
@@ -92,6 +92,8 @@ export function installKeybindings(target: Window): void {
 }
 
 export function setupCommands(): void {
+  // URL 탭 (ticket browser-tab-iframe) — 빈 탭을 열고 주소칸에 포커스. 입력 대화상자 대신 탭 자체의 주소칸이 입력처
+  register({ id: 'view.openUrl', title: 'View: Open URL...', run: () => openUrl() });
   register({
     id: 'workbench.action.showCommands',
     title: 'Show All Commands',
