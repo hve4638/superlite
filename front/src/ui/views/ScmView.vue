@@ -179,6 +179,10 @@ function repoActions(r: ScmRepo, x: number, y: number): void {
     { label: 'Push', enabled: idle, run: () => void sync(r, 'push') },
     { label: 'Fetch', enabled: idle, run: () => void sync(r, 'fetch') },
     { separator: true },
+    // 저장소가 어디서 잡혔는지 보이게 — 탐색기에서 그 폴더를 드러낸다. 루트 저장소는 트리에 대응 노드가
+    // 없어 비활성 (ticket scm-repo-discovery: 수집 기준은 유지하고 위치만 드러내기로 결정 2026-09-12)
+    { label: 'Reveal in Explorer', enabled: r.path !== '', run: () => { showViewlet('explorer'); void revealPath(r.path); } },
+    { separator: true },
     { label: 'Sign in to GitHub...', run: () => signInGithub() },
     { label: 'Add Git Credential...', run: () => { gitAuth.manual = true; } },
     ...gitAuth.credentials.map((c) => ({
