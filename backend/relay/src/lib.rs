@@ -29,6 +29,8 @@ use tower_http::services::ServeDir;
 
 mod ssh;
 mod gitcred;
+// 클라이언트 설정 파일(tmux 프로필·~/.ssh/config) — 편집기 탭이 HTTP 로 읽고 쓴다 (ticket config-editors)
+mod conf;
 
 #[cfg(unix)]
 type DaemonStream = tokio::net::UnixStream;
@@ -101,7 +103,9 @@ pub async fn serve(listener: TcpListener, roots: SessionRoots, token: Option<Str
         .route("/ssh/hosts", get(hosts_handler))
         .route("/ssh/state", axum::routing::post(state_handler))
         .route("/daemon/clean", axum::routing::post(clean_handler))
-        .route("/tmux-conf", get(tmux_conf_get).put(tmux_conf_put).options(tmux_conf_options))
+        .route("/tmux-conf", get(tmux_conf_get).put(tmux_conf_put).options(conf_options))
+        .route("/tmux-conf/profiles", get(tmux_profiles_get).post(tmux_profiles_post))
+        .route("/ssh-config", get(ssh_config_get).put(ssh_config_put).options(conf_options))
         .route("/version", get(version_handler))
         .route("/github/oauth", axum::routing::post(github_oauth_handler))
         .route("/git/credentials", get(git_credentials_get).post(git_credentials_post))
@@ -195,12 +199,7 @@ pub(crate) fn tmux_bin_for(os: &str, arch: &str) -> Option<PathBuf> {
     p.is_file().then_some(p)
 }
 
-/// 클라이언트(이 백엔드 머신)의 tmux.conf — 사이드바 터미널 뷰가 편집하고, attach 마다 데몬(로컬·
-/// 원격)에 tmuxConf 로 밀어 넣는다. 원격별 관리는 없다 (사용자 결정 2026-09-07)
-fn tmux_conf_path() -> Option<PathBuf> {
-    superlite_common::config_dir().map(|d| d.join("tmux.conf"))
-}
-
+/// GET /tmux-conf?profile= — 프로필 내용 (profile 생략 = 현재 적용 프로필). 편집기 탭이 연다
 async fn tmux_conf_get(
     State(app): State<App>,
     Query(query): Query<std::collections::HashMap<String, String>>,
@@ -209,10 +208,15 @@ async fn tmux_conf_get(
     if !authed(&app, &query, &headers) {
         return cors(StatusCode::FORBIDDEN.into_response());
     }
-    let text = tmux_conf_path().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
-    cors(text.into_response())
+    let name = query.get("profile").cloned().unwrap_or_else(conf::active_name);
+    cors(match conf::read_profile(&name) {
+        Ok(text) => text.into_response(),
+        Err(e) => (StatusCode::NOT_FOUND, e).into_response(),
+    })
 }
 
+/// PUT /tmux-conf?profile= — 본문을 프로필 파일로. 접속 중인 데몬 적용은 프론트가 세션마다 tmuxConf 로
+/// (relay 는 연결을 모아 두지 않는다)
 async fn tmux_conf_put(
     State(app): State<App>,
     Query(query): Query<std::collections::HashMap<String, String>>,
@@ -222,23 +226,83 @@ async fn tmux_conf_put(
     if !authed(&app, &query, &headers) {
         return cors(StatusCode::FORBIDDEN.into_response());
     }
-    let Some(p) = tmux_conf_path() else {
-        return cors((StatusCode::INTERNAL_SERVER_ERROR, "설정 폴더 없음").into_response());
-    };
-    let r = std::fs::create_dir_all(p.parent().unwrap()).and_then(|_| std::fs::write(&p, body));
-    cors(match r {
+    let name = query.get("profile").cloned().unwrap_or_else(conf::active_name);
+    cors(match conf::write_profile(&name, &body) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{}: {e}", p.display())).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
     })
 }
 
-/// OPTIONS /tmux-conf — PUT 의 CORS preflight 응답. Tauri 앱은 프론트 오리진(tauri.localhost)과
+/// GET /tmux-conf/profiles — 프로필 목록·active·실제 경로 (사이드바 폼과 탭 툴팁)
+async fn tmux_profiles_get(
+    State(app): State<App>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Response {
+    if !authed(&app, &query, &headers) {
+        return cors(StatusCode::FORBIDDEN.into_response());
+    }
+    cors(match conf::list() {
+        Ok(l) => Json(l).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    })
+}
+
+/// POST /tmux-conf/profiles?op=&name=&from= — 프로필 create·clone·delete·select. 인자는 쿼리로
+/// (preflight 회피 — /ssh/state 와 같은 이유). 응답은 갱신된 목록
+async fn tmux_profiles_post(
+    State(app): State<App>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Response {
+    if !authed(&app, &query, &headers) {
+        return cors(StatusCode::FORBIDDEN.into_response());
+    }
+    let arg = |k: &str| query.get(k).map(String::as_str).unwrap_or("");
+    cors(match conf::update(arg("op"), arg("name"), arg("from")) {
+        Ok(l) => Json(l).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
+    })
+}
+
+/// GET /ssh-config — 이 머신의 ~/.ssh/config 내용 (없으면 빈 문자열)
+async fn ssh_config_get(
+    State(app): State<App>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Response {
+    if !authed(&app, &query, &headers) {
+        return cors(StatusCode::FORBIDDEN.into_response());
+    }
+    cors(match conf::read_ssh_config() {
+        Ok(text) => text.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    })
+}
+
+/// PUT /ssh-config — 본문으로 통째 교체. 호스트 목록 갱신은 프론트가 /ssh/hosts 를 다시 읽는다
+async fn ssh_config_put(
+    State(app): State<App>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    if !authed(&app, &query, &headers) {
+        return cors(StatusCode::FORBIDDEN.into_response());
+    }
+    cors(match conf::write_ssh_config(&body) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    })
+}
+
+/// OPTIONS /tmux-conf·/ssh-config — PUT 의 CORS preflight 응답. Tauri 앱은 프론트 오리진(tauri.localhost)과
 /// relay 가 달라 PUT 앞에 브라우저가 OPTIONS 를 먼저 보내는데, 종전에는 405 라 저장이 "Failed to
 /// fetch" 로 실패했다 (웹 모드는 같은 오리진이라 드러나지 않았다 — ticket relay-conn-fixes).
-/// 이 파일의 다른 끝점은 쿼리 인자·text/plain 본문으로 preflight 자체를 피하지만, tmux-conf 는
-/// PUT 의미(본문 = 파일 전체 교체)를 유지하고 프론트를 건드리지 않는 쪽을 택했다.
+/// 이 파일의 다른 끝점은 쿼리 인자·text/plain 본문으로 preflight 자체를 피하지만, 이 둘은
+/// PUT 의미(본문 = 파일 전체 교체)를 유지하는 쪽을 택했다.
 /// 인증은 하지 않는다 — preflight 는 메타데이터 응답일 뿐이고 실제 PUT 이 authed 를 거친다
-async fn tmux_conf_options() -> Response {
+async fn conf_options() -> Response {
     let mut resp = cors(StatusCode::NO_CONTENT.into_response());
     let h = resp.headers_mut();
     h.insert("access-control-allow-methods", axum::http::HeaderValue::from_static("GET, PUT"));
@@ -837,9 +901,9 @@ async fn relay(ws: WebSocket, target: Target, session: Option<String>, spares: A
     if write_line(&mut write_half, &attach.to_string()).await.is_err() {
         return;
     }
-    // 클라이언트 tmux.conf 를 데몬에 (와이어 v17 tmuxConf, id 없음 — 응답 불요). 파일이 없으면 빈
+    // 클라이언트 tmux 프로필(active)을 데몬에 (와이어 v17 tmuxConf, id 없음 — 응답 불요). 파일이 없으면 빈
     // 내용으로 보내 원격에 남은 옛 conf 를 지운다. 데몬이 plain 이면 무시한다
-    let conf = tmux_conf_path().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
+    let conf = conf::active_content();
     if write_line(&mut write_half, &json!({"method": "tmuxConf", "params": {"content": conf}}).to_string()).await.is_err() {
         return;
     }

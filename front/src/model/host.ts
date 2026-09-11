@@ -255,6 +255,7 @@ export async function confirmDaemonClean(): Promise<void> {
     daemonClean.busy = false;
   }
 }
+daemonClean.onConfirm = confirmDaemonClean;
 
 /** 영구 실패 뒤 사용자 주도 재접속 (시작 페이지·탐색기 Retry) — 활성 세션을 다시 연다 */
 export function retryActiveConnection(): void {

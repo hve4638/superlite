@@ -1,4 +1,5 @@
 import { ctx, viewOf } from './ctx'
+import { confirm } from './dialog'
 import { createEditors } from './editors'
 import { notify, errText } from './notifications'
 import { DirEntry, GitChangeKind, GitLogItem, ThinBackend } from '../backend/types'
@@ -50,13 +51,7 @@ export fn unstage(changes?) {
   role: 파일별(인자) 또는 전 저장소 staged 전체 — 저장소별로 묶어 호출 언스테이징
 }
 export fn requestDiscard(changes?) {
-  role: discard 확인 대기 상태(scm.discardConfirm) 진입 — 파괴적이라 바로 실행하지 않는다, 대화상자는 ScmView
-}
-export fn confirmDiscard() {
-  role: 대기 중인 discard 실행 — 추적 파일은 인덱스 내용으로 복원, untracked 는 삭제. 열린 편집기 재로드는 파일 감시가 담당
-}
-export fn cancelDiscard() {
-  role: discard 확인 취소
+  role: discard — 파괴적이라 dialog.confirm 을 거친다 (VS Code git 확장 문구, untracked 는 파일 삭제라 DELETE 로 강조 — 문구도 여기). 승인이면 추적 파일은 인덱스 내용으로 복원, untracked 는 삭제. 열린 편집기 재로드는 파일 감시가 담당
 }
 export fn branches(repo) {
   role: 저장소의 로컬 브랜치 목록 (브랜치 메뉴 열 때마다 조회)

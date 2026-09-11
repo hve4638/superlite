@@ -1,0 +1,40 @@
+import { config_dir } from '../../common/src'
+import { home_dir } from './ssh'
+
+role: 클라이언트(이 백엔드 머신) 설정 파일 (ticket config-editors) — tmux 프로필과 ~/.ssh/config. 프론트 편집기 탭이 lib 의 HTTP 끝점으로 읽고 쓴다 (데몬 와이어 밖). tmux 는 `config_dir()/tmux/profiles/<이름>.conf` 여럿 중 `tmux/active` 가 가리키는 하나를 접속 중인 데몬에 적용하는 구조. `default` 는 내장 기본 설정(common TMUX_BASE_CONF) 그 자체 — 읽기 전용, 디스크에 없음, 삭제 불가, 적용하면 데몬에 빈 내용(= 내장값 복귀). 프로필은 default 를 복사해 파생한 완전한 설정이다 (사용자 결정 2026-09-10). 종전 단일 `config_dir()/tmux.conf`(내장값 뒤에 덧붙던 사용자 설정)는 profiles/ 가 처음 만들어질 때 내장값 + 그 내용을 이어 붙인 `migrated` 프로필로 옮기고 active 로 삼는다 (동작 보존). 프로필 이름은 파일 stem — 경로 조작이 안 되게 영숫자·-·_·. 만 (valid_name)
+
+val DEFAULT
+fn profiles_dir() -> path {
+  role: 프로필 폴더 보장 + 옛 tmux.conf 이관(폴더가 없을 때 한 번, migrated 프로필)
+}
+fn valid_name(name) -> bool
+fn profile_path(name) -> path {
+  role: 디스크 프로필 경로 — default 는 디스크에 없으므로 오류 (호출측이 먼저 가른다)
+}
+fn active_name() -> name {
+  role: 적용 프로필 — active 파일이 없거나 가리키는 프로필이 사라졌으면 default
+}
+fn active_content() -> content {
+  role: attach 직후 데몬에 밀어 넣을 내용 — default 와 읽기 실패는 빈 내용 (데몬이 내장 기본값으로 뜬다)
+}
+fn read_profile(name) -> content {
+  role: default 는 내장 기본값 원문
+}
+fn write_profile(name, content) {
+  role: default 는 거부 (읽기 전용)
+}
+class Profiles {
+  role: GET /tmux-conf/profiles 응답 — active·names(default 먼저, 이름순)·dir(프로필 폴더 절대 경로)·ssh_config(절대 경로) — 뒤 둘은 탭 툴팁용
+}
+fn list() -> Profiles
+fn update(op, name, from) -> Profiles {
+  role: create(default 복사 = 내장 기본값 템플릿)·clone(from 복사)·delete(default 불가, active 였으면 default 로)·select. 적용은 프론트 몫
+}
+fn set_active(name)
+fn ssh_config_path() -> path?
+fn read_ssh_config() -> content {
+  role: 없으면 빈 내용 (첫 편집으로 만든다), 그 외 읽기 실패는 오류
+}
+fn write_ssh_config(content) {
+  role: ~/.ssh 가 없으면 만들고(unix 0700), 새로 만드는 config 는 0600 — ssh 가 권한을 따지는 파일
+}

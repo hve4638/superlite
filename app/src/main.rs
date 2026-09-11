@@ -782,6 +782,38 @@ async fn open_folder(app: tauri::AppHandle, window: tauri::WebviewWindow, replac
     Ok(())
 }
 
+/// 확인 다이얼로그(ticket native-confirm-dialog) — 삭제·이동·dirty 닫기 등 front 의 모든 확인이
+/// 앱에서는 VS Code 처럼 OS 메시지 창으로 온다 (front model/dialog.confirm 이 분기, 웹은 내장 창).
+/// buttons 는 [확인, (보조), Cancel] 2~3개 — 커스텀 라벨 그대로 (Windows 는 TaskDialog, Cargo.toml 참조).
+/// 요청한 창을 부모로 모달. 반환은 고른 버튼의 index — 닫기·Escape·매칭 실패는 마지막(Cancel)
+#[tauri::command]
+async fn confirm_dialog(window: tauri::WebviewWindow, message: String, detail: Option<String>, buttons: Vec<String>) -> usize {
+    let cancel = buttons.len().saturating_sub(1);
+    let btns = match buttons.as_slice() {
+        [a, b] => rfd::MessageButtons::OkCancelCustom(a.clone(), b.clone()),
+        [a, b, c] => rfd::MessageButtons::YesNoCancelCustom(a.clone(), b.clone(), c.clone()),
+        _ => return cancel,
+    };
+    let text = match detail {
+        Some(d) if !d.is_empty() => format!("{message}\n\n{d}"),
+        _ => message,
+    };
+    let picked = rfd::AsyncMessageDialog::new()
+        .set_level(rfd::MessageLevel::Warning)
+        .set_title("superlite")
+        .set_description(text)
+        .set_buttons(btns)
+        .set_parent(&window)
+        .show()
+        .await;
+    match picked {
+        rfd::MessageDialogResult::Custom(label) => buttons.iter().position(|b| *b == label).unwrap_or(cancel),
+        rfd::MessageDialogResult::Ok | rfd::MessageDialogResult::Yes => 0,
+        rfd::MessageDialogResult::No => 1.min(cancel),
+        rfd::MessageDialogResult::Cancel => cancel,
+    }
+}
+
 /// 탐색기 다운로드(ticket explorer-download)의 로컬 저장 위치 dialog — kind=file 은 저장 파일
 /// dialog(기본 파일명 name), directory 는 폴더 선택 후 그 안의 name 하위 폴더 (VS Code 원격
 /// 탐색기 Download 와 같은 배치). 취소면 None. 전송 자체는 front 가 와이어로 읽어 local_write 로
@@ -867,6 +899,42 @@ fn reveal_in_folder(path: String) -> Result<(), String> {
         c
     };
     cmd.spawn().map(|_| ()).map_err(|e| format!("파일 관리자 실행 실패: {e}"))
+}
+
+/// "Open Externally"(ticket open-externally) 사본 폴더 — OS 임시 폴더 아래 superlite-open.
+/// 앱 시작 시 통째로 지운다 (외부 앱이 잠근 파일은 남는다 — 오류 무시)
+fn open_externally_dir() -> PathBuf {
+    std::env::temp_dir().join("superlite-open")
+}
+
+/// 편집기 "Open Externally" 의 로컬 사본 경로 — <임시>/superlite-open/<key 해시>/<name>. key 는
+/// 원격 파일 경로라 같은 파일을 다시 열면 같은 자리에 덮어쓰고, 이름이 같은 다른 파일과는
+/// 섞이지 않는다. name 은 파일명 한 조각이어야 한다 (구분자·'..' 거부 — 사본 폴더 밖으로 못
+/// 나간다). 전송은 front 가 local_write 로 조각마다 넘긴다
+#[tauri::command]
+fn open_externally_target(key: String, name: String) -> Result<String, String> {
+    use std::hash::{Hash as _, Hasher as _};
+    if name.is_empty() || name == "." || name == ".." || name.contains('/') || name.contains('\\') {
+        return Err(format!("파일명이 아니다: '{name}'"));
+    }
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut h);
+    let dir = open_externally_dir().join(format!("{:016x}", h.finish()));
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.join(name).to_string_lossy().into_owned())
+}
+
+/// 사본을 OS 기본 앱으로 연다 (open crate — Windows ShellExecute·macOS open·Linux xdg-open).
+/// open_externally_target 이 준 사본 폴더 안의 경로만 받는다 — 임의 로컬 파일 실행 통로가
+/// 되지 않게. 종료는 기다리지 않는다
+#[tauri::command]
+fn open_externally(path: String) -> Result<(), String> {
+    let p = Path::new(&path).canonicalize().map_err(|e| format!("사본이 없다: {e}"))?;
+    let root = open_externally_dir().canonicalize().map_err(|e| format!("사본 폴더가 없다: {e}"))?;
+    if !p.starts_with(&root) {
+        return Err(format!("사본 폴더 밖의 경로다: {path}"));
+    }
+    open::that_detached(&p).map_err(|e| format!("외부 앱 실행 실패: {e}"))
 }
 
 /// front 폴더 퀵인풋(Ctrl+O)이 확정한 절대 경로로 이 창에 새 세션 탭 추가. 경로 지목 통로
@@ -1309,6 +1377,18 @@ fn list_windows(app: tauri::AppHandle, state: tauri::State<AppState>) -> Vec<Win
 }
 
 /// 시작 페이지 목록 — 최근 폴더 MRU 와 고정 그룹. 매 표시마다 부른다 (소실 여부는 그때 검사)
+/// 터미널 링크 Ctrl+클릭 (ticket terminal-links): http(s) URL 을 OS 기본 브라우저로. 웹뷰 안의
+/// window.open 은 새 웹뷰 창이 되거나 막힌다. 스킴은 http(s) 만 — file:·javascript: 같은 것은 거절.
+/// 종료를 기다리지 않는다 (브라우저 프로세스가 오래 산다)
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    let lower = url.to_ascii_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+        return Err(format!("http(s) URL 이 아니다: {url}"));
+    }
+    open::that_detached(&url).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn list_recents(state: tauri::State<AppState>) -> RecentsInfo {
     let p = state.persisted.lock().unwrap();
@@ -1975,9 +2055,13 @@ fn main() {
             get_workspace_sub_state,
             reload_window,
             pick_save_target,
+            confirm_dialog,
             local_write,
             local_mkdir,
-            reveal_in_folder
+            reveal_in_folder,
+            open_url,
+            open_externally_target,
+            open_externally
         ])
         // 창 닫힘(X·close_if_empty) = 그 창의 세션만 정리 (메인 창이면 서브 창도 함께 닫는다)
         .on_window_event(|window, event| {
@@ -1988,6 +2072,8 @@ fn main() {
             }
         })
         .setup(move |app| {
+            // 지난 실행의 "Open Externally" 사본 정리 — 외부 앱이 아직 연 파일은 못 지우므로 무시
+            let _ = std::fs::remove_dir_all(open_externally_dir());
             // 시작은 항상 빈 세션(시작 페이지)이다 — 마지막 워크스페이스 복원은 하지
             // 않는다 (2026-09-02 사용자 결정, ticket app-empty-session). 명시 argv 로 준
             // 폴더("Superlite로 열기"·인자 실행)만 그 폴더를 연다. 명시 인자의 경로 오류는 즉시 실패.

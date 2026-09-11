@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { EDITOR_ZOOM_MAX, EDITOR_ZOOM_MIN, EDITOR_ZOOM_STEP, activeTab, base64Bytes, editorView, editors, indentOf, languageLabel, setEditorZoom, toggleViewerAutoReload, viewerAutoReload } from '../model/editors';
+import { EDITOR_ZOOM_MAX, EDITOR_ZOOM_MIN, EDITOR_ZOOM_STEP, activeTab, base64Bytes, editorView, editors, indentOf, setEditorZoom, toggleViewerAutoReload, viewerAutoReload } from '../model/editors';
+import { languageLabel } from '../model/languages';
 import { activeRepo } from '../model/scm';
 import { transfer } from '../model/transfer';
 import { connection, stageLabel, failureLabel } from '../model/watch';

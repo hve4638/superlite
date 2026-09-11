@@ -2,6 +2,8 @@ import { markRaw, reactive } from '@vue/reactivity';
 import type { FileContent, ThinBackend, Unopenable, WriteResult } from '../backend/types';
 import { ctx, viewOf } from './ctx';
 import { errText, notify } from './notifications';
+import { configLabel, configReadOnly, isConfigPath, readConfig, writeConfig } from './configfiles';
+import { confirm } from './dialog';
 
 export interface FileTab {
   kind: 'file';
@@ -107,8 +109,9 @@ export function tabIdOf(kind: Tab['kind'], path: string): string {
   return kind === 'file' ? path : `${kind}:${path}`;
 }
 
-/** 탭 라벨 규칙 — diff 는 호출측이 상태 접미를 붙인다 */
+/** 탭 라벨 규칙 — diff 는 호출측이 상태 접미를 붙인다. 클라이언트 설정 파일(configfiles)은 종류·프로필명 */
 export function tabNameOf(kind: Tab['kind'], path: string): string {
+  if (kind === 'file' && isConfigPath(path)) return configLabel(path);
   const base = baseName(path);
   if (kind === 'folder') return base || '/';
   return kind === 'hex' ? `${base} (Hex)` : kind === 'preview' ? `Preview ${base}` : base;
@@ -148,6 +151,8 @@ export interface Doc {
   /** 이미지 문서의 base64 데이터 — 있으면 편집기 대신 이미지 뷰어가 뜬다.
    *  content 는 unopenable 과 같은 '' 고정이라 dirty·저장 경로가 자연히 막힌다 */
   image?: string;
+  /** 읽기 전용 — 편집기가 readOnly 로 열어 dirty 가 생기지 않는다 (내장 default tmux 프로필, configfiles) */
+  readOnly?: boolean;
 }
 
 const RECENTLY_CLOSED_CAP = 20;
@@ -349,7 +354,6 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     recentlyClosed: [] as { kind: Tab['kind']; path: string; deleted?: boolean }[],
     /** 닫기 확인 대기 — dirty 문서의 마지막 탭을 닫을 때 Save/Don't Save/Cancel 대화상자
      *  (VS Code 동일 — 조용히 닫으면 버퍼가 몰래 살아남아 "닫았는데 편집이 남는" 혼동을 낳는다) */
-    closeConfirm: null as { groupId: number; tabId: string; path: string } | null,
     /** 에디터 포커스 요청 — MonacoHost 가 소비. 트리 단일 클릭(preview)은 세우지 않아
      *  포커스가 트리에 남는다 (VS Code 동일 — Delete 가 파일 삭제로 이어져야 한다) */
     pendingFocus: false,
@@ -444,18 +448,30 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     return g.tabs.find((t) => t.id === g.activeTabId) ?? null;
   }
 
+  // WHY: 클라이언트 설정 파일(superlite:/ 가상 경로)은 데몬 파일이 아니라 relay HTTP 로 읽고 쓴다 —
+  //      문서·탭·dirty·저장 흐름은 그대로 두고 IO 만 갈아 끼운다. etag 없음('') — 충돌 검사 없이 덮어쓴다
+  function readDoc(path: string, opts?: { encoding?: 'base64' }): Promise<FileContent> {
+    if (isConfigPath(path)) return readConfig(path).then((content) => ({ content, etag: '' }));
+    return backend.readFile(path, opts);
+  }
+  function writeDoc(path: string, content: string, etag?: string): Promise<WriteResult> {
+    if (isConfigPath(path)) return writeConfig(path, content).then(() => ({ etag: '' }));
+    return backend.writeFile(path, content, etag);
+  }
+
   async function ensureDoc(path: string): Promise<Doc> {
     let doc = editors.docs.get(path);
     if (!doc) {
       // 이미지 확장자는 base64 로 읽는다 — 이진 판별(binary unopenable)을 타지 않고
       // 크기 상한(large)만 공유한다
       const image = imageMime(path) !== null;
-      const r = await backend.readFile(path, image ? { encoding: 'base64' } : undefined);
+      const r = await readDoc(path, image ? { encoding: 'base64' } : undefined);
       doc = r.unopenable !== undefined
         ? { content: '', savedContent: '', etag: r.etag, unopenable: r.unopenable }
         : image
           ? { content: '', savedContent: '', etag: r.etag, image: r.content }
           : { content: r.content, savedContent: r.content, etag: r.etag };
+      if (isConfigPath(path) && configReadOnly(path)) doc.readOnly = true;
       editors.docs.set(path, doc);
     }
     return doc;
@@ -487,7 +503,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
 
     const doc = editors.docs.get(path);
     const tab: FileTab = {
-      kind: 'file', id: path, path, name: baseName(path),
+      kind: 'file', id: path, path, name: tabNameOf('file', path),
       // WHY: dirty 인 채 닫힌 문서를 다시 열 수 있다 — 버퍼가 살아 있으므로 doc 상태에서 파생해야
       //      "clean 탭 아래 미저장 내용" 이 생기지 않는다. 아직 안 읽은 문서는 clean
       dirty: doc !== undefined && doc.content !== doc.savedContent,
@@ -866,7 +882,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
       );
       const lastEditor = editorRefs === (isEditor(target) ? 1 : 0);
       if (doc && doc.content !== doc.savedContent && lastEditor) {
-        editors.closeConfirm = { groupId, tabId, path: target.path };
+        void askClose(groupId, tabId, target.path);
         return;
       }
     }
@@ -882,27 +898,24 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     collapseIfEmpty(groupId);
   }
 
-  /** 닫기 확인 Save — 저장 성공 시에만 닫는다 (실패·충돌은 탭 유지, 충돌은 토스트가 이어받는다) */
-  async function confirmCloseSave(): Promise<void> {
-    const c = editors.closeConfirm;
-    if (!c) return;
-    editors.closeConfirm = null;
-    if (await saveDoc(c.path)) closeTab(c.groupId, c.tabId, true);
-  }
-
-  /** 닫기 확인 Don't Save — 버퍼·monaco 모델을 버려 다음 열기가 디스크를 읽게 한다 */
-  function confirmCloseDiscard(): void {
-    const c = editors.closeConfirm;
-    if (!c) return;
-    editors.closeConfirm = null;
-    editors.docs.delete(c.path);
-    editors.orphaned.delete(c.path);
-    disposeModelsHook(c.path);
-    closeTab(c.groupId, c.tabId, true);
-  }
-
-  function confirmCloseCancel(): void {
-    editors.closeConfirm = null;
+  /** dirty 문서의 마지막 탭 닫기 확인 (VS Code Save / Don't Save / Cancel).
+   *  Save 는 저장 성공 시에만 닫는다 (실패·충돌은 탭 유지, 충돌은 토스트가 이어받는다).
+   *  Don't Save 는 버퍼·monaco 모델을 버려 다음 열기가 디스크를 읽게 한다. Cancel 은 탭·버퍼 유지 */
+  async function askClose(groupId: number, tabId: string, path: string): Promise<void> {
+    const choice = await confirm({
+      message: `Do you want to save the changes you made to '${baseName(path)}'?`,
+      detail: "Your changes will be lost if you don't save them.",
+      confirmLabel: 'Save',
+      secondaryLabel: "Don't Save",
+    });
+    if (choice === 'confirm') {
+      if (await saveDoc(path)) closeTab(groupId, tabId, true);
+    } else if (choice === 'secondary') {
+      editors.docs.delete(path);
+      editors.orphaned.delete(path);
+      disposeModelsHook(path);
+      closeTab(groupId, tabId, true);
+    }
   }
 
   /** 마지막으로 닫은 탭 복원 (Ctrl+Shift+T) — 활성 그룹에 고정 탭으로 연다.
@@ -1108,7 +1121,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     const content = doc.content;
     let r: WriteResult;
     try {
-      r = await backend.writeFile(path, content, doc.etag);
+      r = await writeDoc(path, content, doc.etag);
     } catch (e) {
       notify('error', `Failed to save '${baseName(path)}': ${errText(e)}`);
       return false;
@@ -1145,7 +1158,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     }
     const content = doc.content;
     try {
-      const r = await backend.writeFile(path, content);
+      const r = await writeDoc(path, content);
       if (r.etag === undefined) return; // etag 생략 시 conflict 는 안 온다 — 타입 좁히기용
       doc.etag = r.etag;
       doc.savedContent = content;
@@ -1168,7 +1181,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
       return;
     }
     try {
-      const r = await backend.readFile(path);
+      const r = await readDoc(path);
       if (r.unopenable !== undefined) {
         // 디스크가 이진·크기 초과로 바뀐 경우 — 텍스트로 되돌릴 내용이 없다.
         // 토스트는 남긴다 — Overwrite 로 내 버퍼를 살리는 길이 남는다
@@ -1333,7 +1346,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
   return {
     editors, activeGroup, activeTab, openFile, openFileAt, openDiff, openHex, ensureHex, loadHexChunk, openHtmlPreview, toggleHtmlPreview, setActiveTab, pinTab,
     openFolderTab, openFolderTabSplit, navigateFolderTab, addGroupBeside, setFolderStyle, setFolderSort,
-    openFileSplit, closeTab, confirmCloseSave, confirmCloseDiscard, confirmCloseCancel,
+    openFileSplit, closeTab,
     reopenClosedEditor, moveTabToGroup, moveTabSplit,
     splitGroup, closeEmptyGroup, toggleGroupLock, updateContent, setOrphaned, remapPaths, closePathTabs,
     reloadDocFromDisk, hasDirtyDocs, saveActive, overwriteConflict, revertConflict, indentOf,
@@ -1356,27 +1369,6 @@ export function resizeSplit(
   const pair = startSizes[a] + startSizes[b];
   const next = Math.min(pair - minFrac, Math.max(minFrac, startSizes[a] + frac));
   branch.sizes = startSizes.map((s, i) => (i === a ? next : i === b ? pair - next : s));
-}
-
-const LANGUAGES: Record<string, string> = {
-  ts: 'typescript', js: 'javascript', json: 'json', md: 'markdown',
-  css: 'css', html: 'html', sh: 'shell', gitignore: 'ignore',
-};
-
-export function languageOf(path: string): string {
-  const name = baseName(path);
-  const ext = name.startsWith('.') ? name.slice(1) : name.slice(name.lastIndexOf('.') + 1);
-  return LANGUAGES[ext] ?? 'plaintext';
-}
-
-/** statusbar 라벨용 표시 이름 */
-export function languageLabel(path: string): string {
-  const id = languageOf(path);
-  const labels: Record<string, string> = {
-    typescript: 'TypeScript', javascript: 'JavaScript', json: 'JSON', markdown: 'Markdown',
-    css: 'CSS', html: 'HTML', shell: 'Shell Script', ignore: 'Ignore', plaintext: 'Plain Text',
-  };
-  return labels[id] ?? id;
 }
 
 // ---- 활성 세션 전달 shim — UI·커맨드는 종전 이름 그대로 활성 세션에 작용한다
@@ -1412,9 +1404,6 @@ export const openFileSplit = (path: string, refGroupId: number, side: SplitSide)
   ctx().editors.openFileSplit(path, refGroupId, side);
 export const closeTab = (groupId: number, tabId: string, force = false): void =>
   ctx().editors.closeTab(groupId, tabId, force);
-export const confirmCloseSave = (): Promise<void> => ctx().editors.confirmCloseSave();
-export const confirmCloseDiscard = (): void => ctx().editors.confirmCloseDiscard();
-export const confirmCloseCancel = (): void => ctx().editors.confirmCloseCancel();
 export const reopenClosedEditor = (): Promise<void> => ctx().editors.reopenClosedEditor();
 export const moveTabToGroup = (fromGroupId: number, tabId: string, toGroupId: number, index?: number): void =>
   ctx().editors.moveTabToGroup(fromGroupId, tabId, toGroupId, index);

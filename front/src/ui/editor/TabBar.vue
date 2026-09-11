@@ -8,6 +8,7 @@ import { windowLabel } from '../../model/window';
 import { DETACH_DX, DETACH_DY, insertIndexAt, pointerOutside } from '../dndUtil';
 import { editorDrag, endEditorDrag, isForeignDrag, readForeignDrop, startTabDrag } from './tabDnd';
 import FileIcon from '../widgets/FileIcon.vue';
+import { configTooltip, isConfigPath } from '../../model/configfiles';
 import ProgressBar from '../widgets/ProgressBar.vue';
 import StripScroll from '../widgets/StripScroll.vue';
 
@@ -206,7 +207,7 @@ function onForeignDrop(e: DragEvent) {
           'drop-before': tabDragging && dropIndex === i,
           'drop-after': tabDragging && dropIndex === i + 1 && i === group.tabs.length - 1,
         }"
-        :title="tab.kind === 'terminal' ? tab.name : tab.path"
+        :title="tab.kind === 'terminal' ? tab.name : isConfigPath(tab.path) ? configTooltip(tab.path) : tab.path"
         draggable="true"
         @dragstart="onDragStart($event, tab)"
         @dragend="onDragEnd($event)"
@@ -219,6 +220,7 @@ function onForeignDrop(e: DragEvent) {
         <ProgressBar v-if="editors.loadingTabs.has(tab.id)" class="tab-progress" />
         <span v-if="tab.kind === 'terminal'" class="codicon codicon-terminal tab-icon" />
         <span v-else-if="tab.kind === 'folder'" class="codicon codicon-folder tab-icon" />
+        <span v-else-if="isConfigPath(tab.path)" class="codicon codicon-settings-gear tab-icon" />
         <FileIcon v-else :name="iconName(tab)" />
         <span class="tab-label">{{ tab.name }}</span>
         <span v-if="descriptions.get(tab.id)" class="tab-description">{{ descriptions.get(tab.id) }}</span>

@@ -12,7 +12,9 @@ import jsonWorker from 'monaco-editor/languages/features/json/json.worker?worker
 import cssWorker from 'monaco-editor/languages/features/css/css.worker?worker';
 import htmlWorker from 'monaco-editor/languages/features/html/html.worker?worker';
 import { language as markdownLanguage } from 'monaco-editor/languages/definitions/markdown/markdown';
-import { editors, languageOf, setApplyExternalEdit, setDisposeModels, updateContent } from '../../model/editors';
+import { editors, setApplyExternalEdit, setDisposeModels, updateContent } from '../../model/editors';
+import { languageOf } from '../../model/languages';
+import { registerCustomLanguages } from './languages';
 import { backend } from '../../model/host';
 import { repoOf, relPath } from '../../model/scm';
 import { setBeforeSessionSwitch } from '../../model/sessions';
@@ -132,6 +134,9 @@ monaco.editor.defineTheme('superlite-dark', {
     tokenizer: { ...lang.tokenizer, root: root as monaco.languages.IMonarchLanguageRule[] },
   });
 }
+
+// 내장이 아닌 언어(tmux·ssh_config …) — 첫 모델 전에 등록 (languages/index)
+registerCustomLanguages();
 
 /** 공유 옵션 — 폰트 기본값은 theme/fonts.ts 단일 소스, 라인 하이라이트 border(#282828) */
 export const EDITOR_OPTIONS: monaco.editor.IStandaloneEditorConstructionOptions = {

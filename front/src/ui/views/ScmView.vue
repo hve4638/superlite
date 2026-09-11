@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import {
   scm, activeRepo, selectRepo, openChange, openChangeFile, commit, refreshScm, rescanRepos, stage, unstage,
-  requestDiscard, confirmDiscard, cancelDiscard, branches, checkout, sync, CHANGE_LETTER, CHANGE_COLOR,
+  requestDiscard, branches, checkout, sync, CHANGE_LETTER, CHANGE_COLOR,
   type ScmChange, type ScmRepo,
 } from '../../model/scm';
 import { gitAuth, signInGithub, removeCredential, refreshCredentials } from '../../model/gitauth';
@@ -10,7 +10,6 @@ import { openContextMenu, showViewlet, workbench } from '../../model/workbench';
 import { revealPath } from '../../model/files';
 import { errText, notify } from '../../model/notifications';
 import FileIcon from '../widgets/FileIcon.vue';
-import ConfirmDialog from '../widgets/ConfirmDialog.vue';
 import GitAuthDialog from './GitAuthDialog.vue';
 
 const inputEl = ref<HTMLTextAreaElement>();
@@ -103,29 +102,6 @@ async function open(c: ScmChange): Promise<void> {
   }
   await openChange(c);
 }
-
-// VS Code git 확장의 discard 확인 문구 — untracked 는 파일 삭제라 DELETE 로 강조한다
-const discardMessage = computed(() => {
-  const list: ScmChange[] = scm.discardConfirm ?? [];
-  const untracked = list.filter((c) => c.kind === 'untracked').length;
-  if (list.length === 1) {
-    const c = list[0];
-    return c.kind === 'untracked'
-      ? { message: `Are you sure you want to DELETE '${c.name}'?`,
-          detail: 'This is IRREVERSIBLE! This file will be FOREVER LOST if you proceed.',
-          label: 'Delete File' }
-      : { message: `Are you sure you want to discard changes in '${c.name}'?`,
-          detail: 'This is IRREVERSIBLE! Your current working set will be FOREVER LOST.',
-          label: 'Discard Changes' };
-  }
-  return {
-    message: `Are you sure you want to discard ALL changes in ${list.length} files?`,
-    detail: untracked
-      ? `This will DELETE ${untracked} untracked file(s)! This is IRREVERSIBLE!`
-      : 'This is IRREVERSIBLE! Your current working set will be FOREVER LOST.',
-    label: 'Discard All Changes',
-  };
-});
 
 /** 브랜치 전환 — 라벨 아래에 브랜치 목록 메뉴 (현재 브랜치는 비활성) */
 async function pickBranch(e: MouseEvent): Promise<void> {
@@ -358,14 +334,6 @@ onMounted(() => {
         </div>
       </div>
     </section>
-    <ConfirmDialog
-      v-if="scm.discardConfirm"
-      :message="discardMessage.message"
-      :detail="discardMessage.detail"
-      :confirm-label="discardMessage.label"
-      @confirm="confirmDiscard()"
-      @cancel="cancelDiscard()"
-    />
     <GitAuthDialog v-if="authOpen" />
   </div>
 </template>

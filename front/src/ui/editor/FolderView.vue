@@ -15,7 +15,7 @@ import FolderIcons from './FolderIcons.vue';
 import FolderPreview from './FolderPreview.vue';
 import { typeOf } from './folderFmt';
 import InlineNameInput from '../widgets/InlineNameInput.vue';
-import ConfirmDialog from '../widgets/ConfirmDialog.vue';
+import { confirm, confirming } from '../../model/dialog';
 
 // 폴더 탭 — 상태(현재 폴더 path·이력·정렬·스타일)는 탭(FolderTab)과 editors.folderView(커서)에 있고
 // 이 컴포넌트는 스타일에 따라 다르게 그린다: columns(yazi 3열: 부모/현재/미리보기) ·
@@ -166,7 +166,6 @@ onBeforeUnmount(() => {
 type EditMode = 'createFile' | 'createDir' | 'rename';
 const editing = ref<{ mode: EditMode; path?: string; initial: string } | null>(null);
 const opError = ref<string | null>(null);
-const confirming = ref<DirEntry | null>(null);
 
 const rows = computed<ColumnRow[]>(() => {
   const ed = editing.value;
@@ -234,23 +233,18 @@ function cancelEdit(): void {
   opError.value = null;
   refocus();
 }
-const confirmMessage = computed(() => {
-  const e = confirming.value;
-  if (!e) return { message: '', detail: '' };
+async function askDelete(e: DirEntry): Promise<void> {
   const dirty = [...editors.docs].some(
     ([p, d]) => (p === e.path || p.startsWith(`${e.path}/`)) && d.content !== d.savedContent,
   );
-  return {
+  const choice = await confirm({
     message: dirty
       ? `Are you sure you want to delete '${e.name}' with unsaved changes? Your changes will be lost.`
       : `Are you sure you want to permanently delete '${e.name}'${e.kind === 'directory' ? ' and its contents' : ''}?`,
     detail: 'This action is irreversible!',
-  };
-});
-function onConfirmDelete(): void {
-  const e = confirming.value;
-  confirming.value = null;
-  if (e) void deleteEntry(e.path, e.kind); // 실패는 model 이 notify 한다
+    confirmLabel: 'Delete',
+  });
+  if (choice === 'confirm') void deleteEntry(e.path, e.kind); // 실패는 model 이 notify 한다
   refocus();
 }
 
@@ -283,7 +277,7 @@ function menuFor(entry: DirEntry | null): ContextMenuItem[] {
     ...(outside.value ? [] : [
       { separator: true },
       { label: 'Rename...', keybinding: 'F2', run: () => startRename(entry) },
-      { label: 'Delete', keybinding: 'Delete', run: () => (confirming.value = entry) },
+      { label: 'Delete', keybinding: 'Delete', run: () => void askDelete(entry) },
     ]),
     { separator: true },
     ...viewItems,
@@ -301,7 +295,7 @@ function onKeydown(e: KeyboardEvent): void {
     cancelEdit();
     return;
   }
-  if (editing.value || confirming.value) return;
+  if (editing.value || confirming()) return;
   if (e.altKey && !e.ctrlKey && !e.metaKey) {
     // Windows 탐색기: Alt+← 뒤로, Alt+→ 앞으로, Alt+↑ 위로
     if (e.key === 'ArrowLeft') goBack();
@@ -335,7 +329,7 @@ function onKeydown(e: KeyboardEvent): void {
     case 'l': case 'Enter': if (cur) enter(cur); break;
     case 'h': case 'Backspace': goUp(); break;
     case 'F2': if (cur && !outside.value) startRename(cur); break;
-    case 'Delete': if (cur && !outside.value) confirming.value = cur; break;
+    case 'Delete': if (cur && !outside.value) void askDelete(cur); break;
     default: return;
   }
   e.preventDefault();
@@ -470,14 +464,6 @@ watch(
         @open="(e) => previewDir !== null && goTo(previewDir, e)"
       />
     </div>
-    <ConfirmDialog
-      v-if="confirming"
-      :message="confirmMessage.message"
-      :detail="confirmMessage.detail"
-      confirm-label="Delete"
-      @confirm="onConfirmDelete"
-      @cancel="confirming = null; refocus()"
-    />
   </div>
 </template>
 

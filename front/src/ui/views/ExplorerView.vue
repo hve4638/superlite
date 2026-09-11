@@ -13,7 +13,7 @@ import { openContextMenu, openQuickInput, workbench, type ContextMenuItem } from
 import { editorDrag, endEditorDrag, startFileDrag } from '../editor/tabDnd';
 import FileIcon from '../widgets/FileIcon.vue';
 import InlineNameInput from '../widgets/InlineNameInput.vue';
-import ConfirmDialog from '../widgets/ConfirmDialog.vue';
+import { confirm, confirming } from '../../model/dialog';
 import ProgressBar from '../widgets/ProgressBar.vue';
 
 type EditMode = 'createFile' | 'createDir' | 'rename';
@@ -35,7 +35,6 @@ const editing = ref<Editing | null>(null);
 /** 백엔드 거부(동시 생성 등) — 입력을 남겨 정정 기회를 준다 */
 const opError = ref<string | null>(null);
 /** 삭제 확인 대상 — 선택 집합 전체를 한 번에 (VS Code 다중 삭제 확인) */
-const confirming = ref<TreeNode[] | null>(null);
 
 /** 조상이 같은 목록에 있는 경로를 뺀다 — 폴더와 그 안 항목을 함께 골랐을 때 조작은 폴더 한 번이면 된다 */
 function topLevel(paths: string[]): string[] {
@@ -144,34 +143,26 @@ function cancelEdit(): void {
   opError.value = null;
 }
 
-const confirmMessage = computed(() => {
-  const nodes = confirming.value;
-  if (!nodes || nodes.length === 0) return { message: '', detail: '' };
+/** 삭제 확인 — 한 번의 확인 뒤 순차 삭제 (VS Code 문구, 여럿이면 confirmMultiDelete / 미저장은 confirmDeleteDirtyMultiple) */
+async function askDelete(nodes: TreeNode[]): Promise<void> {
+  if (nodes.length === 0) return;
   const dirty = [...editors.docs].some(
     ([p, d]) => nodes.some((n) => p === n.path || p.startsWith(`${n.path}/`)) && d.content !== d.savedContent,
   );
-  if (nodes.length === 1) {
-    const node = nodes[0];
-    return {
-      message: dirty
-        ? `Are you sure you want to delete '${node.name}' with unsaved changes? Your changes will be lost.`
-        : `Are you sure you want to permanently delete '${node.name}'${node.kind === 'directory' ? ' and its contents' : ''}?`,
-      detail: 'This action is irreversible!',
-    };
-  }
-  // 여럿 — VS Code 문구 (confirmMultiDelete / 미저장은 confirmDeleteDirtyMultiple)
-  return {
-    message: dirty
-      ? 'You are deleting files with unsaved changes. Do you want to continue?'
-      : `Are you sure you want to permanently delete the following ${nodes.length} files/directories and their contents?`,
-    detail: `${namesDetail(nodes.map((n) => n.name))}\nThis action is irreversible!`,
-  };
-});
-
-async function onConfirmDelete(): Promise<void> {
-  const nodes = confirming.value;
-  confirming.value = null;
-  if (!nodes) return;
+  const ask = nodes.length === 1
+    ? {
+        message: dirty
+          ? `Are you sure you want to delete '${nodes[0].name}' with unsaved changes? Your changes will be lost.`
+          : `Are you sure you want to permanently delete '${nodes[0].name}'${nodes[0].kind === 'directory' ? ' and its contents' : ''}?`,
+        detail: 'This action is irreversible!',
+      }
+    : {
+        message: dirty
+          ? 'You are deleting files with unsaved changes. Do you want to continue?'
+          : `Are you sure you want to permanently delete the following ${nodes.length} files/directories and their contents?`,
+        detail: `${namesDetail(nodes.map((n) => n.name))}\nThis action is irreversible!`,
+      };
+  if ((await confirm({ ...ask, confirmLabel: 'Delete' })) !== 'confirm') return;
   const top = new Set(topLevel(nodes.map((n) => n.path)));
   // 순차 — 실패는 model 이 notify 하고 다음 항목으로 (undo 는 항목별 스택)
   for (const n of nodes) if (top.has(n.path)) await deleteEntry(n.path, n.kind);
@@ -200,7 +191,7 @@ function menuFor(node: TreeNode, sel: TreeNode[]): ContextMenuItem[] {
       : []),
     { separator: true },
     { label: 'Rename...', keybinding: 'F2', enabled: !multi, run: () => startRename(node) },
-    { label: 'Delete', keybinding: 'Delete', run: () => (confirming.value = sel) },
+    { label: 'Delete', keybinding: 'Delete', run: () => void askDelete(sel) },
   ];
 }
 
@@ -273,8 +264,9 @@ function onTreeContextMenu(e: MouseEvent): void {
 // 대상 폴더: 폴더 행은 그 폴더, 파일 행은 그 부모, 행 밖은 루트. VS Code 처럼 대상 폴더 행을 강조
 /** 드래그 중 대상 폴더 ('' = 루트, null = 드래그 아님) */
 const dropDir = ref<string | null>(null);
-/** 덮어쓰기 확인 (resolve 로 답한다) — 업로드는 충돌 이름을 모아 한 번, 드래그 이동·복사는 항목마다 (VS Code 문구) */
-const replaceAsk = ref<{ message: string; detail: string; resolve: (ok: boolean) => void } | null>(null);
+/** 덮어쓰기 확인 — 업로드는 충돌 이름을 모아 한 번, 드래그 이동·복사는 항목마다 (VS Code 문구) */
+const askReplace = async (message: string, detail: string): Promise<boolean> =>
+  (await confirm({ message, detail, confirmLabel: 'Replace' })) === 'confirm';
 
 const dirOf = (node: TreeNode): string => (node.kind === 'directory' ? node.path : parentOf(node.path));
 
@@ -329,50 +321,33 @@ function onDrop(e: DragEvent, dir: string): void {
     .filter((it) => it.kind === 'file')
     .map((it) => it.webkitGetAsEntry() ?? it.getAsFile())
     .filter((en): en is DroppedEntry => en !== null);
-  void uploadDropped(dir, entries, (names) => new Promise((resolve) => (replaceAsk.value = {
-    message: `${names.length === 1 ? `'${names[0]}' already exists` : `${names.length} items already exist`} in the destination. Do you want to replace?`,
-    detail: 'Files with the same names will be overwritten. Other files in existing folders are kept.',
-    resolve,
-  })));
+  void uploadDropped(dir, entries, (names) => askReplace(
+    `${names.length === 1 ? `'${names[0]}' already exists` : `${names.length} items already exist`} in the destination. Do you want to replace?`,
+    'Files with the same names will be overwritten. Other files in existing folders are kept.',
+  ));
 }
 
-function answerReplace(ok: boolean): void {
-  replaceAsk.value?.resolve(ok);
-  replaceAsk.value = null;
-}
-
-/** 이동 확인 끄기 (VS Code explorer.confirmDragAndDrop) — 대화상자의 "Do not ask me again" 이 세운다. 복사는 묻지 않는다 */
+/** 이동 확인 끄기 (VS Code explorer.confirmDragAndDrop) — 대화상자의 보조 버튼 "Move, Don't Ask Again" 이 세운다 (종전 체크박스 — OS 다이얼로그에 없다). 복사는 묻지 않는다 */
 const DND_CONFIRM_KEY = 'superlite.explorer.confirmDragAndDrop';
-/** 이동 확인 — resolve(ok, checked) */
-const moveAsk = ref<{ message: string; detail?: string; resolve: (ok: boolean, checked: boolean) => void } | null>(null);
-
-function answerMove(ok: boolean, checked = false): void {
-  moveAsk.value?.resolve(ok, checked);
-  moveAsk.value = null;
-}
 
 async function dropEntries(paths: string[], dir: string, mode: 'move' | 'copy'): Promise<void> {
   if (mode === 'move' && localStorage.getItem(DND_CONFIRM_KEY) !== '0') {
     const dest = dir === '' ? baseName(workbench.rootPath.replace(/\\/g, '/')) : baseName(dir);
-    const ok = await new Promise<boolean>((resolve) => {
-      moveAsk.value = {
-        message: paths.length === 1
-          ? `Are you sure you want to move '${baseName(paths[0])}' into '${dest}'?`
-          : `Are you sure you want to move the following ${paths.length} files into '${dest}'?`,
-        detail: paths.length === 1 ? undefined : namesDetail(paths.map(baseName)),
-        resolve: (ok, checked) => {
-          if (ok && checked) localStorage.setItem(DND_CONFIRM_KEY, '0');
-          resolve(ok);
-        },
-      };
+    const choice = await confirm({
+      message: paths.length === 1
+        ? `Are you sure you want to move '${baseName(paths[0])}' into '${dest}'?`
+        : `Are you sure you want to move the following ${paths.length} files into '${dest}'?`,
+      detail: paths.length === 1 ? undefined : namesDetail(paths.map(baseName)),
+      confirmLabel: 'Move',
+      secondaryLabel: "Move, Don't Ask Again",
     });
-    if (!ok) return;
+    if (choice === 'cancel') return;
+    if (choice === 'secondary') localStorage.setItem(DND_CONFIRM_KEY, '0');
   }
-  const done = await transferEntries(paths, dir, mode, (name) => new Promise((resolve) => (replaceAsk.value = {
-    message: `A file or folder with the name '${name}' already exists in the destination folder. Do you want to replace it?`,
-    detail: 'This action is irreversible!',
-    resolve,
-  })));
+  const done = await transferEntries(paths, dir, mode, (name) => askReplace(
+    `A file or folder with the name '${name}' already exists in the destination folder. Do you want to replace it?`,
+    'This action is irreversible!',
+  ));
   // 선택은 옮겨진(복사된) 쪽으로 — 놓은 폴더가 펼쳐져 있어야 보인다 (접혀 있으면 집합에만 남는다)
   select(done[0] ?? null);
   for (const p of done.slice(1)) files.selected.add(p);
@@ -385,7 +360,7 @@ function onTreeKeydown(e: KeyboardEvent): void {
     cancelEdit();
     return;
   }
-  if (editing.value || confirming.value || moveAsk.value || replaceAsk.value) return;
+  if (editing.value || confirming()) return;
   const vis = visibleNodes();
   const sel = files.selectedPath !== null ? vis.find((n) => n.path === files.selectedPath) ?? null : null;
   const multi = selectedNodes();
@@ -406,7 +381,7 @@ function onTreeKeydown(e: KeyboardEvent): void {
     startRename(sel);
   } else if (e.key === 'Delete' && multi.length > 0) {
     e.preventDefault();
-    confirming.value = multi;
+    void askDelete(multi);
   } else if (e.key === 'z' && e.ctrlKey && !e.shiftKey && !e.altKey) {
     e.preventDefault();
     // 스택 항목의 경로가 이후 조작으로 낡았을 수 있다 — 실패한 항목은 버려진다 (redo 없음)
@@ -479,7 +454,7 @@ function outsideRows(e: Event): boolean {
  *      배달되지 않으므로 window 에서 받아 activeElement 로 판정한다.
  */
 function onPaste(e: ClipboardEvent): void {
-  if (editing.value || confirming.value) return; // 인라인 입력·다이얼로그의 붙여넣기는 건드리지 않는다
+  if (editing.value || confirming()) return; // 인라인 입력·다이얼로그의 붙여넣기는 건드리지 않는다
   const tree = treeEl.value;
   if (!tree || !(document.activeElement && tree.contains(document.activeElement))) return;
   const item = [...(e.clipboardData?.items ?? [])].find(
@@ -643,31 +618,6 @@ defineExpose({
         <span class="title">Timeline</span>
       </div>
     </template>
-    <ConfirmDialog
-      v-if="confirming"
-      :message="confirmMessage.message"
-      :detail="confirmMessage.detail"
-      confirm-label="Delete"
-      @confirm="onConfirmDelete"
-      @cancel="confirming = null"
-    />
-    <ConfirmDialog
-      v-if="replaceAsk"
-      :message="replaceAsk.message"
-      :detail="replaceAsk.detail"
-      confirm-label="Replace"
-      @confirm="answerReplace(true)"
-      @cancel="answerReplace(false)"
-    />
-    <ConfirmDialog
-      v-if="moveAsk"
-      :message="moveAsk.message"
-      :detail="moveAsk.detail"
-      confirm-label="Move"
-      checkbox-label="Do not ask me again"
-      @confirm="(checked) => answerMove(true, checked)"
-      @cancel="answerMove(false)"
-    />
   </div>
 </template>
 

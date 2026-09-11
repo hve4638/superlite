@@ -1,0 +1,4 @@
+import { tmux } from './tmux'
+import { sshConfig } from './sshconfig'
+
+role: monaco 내장이 아닌 언어의 등록 (ticket config-editors) — 언어 하나 = 파일 하나(id·언어 설정·monarch 토크나이저) + index 의 CUSTOM 목록 항목 하나. 판정(경로 → id)은 model/languages, 여기는 그 id 를 monaco 가 알게 만드는 쪽. 토큰 이름은 테마 공통 규칙(comment·keyword·keyword.control·string·number·variable·type.identifier·attribute.name·identifier)만 써서 언어를 더해도 테마(monaco.ts superlite-dark)를 건드리지 않는다. tmux: 줄 머리·';'·'{' 뒤의 명령(tmux(1) 명령·별칭 표) keyword, 플래그 attribute.name, 키 이름(C-b·M-x·MouseDown3Pane·Enter…) type.identifier, #{…}(중첩)·#[…]·$VAR variable, on/off/None 류 keyword.control, 따옴표 문자열·줄 이어짐 백슬래시. ssh_config: Host/Match keyword.control + 패턴(*·?·! type.identifier), 그 외 키워드(ssh_config(5) 표, 대소문자 무관) keyword, %토큰·~ variable, yes/no/ask 류 keyword.control

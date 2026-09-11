@@ -49,6 +49,9 @@ export class StageTx {
 fn stage(tx?, s, bytes?) {
   role: 접속 단계 통보 (StageTx 채널, None 이면 무통보) — relay 가 프론트에 connectStage 이벤트로 흘린다 (ssh-connect-status)
 }
+fn home_dir() -> path? {
+  role: HOME 또는 USERPROFILE — ~/.ssh/config·remote.json 의 기준. conf.rs 도 쓴다 (pub(crate))
+}
 fn expand_home(home, path) -> path {
   role: `/~`·`/~/sub` 표기를 원격 $HOME 절대 경로로 치환 (순수) — 프론트는 원격 홈을 모르므로 세션 root 에 '~' 를 적는다. '~' 가 아니면 그대로
 }

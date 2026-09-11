@@ -1,6 +1,7 @@
 import { reactive, watch } from '@vue/reactivity';
 import type { DirEntry, GitChangeKind, GitLogItem, ThinBackend } from '../backend/types';
 import { ctx, viewOf } from './ctx';
+import { confirm } from './dialog';
 import type { createEditors } from './editors';
 import { errText, notify } from './notifications';
 
@@ -57,7 +58,6 @@ export function createScm(backend: ThinBackend, editorsM: ReturnType<typeof crea
      *  목록 클릭이 명시적으로 바꾸고, 활성 편집기 파일이 바뀌면 그 파일의 저장소를 따른다 (VS Code 자동 모드) */
     selected: '',
     /** discard 확인 대기 중인 항목 — ScmView 가 대화상자를 띄운다 */
-    discardConfirm: null as ScmChange[] | null,
   });
 
   let scanned = false;
@@ -262,15 +262,24 @@ export function createScm(backend: ThinBackend, editorsM: ReturnType<typeof crea
     return gitOp('unstage', () => perRepo(changes, (repo, mine) => backend.gitUnstage(repo, rels(mine))));
   }
 
-  /** discard 요청 — 파괴적이라 바로 실행하지 않고 확인 대기 상태에 둔다 (ScmView 가 대화상자) */
-  function requestDiscard(changes = scm.changes.filter((c) => !c.staged)): void {
-    if (changes.length) scm.discardConfirm = changes;
-  }
-
-  async function confirmDiscard(): Promise<void> {
-    const changes = scm.discardConfirm;
-    scm.discardConfirm = null;
-    if (!changes) return;
+  /** discard — 파괴적이라 확인을 거친다 (VS Code git 확장의 문구, untracked 는 파일 삭제라 DELETE 로 강조) */
+  async function requestDiscard(changes = scm.changes.filter((c) => !c.staged)): Promise<void> {
+    if (!changes.length) return;
+    const untracked = changes.filter((c) => c.kind === 'untracked').length;
+    const ask = changes.length === 1
+      ? changes[0].kind === 'untracked'
+        ? { message: `Are you sure you want to DELETE '${changes[0].name}'?`,
+            detail: 'This is IRREVERSIBLE! This file will be FOREVER LOST if you proceed.',
+            confirmLabel: 'Delete File' }
+        : { message: `Are you sure you want to discard changes in '${changes[0].name}'?`,
+            detail: 'This is IRREVERSIBLE! Your current working set will be FOREVER LOST.',
+            confirmLabel: 'Discard Changes' }
+      : { message: `Are you sure you want to discard ALL changes in ${changes.length} files?`,
+          detail: untracked
+            ? `This will DELETE ${untracked} untracked file(s)! This is IRREVERSIBLE!`
+            : 'This is IRREVERSIBLE! Your current working set will be FOREVER LOST.',
+          confirmLabel: 'Discard All Changes' };
+    if ((await confirm(ask)) !== 'confirm') return;
     await gitOp('discard changes', () => perRepo(changes, (repo, mine) => backend.gitDiscard(
       repo,
       rels(mine.filter((c) => c.kind !== 'untracked')),
@@ -278,10 +287,6 @@ export function createScm(backend: ThinBackend, editorsM: ReturnType<typeof crea
     )));
     // WHY: 되돌린 파일이 열려 있으면 편집기 내용이 디스크와 어긋난다 — 파일 감시가 외부 변경으로
     //      잡아 재로드한다 (mock 은 감시가 없어 탭이 옛 내용으로 남는다)
-  }
-
-  function cancelDiscard(): void {
-    scm.discardConfirm = null;
   }
 
   function branches(repo: ScmRepo): Promise<string[]> {
@@ -318,7 +323,7 @@ export function createScm(backend: ThinBackend, editorsM: ReturnType<typeof crea
 
   return {
     scm, refreshScm, snapshot, restore, rescanRepos, noteDirEntries, repoOf, relPath, activeRepo, selectRepo, openChange, openChangeFile, commit,
-    decorationFor, stage, unstage, requestDiscard, confirmDiscard, cancelDiscard, branches, checkout, sync,
+    decorationFor, stage, unstage, requestDiscard, branches, checkout, sync,
   };
 }
 
@@ -350,9 +355,7 @@ export const decorationFor = (path: string, isDir: boolean): { letter: string; c
   ctx().scm.decorationFor(path, isDir);
 export const stage = (changes?: ScmChange[]): Promise<void> => ctx().scm.stage(changes);
 export const unstage = (changes?: ScmChange[]): Promise<void> => ctx().scm.unstage(changes);
-export const requestDiscard = (changes?: ScmChange[]): void => ctx().scm.requestDiscard(changes);
-export const confirmDiscard = (): Promise<void> => ctx().scm.confirmDiscard();
-export const cancelDiscard = (): void => ctx().scm.cancelDiscard();
+export const requestDiscard = (changes?: ScmChange[]): Promise<void> => ctx().scm.requestDiscard(changes);
 export const branches = (repo: ScmRepo): Promise<string[]> => ctx().scm.branches(repo);
 export const checkout = (repo: ScmRepo, branch: string): Promise<void> => ctx().scm.checkout(repo, branch);
 export const sync = (repo: ScmRepo, kind: 'fetch' | 'pull' | 'push'): Promise<void> => ctx().scm.sync(repo, kind);

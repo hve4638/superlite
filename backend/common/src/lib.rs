@@ -54,6 +54,10 @@ pub const CHANNEL: &str = env!("SUPERLITE_CHANNEL");
 /// 파이프·캐시·설정 폴더(relay remote.json)·원격 헬퍼 폴더가 전부 이걸 쓴다
 pub const SLUG: &str = env!("SUPERLITE_SLUG");
 
+/// 내장 tmux 기본 설정 (tmux-base.conf) — 데몬이 프로필 없이 뜰 때의 설정이자, relay 가 편집기 탭에
+/// 읽기 전용 `default` 프로필로 보이고 새 프로필의 템플릿으로 복사하는 원문 (ticket config-editors)
+pub const TMUX_BASE_CONF: &str = include_str!("tmux-base.conf");
+
 /// `--version` 한 줄 — 데몬·백엔드가 같은 표기를 쓴다 (헬퍼 업로드 로그·버그 리포트용).
 /// 예: `superlite-daemon 0.1.0 (8700a11f2, built 2026-09-06T05:00:00Z)`,
 /// dev 채널은 `superlite-daemon 0.1.0 dev (…)`

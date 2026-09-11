@@ -122,7 +122,7 @@ async function sync() {
     const ed = ensureCodeEditor();
     const model = modelFor(tab.path);
     model.updateOptions({ tabSize: indentOf(tab.path) });
-    ed.updateOptions({ readOnly: false }); // 삭제 파일 탭에서 돌아오는 경우
+    ed.updateOptions({ readOnly: doc?.readOnly === true }); // 삭제 파일 탭에서 돌아오는 경우 false 로 복귀, 내장 default 프로필은 true
     if (ed.getModel() !== model) {
       ed.setModel(model);
       // 저장해 둔 커서·스크롤로 (ticket workspace-state-restore) — 없으면 monaco 기본(맨 위)

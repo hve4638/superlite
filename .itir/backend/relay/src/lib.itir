@@ -1,4 +1,4 @@
-role: 중계 코어 — 준비된 TcpListener 위에 /ws·/ssh/hosts·/ssh/state·/daemon/clean·/tmux-conf(GET/PUT/OPTIONS — 클라이언트 tmux.conf, 사이드바 터미널 뷰가 편집)·/version·/github/oauth·/git/credentials(gitcred.rs)·/nvim(nvim.rs — 임베드 Neovim 중계, 데몬 와이어 밖) 라우터를 얹어 serve. HTTP 핸들러는 각자 authed()+cors() 전문을 앞세운다(미들웨어 없음 — WS 둘은 예외라 라우터를 갈라야 해서) — 새 엔드포인트가 전문을 빠뜨리면 곧 무인증이다. attach 직후 클라이언트 tmux.conf 를 데몬에 tmuxConf 로 밀어 넣는다 (와이어 v17 — 원격별 관리 없이 이 백엔드 머신의 파일 하나가 원본). 데몬 spawn·attach, 상주 제어 연결 포함. dist 는 옵션 (bin 은 정적 서빙, Tauri 앱은 자산 번들이라 불필요). root 는 세션 해석기(SessionRoots)가 정한다 — 고정 root(bin) 또는 세션 레지스트리 조회(Tauri 앱, decision/workspace-session-tabs.md). root 문자열이 ssh:// 스킴이면 원격 — 해석(Target)은 접속 직전 한 곳에서만 한다
+role: 중계 코어 — 준비된 TcpListener 위에 /ws·/ssh/hosts·/ssh/state·/daemon/clean·/tmux-conf(GET/PUT/OPTIONS — 클라이언트 tmux 프로필 내용, 편집기 탭이 연다)·/tmux-conf/profiles(GET/POST — 프로필 목록·CRUD·select)·/ssh-config(GET/PUT/OPTIONS — 이 머신의 ~/.ssh/config; 넷 다 conf.rs)·/version·/github/oauth·/git/credentials(gitcred.rs)·/nvim(nvim.rs — 임베드 Neovim 중계, 데몬 와이어 밖) 라우터를 얹어 serve. HTTP 핸들러는 각자 authed()+cors() 전문을 앞세운다(미들웨어 없음 — WS 둘은 예외라 라우터를 갈라야 해서) — 새 엔드포인트가 전문을 빠뜨리면 곧 무인증이다. attach 직후 클라이언트 tmux 적용 프로필(conf::active_content)을 데몬에 tmuxConf 로 밀어 넣는다 (와이어 v17 — 원격별 관리 없이 이 백엔드 머신의 프로필이 원본). 데몬 spawn·attach, 상주 제어 연결 포함. dist 는 옵션 (bin 은 정적 서빙, Tauri 앱은 자산 번들이라 불필요). root 는 세션 해석기(SessionRoots)가 정한다 — 고정 root(bin) 또는 세션 레지스트리 조회(Tauri 앱, decision/workspace-session-tabs.md). root 문자열이 ssh:// 스킴이면 원격 — 해석(Target)은 접속 직전 한 곳에서만 한다
 
 // Registry: SessionRoots::Registry 의 본체 — (세션 id, root?) 등록 순서 목록(Arc<Mutex<Vec>>). 앱(native)이 만들어 넘기고 relay 는 읽기만
 export type Registry
@@ -75,17 +75,26 @@ fn daemon_conn() {
 fn tmux_bin_for(os, arch) -> path? {
   role: 동봉 tmux 바이너리 — 앱 옆 daemon/tmux-<os>-<arch> (build.sh 가 정적 릴리스를 둔다), 로컬은 SUPERLITE_TMUX_BIN 우회 먼저. 없으면 None — 원격은 원격 호스트의 tmux, 로컬 데몬은 PATH
 }
-fn tmux_conf_path() -> path? {
-  role: 클라이언트 tmux.conf — common config_dir()/tmux.conf
-}
 fn tmux_conf_get() {
-  role: GET /tmux-conf — 파일 내용 (없으면 빈 문자열)
+  role: GET /tmux-conf?profile= — 프로필 내용 (profile 생략 = 적용 프로필, 없는 프로필은 404)
 }
 fn tmux_conf_put() {
-  role: PUT /tmux-conf — 본문을 파일로. 접속 중인 데몬 적용은 프론트가 세션마다 tmuxConf 로 (relay 는 연결을 모아 두지 않는다)
+  role: PUT /tmux-conf?profile= — 본문을 프로필 파일로. 접속 중인 데몬 적용은 프론트가 세션마다 tmuxConf 로 (relay 는 연결을 모아 두지 않는다)
 }
-fn tmux_conf_options() {
-  role: OPTIONS /tmux-conf — PUT 의 CORS preflight 응답 (204 + allow-methods GET, PUT + allow-headers content-type + cors). Tauri 앱은 프론트 오리진과 relay 가 달라 브라우저가 PUT 앞에 preflight 를 보내는데 종전엔 405 라 저장이 실패했다 (웹은 같은 오리진이라 무관 — ticket relay-conn-fixes). 다른 끝점처럼 preflight 를 피하는 대신 PUT 의미를 유지했다. 인증 없음 — 메타데이터 응답이고 실제 PUT 이 authed 를 거친다
+fn tmux_profiles_get() {
+  role: GET /tmux-conf/profiles — conf::list JSON (active·names·dir·sshConfig 실제 경로)
+}
+fn tmux_profiles_post() {
+  role: POST /tmux-conf/profiles?op=&name=&from= — conf::update (create·clone·delete·select), 인자는 쿼리(preflight 회피), 응답은 갱신 목록, 거부는 400
+}
+fn ssh_config_get() {
+  role: GET /ssh-config — 이 머신의 ~/.ssh/config (없으면 빈 문자열)
+}
+fn ssh_config_put() {
+  role: PUT /ssh-config — 본문으로 통째 교체. 호스트 목록 갱신은 프론트가 /ssh/hosts 재조회
+}
+fn conf_options() {
+  role: OPTIONS /tmux-conf·/ssh-config — PUT 의 CORS preflight 응답 (204 + allow-methods GET, PUT + allow-headers content-type + cors). Tauri 앱은 프론트 오리진과 relay 가 달라 브라우저가 PUT 앞에 preflight 를 보내는데 종전엔 405 라 저장이 실패했다 (웹은 같은 오리진이라 무관 — ticket relay-conn-fixes). 다른 끝점처럼 preflight 를 피하는 대신 PUT 의미를 유지했다. 인증 없음 — 메타데이터 응답이고 실제 PUT 이 authed 를 거친다
 }
 fn daemon_bin_for(os, arch) -> path {
   role: OS·arch 에 맞는 데몬 바이너리 배치 규칙 하나 — 실행 파일 옆 daemon/<os>-<arch>[.exe] (이름은 std::env::consts::OS·ARCH 값 그대로, 매핑 표 없음). 로컬(내 OS·arch)이면 SUPERLITE_DAEMON_BIN 우회가 먼저, daemon/ 에 없으면 형제 superlite-daemon 폴백 (cargo 가 target/debug 에 평평하게 놓는다 — check 하니스·cargo run). 원격용은 daemon/ 에 없으면 파일명·위치를 담은 오류

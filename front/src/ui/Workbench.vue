@@ -1,18 +1,10 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted } from 'vue';
 import { workbench, sideBarShown, activityBarShown } from '../model/workbench';
-import {
-  editors,
-  baseName,
-  confirmCloseSave,
-  confirmCloseDiscard,
-  confirmCloseCancel,
-} from '../model/editors';
+import { editors } from '../model/editors';
 import { sessions } from '../model/sessions';
-import { cancelDaemonClean, daemonClean } from '../model/daemon';
-import { confirmDaemonClean } from '../model/host';
+import { answerConfirm, dialog } from '../model/dialog';
 import { version } from '../model/version';
-import { terminalState, confirmKillTerminal, cancelKillTerminal } from '../model/terminal';
 import TitleBar from './TitleBar.vue';
 import ActivityBar from './ActivityBar.vue';
 import SideBar from './SideBar.vue';
@@ -75,34 +67,16 @@ onBeforeUnmount(() => window.removeEventListener('resize', onWindowResize));
     <StatusBar />
     <QuickInput v-if="workbench.quickInput.open" />
     <ContextMenu v-if="workbench.contextMenu.open" />
-    <!-- dirty 문서의 마지막 탭 닫기 확인 (VS Code Save/Don't Save/Cancel) -->
+    <!-- 웹 전용 확인 창 — model/dialog.confirm 의 웹 경로 (앱은 OS 다이얼로그, ticket native-confirm-dialog) -->
     <ConfirmDialog
-      v-if="editors.closeConfirm"
-      :message="`Do you want to save the changes you made to '${baseName(editors.closeConfirm.path)}'?`"
-      detail="Your changes will be lost if you don't save them."
-      confirm-label="Save"
-      secondary-label="Don't Save"
-      @confirm="confirmCloseSave()"
-      @secondary="confirmCloseDiscard()"
-      @cancel="confirmCloseCancel()"
-    />
-    <!-- 원격 데몬 기동 실패 → 강제 정리 확인 (승인 없이는 아무것도 죽이지 않는다, ticket daemon-cleanup) -->
-    <ConfirmDialog
-      v-if="daemonClean.pending !== null"
-      message="원격 데몬이 응답하지 않습니다. 강제 정리할까요?"
-      detail="락을 쥔 채 응답하지 않는 데몬을 종료하고 잔재 파일을 지운 뒤 다시 접속합니다. 그 데몬의 터미널이 있었다면 함께 종료됩니다. 정상 응답하는 데몬과 다른 버전의 데몬은 건드리지 않습니다."
-      confirm-label="강제 정리"
-      @confirm="confirmDaemonClean()"
-      @cancel="cancelDaemonClean()"
-    />
-    <!-- 터미널 강제 종료 확인 (Ctrl+닫기) — 탭 닫기는 detach 라 세션이 남지만 이것은 tmux 세션을 죽인다 -->
-    <ConfirmDialog
-      v-if="terminalState.killConfirm"
-      message="터미널을 정말 종료하시겠습니까?"
-      confirm-label="종료"
-      checkbox-label="다시 묻지 않기"
-      @confirm="(dontAsk) => void confirmKillTerminal(dontAsk)"
-      @cancel="cancelKillTerminal()"
+      v-if="dialog.pending"
+      :message="dialog.pending.message"
+      :detail="dialog.pending.detail"
+      :confirm-label="dialog.pending.confirmLabel"
+      :secondary-label="dialog.pending.secondaryLabel"
+      @confirm="answerConfirm('confirm')"
+      @secondary="answerConfirm('secondary')"
+      @cancel="answerConfirm('cancel')"
     />
     <!-- Help: About — 버전·커밋·와이어·데몬 경로 (ticket release-versioning) -->
     <AboutDialog v-if="version.aboutOpen" />

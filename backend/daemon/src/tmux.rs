@@ -16,7 +16,7 @@ use crate::err;
 
 /// 세션 환경변수 — 이 세션이 어느 워크스페이스 것인가 (역방향 조회 키)
 pub(crate) const ENV_ROOT: &str = "SUPERLITE_TMUX_WORKSPACE_PATH";
-const BASE_CONF: &str = include_str!("tmux-base.conf");
+const BASE_CONF: &str = superlite_common::TMUX_BASE_CONF;
 
 /// 이 데몬의 터미널 방식 — 데몬당 한 번 판정 (tmux -V)
 pub(crate) enum Mode {
@@ -107,16 +107,19 @@ fn default_terminal() -> &'static str {
 }
 
 /// base.conf 를 캐시 폴더에 (재)기록하고 경로를 돌려준다 — 내용이 같으면 쓰지 않는다.
-/// 끝에 default-terminal 판정값과 사용자 conf source 한 줄을 붙여 사용자 값이 기본값을 덮게 한다
+/// 내용은 사용자 프로필(user.conf)이 비어 있지 않으면 그것 통째, 없으면 내장 기본값 — 프로필은 내장 기본값을
+/// 복사해 파생한 완전한 설정이라 겹쳐 source 하지 않는다 (사용자 결정 2026-09-10, config-editors). 그 뒤에
+/// default-terminal 판정값을 붙이되 설정이 스스로 default-terminal 을 정하면 붙이지 않는다 (사용자 값 존중)
 fn base_conf_path() -> Result<PathBuf, String> {
     let dir = conf_dir();
     std::fs::create_dir_all(&dir).map_err(err)?;
     let path = dir.join("base.conf");
-    let content = format!(
-        "{BASE_CONF}\nset -g default-terminal \"{}\"\nsource-file -q \"{}\"\n",
-        default_terminal(),
-        user_conf_path().display()
-    );
+    let user = std::fs::read_to_string(user_conf_path()).unwrap_or_default();
+    let mut content = if user.trim().is_empty() { BASE_CONF.to_string() } else { user };
+    let sets_term = content.lines().any(|l| l.trim_start().starts_with("set") && l.contains("default-terminal"));
+    if !sets_term {
+        content.push_str(&format!("\nset -g default-terminal \"{}\"\n", default_terminal()));
+    }
     if std::fs::read_to_string(&path).ok().as_deref() != Some(content.as_str()) {
         std::fs::write(&path, content).map_err(err)?;
     }
@@ -328,23 +331,24 @@ pub(crate) async fn rename(bin: &Path, id: &str, name: &str) -> Result<(), Strin
     out_text(o).map(|_| ())
 }
 
-/// 클라이언트의 tmux.conf 를 사용자 conf 로 기록하고, 서버가 떠 있으면 즉시 적용 (source-file).
-/// 반환: tmux 가 낸 경고·오류 텍스트 (문법 오류를 프론트가 알림으로 보인다). 서버 없음은 빈 문자열
 /// 데몬 시작 시 살아 있는 서버에 base.conf 를 다시 source — 서버는 데몬보다 오래 살아 -f 로 준 옛 base.conf 값
 /// (default-terminal·COLORTERM 등)을 그대로 들고 있다. 이후 새 pane 부터 적용된다 (기존 pane 은 TERM 이 이미 넘어갔다).
-/// base.conf 는 재적용해도 값이 불어나지 않게 써 두었고, 끝의 user.conf source 로 사용자 덮어쓰기 순서도 유지된다.
-/// 서버가 없으면 무동작 (ticket terminal-font-color)
+/// base.conf 는 재적용해도 값이 불어나지 않게 써 두었다. 서버가 없으면 무동작 (ticket terminal-font-color)
 pub(crate) fn resource_base(bin: &Path) {
     if let (Ok(mut c), Ok(path)) = (command(bin), base_conf_path()) {
         let _ = c.arg("source-file").arg(path).output();
     }
 }
 
+/// 클라이언트의 tmux 프로필을 user.conf 로 기록하고(빈 내용 = 내장 기본값으로 복귀), base.conf 를 다시 만든 뒤
+/// 서버가 떠 있으면 즉시 적용 (source-file base.conf). 반환: tmux 가 낸 경고·오류 텍스트 (문법 오류를 프론트가
+/// 알림으로 보인다). 서버 없음은 빈 문자열
 pub(crate) async fn apply_conf(bin: &Path, content: &str) -> Result<String, String> {
     let path = user_conf_path();
     std::fs::create_dir_all(path.parent().unwrap()).map_err(err)?;
     std::fs::write(&path, content).map_err(err)?;
-    let o = async_command(bin)?.arg("source-file").arg(&path).output().await.map_err(err)?;
+    let base = base_conf_path()?;
+    let o = async_command(bin)?.arg("source-file").arg(&base).output().await.map_err(err)?;
     match out_text(o) {
         Ok(t) => Ok(t),
         Err(e) if no_server(&e) => Ok(String::new()),

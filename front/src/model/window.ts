@@ -1,7 +1,7 @@
 import { reactive } from '@vue/reactivity';
 import { tauri } from './tauri';
 import { flushAllWorkspaces } from './workspaceState';
-import { notify } from './notifications';
+import { errText, notify } from './notifications';
 
 // Tauri 창 제어 (앱 전용) — withGlobalTauri 전역으로 현재 창을 다룬다.
 // 브라우저에서는 inApp=false 이고 TitleBar 가 창 제어 버튼 자체를 숨긴다.
@@ -95,6 +95,15 @@ export function setIme(enabled: boolean): void {
 }
 
 /** 이 창의 웹뷰 줌 — 레벨·저장·적용은 native (set_zoom) 몫, 부른 창에만 적용된다 (ticket zoom-per-window). 웹은 브라우저 줌이 있어 무동작 */
+/** URL 을 앱 밖에서 연다 (터미널 링크 Ctrl+클릭) — 앱은 native open_url(OS 기본 브라우저), 웹은 새 탭 */
+export function openUrl(url: string): void {
+  if (tauri) {
+    void tauri.core.invoke('open_url', { url }).catch((e: unknown) => notify('error', `Open link: ${errText(e)}`));
+  } else {
+    window.open(url, '_blank', 'noopener');
+  }
+}
+
 export function zoomWindow(action: 'in' | 'out' | 'reset'): void {
   void tauri?.core.invoke('set_zoom', { action });
 }

@@ -17,6 +17,12 @@ export val transfer
 export fn downloadEntry(path, kind) {
   role: 탐색기 Download... — 파일은 저장 위치(앱)·다운로드 폴더(웹)로, 폴더는 고른 폴더 안의 같은 이름 하위 폴더(앱)·<이름>.zip(웹)으로. 파일은 stat 크기만큼 범위 읽기(빈 파일도 생성), 폴더는 readDir 재귀로 목록을 모은 뒤 차례로. 진행: 파일은 바이트, 폴더는 파일 수. dialog 대기도 전송 슬롯 안(이중 dialog 방지), 취소는 무동작, 실패는 notify error, 완료는 notify info (앱은 "Open Folder" 액션 포함 — 웹은 브라우저가 저장하므로 없음)
 }
+export fn canOpenExternally(path) {
+  role: 편집기 "Open Externally"(ticket open-externally) 대상인가 — 확장자 목록(OPEN_EXTERNALLY_EXTS: Office 계열 pptx·ppt·xlsx·xls·docx·doc·hwp·hwpx·pdf, 2026-09-11 사용자 결정, 설정 없음) 기준. 앱·웹 구분은 호출 쪽
+}
+export fn openExternally(path) {
+  role: 편집기 "Open Externally"(앱 전용) — native 가 정한 임시 사본 경로(open_externally_target: <임시>/superlite-open/<경로 해시>/<파일명>)로 copyFile 후 open_externally 로 OS 기본 앱 실행. 전송 슬롯(run)을 다운로드와 공유. 사본이라 외부 앱의 저장은 원격에 반영되지 않는다 (완료 알림은 "Opened '<이름>' in the external app" 한 줄 — 짧게, 2026-09-11 사용자 결정). 같은 파일을 다시 열면 덮어쓴다 (외부 앱이 잠갔으면 local_write 실패 → 오류 알림)
+}
 export fn uploadDropped(dir, entries, confirmReplace) {
   role: 탐색기 OS 드롭 업로드 — webkitGetAsEntry 항목(드롭 이벤트 안에서 동기로 뽑아 넘긴 것)을 원격 dir 아래로. 같은 이름의 최상위 항목이 이미 있으면 confirmReplace 로 묻고 취소면 무동작. 폴더는 createDir(이미 있으면 실패 무시), 파일은 4MB 조각 — 첫 조각이 새로 만들고 이후 append. 끝나면 dir 리프레시 + Quick Open 무효화. 진행은 바이트
 }

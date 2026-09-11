@@ -3,7 +3,8 @@ import { computed, ref } from 'vue';
 import type { Doc, EditorGroup, SplitSide } from '../../model/editors';
 import { addGroupBeside, editors, moveTabSplit, moveTabToGroup, openFile, openFileSplit, openFolderTab, openFolderTabSplit, openHex } from '../../model/editors';
 import { createTerminal } from '../../model/terminal';
-import { requestTabsMove } from '../../model/sessions';
+import { requestTabsMove, sessionsKind } from '../../model/sessions';
+import { canOpenExternally, downloadEntry, openExternally } from '../../model/transfer';
 import { editorDrag, endEditorDrag, foreignDrag, isForeignDrag, readForeignDrop } from './tabDnd';
 import TabBar from './TabBar.vue';
 import MonacoHost from './MonacoHost.vue';
@@ -168,6 +169,12 @@ const SHORTCUTS = [
         </p>
         <!-- hex 뷰어는 청크 읽기라 크기 상한이 없다 — 두 사유 모두 진입점 -->
         <a class="unopenable-link" @click="active && openHex(active.path)">Open in Hex Editor</a>
+        <!-- 허용 확장자(Office 계열)만 — 앱은 임시 사본을 OS 기본 앱으로, 웹은 브라우저가 외부 앱을
+             못 여니 같은 자리에 Download (ticket open-externally) -->
+        <template v-if="active && canOpenExternally(active.path)">
+          <a v-if="sessionsKind() === 'app'" class="unopenable-link" @click="openExternally(active.path)">Open Externally</a>
+          <a v-else class="unopenable-link" @click="downloadEntry(active.path, 'file')">Download</a>
+        </template>
       </div>
       <MonacoHost v-if="group.tabs.length" v-show="!overlay" :group="group" />
       <div v-else class="watermark">

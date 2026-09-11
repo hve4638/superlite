@@ -1,22 +1,29 @@
 <script setup lang="ts">
 // 사이드바 터미널 뷰 (ticket term-list-reconnect) — 이 워크스페이스의 살아 있는 tmux 세션 목록.
 // 행 클릭 = 탭으로 열기(이미 열려 있으면 그 탭 앞으로), 우클릭 = 새 탭으로·이름 바꾸기·종료.
-// 데몬이 tmux 를 못 써 plain 으로 동작 중이면 위에 사유를 보인다. 설정 톱니(제목 액션)로 클라이언트
-// tmux.conf 편집 영역을 토글 — 저장하면 접속 중인 모든 데몬에 즉시 적용된다
+// 데몬이 tmux 를 못 써 plain 으로 동작 중이면 위에 사유를 보인다. 상단은 클라이언트 tmux.conf 프로필
+// 폼(ticket config-editors) — select 로 적용 프로필을 고르면 접속 중인 모든 데몬에 즉시 적용되고,
+// 편집은 편집기 탭(openTmuxConf)에서. default 는 내장 기본값(읽기 전용)이고 + 는 그것을 복사해 시작, 복제는 선택된
+// 프로필 복사 — 둘 다 인라인 이름 입력. 삭제는 확인 대화상자 (default 불가)
 import { onMounted, onUnmounted, ref } from 'vue';
 import type { TerminalInfo } from '../../backend/types';
 import {
   terminalState, terminals, refreshTerminals, attachTerminal, killListedTerminal, renameListedTerminal,
-  loadTmuxConf, saveTmuxConf,
 } from '../../model/terminal';
+import {
+  configEnabled, openTmuxConf, refreshTmuxProfiles, selectTmuxProfile, tmuxProfiles, updateTmuxProfiles,
+} from '../../model/configfiles';
 import { openContextMenu } from '../../model/workbench';
 import { errText, notify } from '../../model/notifications';
+import InlineNameInput from '../widgets/InlineNameInput.vue';
+import { confirm } from '../../model/dialog';
 
 // 목록은 tmux 서버가 원장 — 뷰가 보이는 동안 3초마다 다시 읽는다 (다른 창·PC 의 attach 수, 실행 중
 // 명령 변화). 열기·닫기·종료는 즉시 갱신한다 (model)
 let timer: ReturnType<typeof setInterval> | null = null;
 onMounted(() => {
   void refreshTerminals();
+  if (configEnabled()) refreshTmuxProfiles().catch((e) => notify('error', `tmux profiles: ${errText(e)}`));
   timer = setInterval(() => void refreshTerminals(), 3000);
 });
 onUnmounted(() => {
@@ -61,35 +68,76 @@ function onContextMenu(e: MouseEvent, t: TerminalInfo): void {
   ]);
 }
 
-// ---- tmux.conf 편집 (제목 액션 톱니로 토글)
-const confOpen = ref(false);
-const confText = ref('');
-const confSaving = ref(false);
-async function toggleConf(): Promise<void> {
-  confOpen.value = !confOpen.value;
-  if (!confOpen.value) return;
+// ---- tmux 프로필 폼
+/** 진행 중인 이름 입력 — 새 프로필 또는 복제(from = 현재 선택) */
+const naming = ref<'create' | 'clone' | null>(null);
+function validName(v: string): string | null {
+  const name = v.trim();
+  if (!name) return 'A profile name must be provided.';
+  if (!/^[A-Za-z0-9_][A-Za-z0-9._-]{0,63}$/.test(name)) return 'Letters, digits, . _ - only.';
+  if (tmuxProfiles.names.includes(name)) return `A profile '${name}' already exists.`;
+  return null;
+}
+async function onSelect(e: Event): Promise<void> {
+  const name = (e.target as HTMLSelectElement).value;
   try {
-    confText.value = await loadTmuxConf();
+    await selectTmuxProfile(name);
+    notify('info', `tmux.conf: '${name}' applied`);
+  } catch (err) {
+    notify('error', `tmux.conf: ${errText(err)}`);
+  }
+}
+async function commitName(name: string): Promise<void> {
+  const op = naming.value;
+  naming.value = null;
+  if (!op) return;
+  try {
+    await updateTmuxProfiles(op, name, op === 'clone' ? tmuxProfiles.active : undefined);
+    await openTmuxConf(name);
   } catch (e) {
     notify('error', `tmux.conf: ${errText(e)}`);
   }
 }
-async function saveConf(): Promise<void> {
-  confSaving.value = true;
+async function askDelete(name: string): Promise<void> {
+  const choice = await confirm({
+    message: `Delete tmux profile '${name}'?`,
+    detail: 'The profile file is removed from this machine. If it is the applied profile, the built-in default is applied instead.',
+    confirmLabel: 'Delete',
+  });
+  if (choice !== 'confirm') return;
   try {
-    await saveTmuxConf(confText.value);
-    notify('info', 'tmux.conf saved and applied');
+    await updateTmuxProfiles('delete', name);
   } catch (e) {
     notify('error', `tmux.conf: ${errText(e)}`);
-  } finally {
-    confSaving.value = false;
   }
 }
-defineExpose({ toggleConf });
 </script>
 
 <template>
   <div class="terminals-view">
+    <div v-if="configEnabled()" class="profiles" title="Client tmux.conf profile — applied to every connected daemon">
+      <span class="codicon codicon-settings-gear type-icon" />
+      <select class="profile-select" :value="tmuxProfiles.active" @change="void onSelect($event)">
+        <option v-for="n in tmuxProfiles.names" :key="n" :value="n">{{ n === 'default' ? 'default (built-in)' : n }}</option>
+      </select>
+      <span class="codicon codicon-edit action" :title="tmuxProfiles.active === 'default' ? 'View Built-in Default (read-only)' : 'Edit Profile'" @click="void openTmuxConf()" />
+      <span class="codicon codicon-add action" title="New Profile..." @click="naming = 'create'" />
+      <span class="codicon codicon-copy action" title="Duplicate Profile..." @click="naming = 'clone'" />
+      <span
+        class="codicon codicon-trash action"
+        :class="{ disabled: tmuxProfiles.active === 'default' }"
+        title="Delete Profile"
+        @click="tmuxProfiles.active !== 'default' && void askDelete(tmuxProfiles.active)"
+      />
+    </div>
+    <div v-if="naming" class="profile-name">
+      <InlineNameInput
+        :initial="naming === 'clone' ? `${tmuxProfiles.active}-copy` : ''"
+        :validate="validName"
+        @commit="(v) => void commitName(v)"
+        @cancel="naming = null"
+      />
+    </div>
     <div v-if="terminalState.error" class="warn-note">
       <span class="codicon codicon-error" />
       <span>tmux unavailable — terminals will not survive closing the app. {{ terminalState.error }}</span>
@@ -128,13 +176,6 @@ defineExpose({ toggleConf });
         </template>
       </div>
     </div>
-    <section v-if="confOpen" class="conf">
-      <div class="pane-header">
-        <span>tmux.conf</span>
-        <button class="save" :disabled="confSaving" @click="void saveConf()">Save</button>
-      </div>
-      <textarea v-model="confText" class="conf-text" spellcheck="false" placeholder="# 사용자 tmux 설정 — 내장 기본값(base.conf) 뒤에 적용된다" />
-    </section>
   </div>
 </template>
 
@@ -220,48 +261,45 @@ defineExpose({ toggleConf });
   outline: none;
   padding: 0 4px;
 }
-.conf {
+.profiles {
   flex: none;
   display: flex;
-  flex-direction: column;
-  height: 45%;
-  min-height: 120px;
-  border-top: 1px solid var(--vscode-sideBarSectionHeader-border);
-}
-.pane-header {
-  display: flex;
   align-items: center;
-  height: 22px;
-  padding: 0 8px;
-  font-size: 11px;
-  font-weight: bold;
-  text-transform: uppercase;
-  background: var(--vscode-sideBarSectionHeader-background);
+  gap: 4px;
+  height: 26px;
+  padding: 0 8px 0 4px;
+  border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border);
 }
-.save {
-  margin-left: auto;
-  font: inherit;
-  font-size: 11px;
-  padding: 1px 8px;
-  background: var(--vscode-button-background);
-  color: var(--vscode-button-foreground);
-  border: none;
-  border-radius: 2px;
-  cursor: pointer;
-}
-.save:disabled {
-  opacity: 0.6;
-}
-.conf-text {
+.profile-select {
   flex: 1;
-  min-height: 0;
-  resize: none;
-  font-family: monospace;
+  min-width: 0;
+  height: 20px;
+  font: inherit;
   font-size: 12px;
   background: var(--vscode-input-background);
   color: var(--vscode-input-foreground);
-  border: none;
+  border: 1px solid var(--vscode-input-border, transparent);
   outline: none;
-  padding: 6px 8px;
+}
+.profiles .action {
+  flex: none;
+  font-size: 16px;
+  padding: 2px;
+  border-radius: 3px;
+  cursor: pointer;
+  color: var(--vscode-icon-foreground);
+}
+.profiles .action:hover {
+  background: var(--vscode-toolbar-hoverBackground);
+}
+.profiles .action.disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.profiles .action.disabled:hover {
+  background: none;
+}
+.profile-name {
+  padding: 2px 8px 4px;
 }
 </style>

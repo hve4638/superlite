@@ -1,0 +1,13 @@
+role: 편집기 언어 판정 레지스트리 (ticket config-editors) — 경로 하나를 monaco 언어 id 로 잇는 단일 표. 언어마다 정의(LanguageDef: id·label·extensions·filenames·patterns)를 두어 파일명·확장자·경로 패턴 어느 쪽으로든 잡힌다 (앞 정의 우선 — 특수 정의를 확장자 정의보다 앞에). 새 언어 = 이 목록에 정의 하나 (+ monaco 내장이 아니면 ui/editor/languages 에 토크나이저 하나). tmux(tmux.conf·.tmux.conf·*.tmux.conf·클라이언트 프로필 탭 superlite:/tmux/*.conf)·ssh_config(ssh_config·sshd_config·.ssh/config·superlite:/ssh/config)가 첫 항목. 프레임워크 독립 — monaco 를 모른다, id 문자열만 낸다
+
+export type LanguageDef
+export val LANGUAGES
+fn defOf(path) -> LanguageDef {
+  role: 파일명 → 경로 패턴 → 확장자 순으로 첫 일치, 없으면 plaintext
+}
+export fn languageOf(path) -> languageId {
+  role: 경로 → monaco 언어 id — 순수 함수, 세션 무관
+}
+export fn languageLabel(path) -> label {
+  role: statusbar 표시용 언어 이름 — 순수 함수, 세션 무관
+}

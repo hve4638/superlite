@@ -1,13 +1,16 @@
 import { watch } from 'vue';
 import { Terminal } from '@xterm/xterm';
+import type { ILink } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { SerializeAddon } from '@xterm/addon-serialize';
 import { WebglAddon } from '@xterm/addon-webgl';
+import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import { setTerminalSerializer, setTerminalZoom, stepTerminalZoom, terminalView } from '../../model/terminal';
 import type { TerminalInstance } from '../../model/terminal';
 import { allTerminals } from '../../model/sessions';
 import { isShellSkippingChord } from '../../model/commands';
+import { openUrl } from '../../model/window';
 import { TERMINAL_FONT_FAMILY, TERMINAL_FONT_SIZE, TERMINAL_LINE_HEIGHT } from '../../theme/fonts';
 
 // xterm 바인딩 — 터미널 인스턴스 id(페이지 전역 유일) 키의 모듈 맵. TerminalView 가 마운트될 때
@@ -25,6 +28,14 @@ interface Binding {
 }
 
 const bindings = new Map<number, Binding>();
+
+// 지금 호버 중인 URL 링크 (페이지에 하나) — Ctrl 을 누르고 떼는 동안 포인터 커서를 따라 바꾼다 (open 참조)
+let hoveredLink: ILink | null = null;
+const onCtrlChange = (e: KeyboardEvent): void => {
+  if (hoveredLink && (e.key === 'Control' || e.key === 'Meta')) hoveredLink.decorations!.pointerCursor = e.type === 'keydown';
+};
+window.addEventListener('keydown', onCtrlChange, true);
+window.addEventListener('keyup', onCtrlChange, true);
 
 // 창 이동 핸드오프의 버퍼 몫 — model 이 xterm 을 모르므로 여기서 등록한다.
 // 아직 열리지 않은(탭을 한 번도 안 본) 터미널은 pending 청크를 이어 붙여 넘긴다
@@ -204,6 +215,38 @@ function open(inst: TerminalInstance, b: Binding): void {
     }
     return true;
   });
+  // URL 링크 (ticket terminal-links): 호버하면 밑줄, Ctrl(맥 Cmd)을 누른 동안만 포인터 커서, 열기는 Ctrl+클릭일
+  // 때만 — 툴팁은 없다 (사용자 결정 2026-09-11). addon 은 Ctrl 을 판정하지 않고(어떤 클릭이든 activate, 호버마다
+  // 밑줄+포인터) 장식을 바꿀 길도 없어, 제공자 등록을 가로채 링크마다 pointerCursor 를 Ctrl 상태에 묶는다.
+  // Ctrl 없는 클릭은 handler 가 무시해 종전 터미널 클릭(마우스 모드 보고·선택)만 남는다
+  const linkTerm = Object.create(term) as Terminal;
+  linkTerm.registerLinkProvider = (provider) =>
+    term.registerLinkProvider({
+      provideLinks: (y, cb) =>
+        provider.provideLinks(y, (links) =>
+          cb(
+            links?.map((link) => {
+              // WHY: xterm 은 넘겨받은 이 객체의 decorations 를 setter 로 바꿔치기한다 — 원본 link 가 아니라
+              //      감싼 객체(l)에 써야 렌더에 닿는다
+              const l: ILink = {
+                ...link,
+                decorations: { underline: true, pointerCursor: false },
+                hover: (e) => {
+                  hoveredLink = l;
+                  l.decorations!.pointerCursor = e.ctrlKey || e.metaKey;
+                },
+                leave: () => {
+                  if (hoveredLink === l) hoveredLink = null;
+                },
+              };
+              return l;
+            }),
+          ),
+        ),
+    });
+  new WebLinksAddon((e, uri) => {
+    if (e.ctrlKey || e.metaKey) openUrl(uri);
+  }).activate(linkTerm);
   term.open(b.el);
   // 렌더러는 WebGL (VS Code 기본과 같다). 기본 DOM 렌더러는 글자마다 letter-spacing 으로 칸을 맞추고 브라우저 텍스트
   // AA(Windows 는 서브픽셀)를 타서 Windows Terminal(셀 격자 + 회색 AA 글리프 아틀라스)과 글꼴이 다르게 보인다 — WebGL 은

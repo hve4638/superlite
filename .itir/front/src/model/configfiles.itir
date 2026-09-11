@@ -1,0 +1,46 @@
+import { ctx } from './ctx'
+import { backendApiUrl } from './host'
+import { allSessionCtxs } from './sessions'
+import { refreshHosts } from './remote'
+import { errText, notify } from './notifications'
+
+role: 클라이언트(relay 가 도는 머신) 설정 파일을 편집기 탭으로 (ticket config-editors) — tmux 프로필과 ~/.ssh/config. 워크스페이스 파일이 아니라 가상 경로 `superlite:/tmux/<프로필>.conf`·`superlite:/ssh/config` 로 탭·문서를 열고, editors 가 이 경로(isConfigPath)를 만나면 데몬 readFile/writeFile 대신 여기의 readConfig/writeConfig(relay HTTP /tmux-conf·/ssh-config)를 탄다. 원격 세션에서 열어도 원격 머신이 아니라 클라이언트 머신의 파일 — 탭 아이콘은 톱니, 툴팁이 "This machine (not the remote): <실제 경로>". tmux 프로필 목록·active 는 relay 가 원장(config_dir()/tmux/), tmuxProfiles 는 사이드바 폼용 캐시. default 프로필은 내장 기본 설정 원문이라 읽기 전용(configReadOnly → Doc.readOnly, MonacoHost readOnly) — 새 프로필은 그것을 복사해 시작한다. 저장(writeConfig)이 active 프로필이면 접속 중인 모든 세션의 데몬에 applyTmuxConf 로 즉시 적용, ssh config 면 refreshHosts. 이후 접속은 relay 가 attach 직후 active 프로필을 밀어 넣는다
+
+export val SSH_CONFIG_PATH
+export fn tmuxProfilePath(name) -> path
+export fn isConfigPath(path) -> bool
+export fn tmuxProfileOf(path) -> name?
+export fn configLabel(path) -> label {
+  role: 탭 라벨 — "tmux.conf (default)" · "ssh config"
+}
+export fn configReadOnly(path) -> bool {
+  role: default 프로필 — 편집·저장 없음
+}
+export fn configTooltip(path) -> text {
+  role: 탭 툴팁 — 클라이언트 머신의 실제 경로 (목록을 아직 못 읽었으면 종류만)
+}
+export fn configEnabled() -> bool {
+  role: relay HTTP 가 닿을 때만 (mock·주입 없는 앱 창은 불가)
+}
+export fn readConfig(path) -> content
+export fn writeConfig(path, content) {
+  role: PUT 뒤 후속 — active tmux 프로필이면 데몬 전부에 적용, ssh config 면 호스트 목록 갱신
+}
+export val tmuxProfiles
+export fn refreshTmuxProfiles()
+export fn updateTmuxProfiles(op, name, from?) {
+  role: create·clone·delete — 응답 목록으로 갈아끼운다. delete 는 그 프로필 탭을 닫고(closePathTabs), active 를 지웠으면 relay 가 default 로 돌리므로 그 내용을 데몬에 다시 적용
+}
+export fn selectTmuxProfile(name) {
+  role: 적용 프로필 전환 — relay active 변경 + 접속 중인 모든 데몬에 즉시 적용
+}
+fn applyTmuxConf(content) {
+  role: 열려 있는 모든 세션의 데몬(로컬·원격)에 applyTmuxConf — tmux 가 낸 경고는 알림으로
+}
+fn ensureProfiles() {
+  role: 목록을 아직 안 읽었으면 읽고 기다린다 — 사이드바를 열기 전 팔레트로 열 때 적용 프로필 이름·툴팁 경로용
+}
+export fn openTmuxConf(name?) {
+  role: 프로필(생략 = 적용 프로필, 목록을 먼저 읽는다) 탭 열기 — configEnabled 아니면 경고 알림
+}
+export fn openSshConfig()

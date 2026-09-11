@@ -18,10 +18,15 @@ getrandom = "0.3"
 # docs/decision/state-persistence.md) 직렬화
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# 폴더 선택 dialog — plugin-dialog 대신 rfd 직접 사용 (권한·JS 패키지 추가 없이 커맨드 안에서 끝난다)
-rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
+# 폴더 선택·확인 dialog — plugin-dialog 대신 rfd 직접 사용 (권한·JS 패키지 추가 없이 커맨드 안에서 끝난다).
+# common-controls-v6: Windows 확인 창을 MessageBox 대신 TaskDialog 로 — 커스텀 버튼 라벨(Save / Don't Save)이
+# 이 기능에서만 붙는다 (tauri-build 기본 매니페스트가 Common-Controls v6 를 이미 선언한다)
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio", "common-controls-v6"] }
 # 탐색기 다운로드의 로컬 쓰기(local_write) — 프론트가 와이어에서 받은 base64 청크를 그대로 넘긴다
 base64 = "0.22"
+# 터미널 링크를 OS 기본 브라우저로 (open_url) — plugin-opener 대신 rfd 처럼 커맨드 안에서 직접.
+# 편집기 "Open Externally"(ticket open-externally, open_externally) 도 같은 crate 로 임시 사본을 OS 기본 앱으로
+open = "5"
 
 # OS 드롭 경로 수신 (WebMessageObjects) — tauri/wry 가 쓰는 것과 같은 버전 계열이어야
 # with_webview 로 받은 COM 인터페이스 타입이 일치한다

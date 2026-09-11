@@ -215,6 +215,42 @@ export async function downloadEntry(path: string, kind: 'file' | 'directory'): P
   if (ok && done !== null) notify('info', done.message, done.action);
 }
 
+// ---- Open Externally
+
+/** 편집기가 못 보는 파일 중 "Open Externally" 를 허용하는 확장자 (ticket open-externally) —
+ *  Office 계열 문서만 (2026-09-11 사용자 결정). 사용자 설정 없음 */
+const OPEN_EXTERNALLY_EXTS = new Set(['pptx', 'ppt', 'xlsx', 'xls', 'docx', 'doc', 'hwp', 'hwpx', 'pdf']);
+
+/** 이 경로가 "Open Externally" 대상인가 — 확장자 목록 기준. 앱·웹 구분은 호출 쪽 */
+export function canOpenExternally(path: string): boolean {
+  const name = baseName(path);
+  const dot = name.lastIndexOf('.');
+  return dot > 0 && OPEN_EXTERNALLY_EXTS.has(name.slice(dot + 1).toLowerCase());
+}
+
+/**
+ * 편집기 "Open Externally"(앱 전용) — 원격 파일을 native 가 정한 임시 사본 경로
+ * (open_externally_target: <임시>/superlite-open/<경로 해시>/<파일명>)로 받은 뒤 OS 기본 앱으로
+ * 연다(open_externally). 사본이라 외부 앱에서 저장해도 원격에는 반영되지 않는다 (알림 문구는
+ * 짧게 — 2026-09-11 사용자 결정). 같은 파일을 다시 열면 덮어쓴다 (외부 앱이 잠갔으면 쓰기 실패 → 오류 알림)
+ */
+export async function openExternally(path: string): Promise<void> {
+  const t = tauri!;
+  const backend = ctx().backend;
+  const name = checkName(baseName(path));
+  const ok = await run(`Opening ${name}`, async (progress) => {
+    const target = (await t.core.invoke('open_externally_target', { key: path, name })) as string;
+    const sink: Sink = {
+      mkdir: async () => {},
+      write: async (_rel, data, append) => void (await t.core.invoke('local_write', { path: target, data, append })),
+      finish: async () => ({ message: '' }),
+    };
+    await copyFile(backend, path, '', sink, progress);
+    await t.core.invoke('open_externally', { path: target });
+  });
+  if (ok) notify('info', `Opened '${name}' in the external app`);
+}
+
 // ---- 업로드
 
 /** DataTransferItem.webkitGetAsEntry 결과(폴더 재귀 가능) — 드롭 이벤트 안에서 동기로 뽑아 넘겨야

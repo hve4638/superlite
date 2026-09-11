@@ -425,7 +425,7 @@ fn strip_keyword<'a>(line: &'a str, kw: &str) -> Option<&'a str> {
     (head.eq_ignore_ascii_case(kw) && rest.starts_with([' ', '\t'])).then_some(rest)
 }
 
-fn home_dir() -> Option<PathBuf> {
+pub(crate) fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)

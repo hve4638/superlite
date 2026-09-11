@@ -3,6 +3,7 @@ import { openQuickInput, showViewlet, toggleSideBar } from './workbench';
 import { openFolderDialog } from './host';
 import { closeTab, editors, reopenClosedEditor, saveActive, splitGroup, toggleGroupLock, activeGroup, activeTab, openHex, toggleHtmlPreview, isHtml, toggleWordWrap, stepEditorZoom, setEditorZoom } from './editors';
 import { createTerminal, toggleTerminal } from './terminal';
+import { openSshConfig, openTmuxConf } from './configfiles';
 import { refreshScm } from './scm';
 import { activeSessionEmpty, cycleSession, sessionsEnabled } from './sessions';
 import { inApp, reloadWindow, zoomWindow } from './window';
@@ -162,6 +163,18 @@ export function setupCommands(): void {
       createTerminal();
     },
   }, 'ctrl+shift+`');
+
+  // 클라이언트 머신 설정 파일을 편집기 탭으로 (ticket config-editors) — 원격 세션에서도 relay 머신의 파일
+  register({
+    id: 'terminal.openTmuxConf',
+    title: 'Terminal: Open tmux.conf (Applied Profile)',
+    run: () => void openTmuxConf(),
+  });
+  register({
+    id: 'remote.openSshConfig',
+    title: 'Remote: Open SSH Config (This Machine)',
+    run: openSshConfig,
+  });
 
   register({
     id: 'workbench.action.files.save',

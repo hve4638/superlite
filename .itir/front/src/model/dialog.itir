@@ -1,0 +1,21 @@
+import { tauri } from './tauri'
+
+role: 확인 다이얼로그의 단일 진입점 (ticket native-confirm-dialog) — 삭제·이동·덮어쓰기·dirty 닫기·discard·터미널 강제 종료·데몬 강제 정리·tmux 프로필 삭제 등 모든 확인은 confirm() 하나로 묻는다. 앱(tauri 전역이 있으면)은 VS Code 처럼 OS 메시지 다이얼로그 — native confirm_dialog(rfd, 요청한 창을 부모로 모달, 버튼 index 반환), 웹은 내장 ConfirmDialog — Workbench 가 dialog.pending 으로 하나만 띄운다. 호출부는 환경을 모른다. 버튼은 확인·(선택) 보조·Cancel 최대 셋 (OS 다이얼로그 상한). "다시 묻지 않기" 체크박스는 OS 창에 없어 보조 버튼("종료, 다시 묻지 않기"·"Move, Don't Ask Again")으로 대신한다 — 웹 내장 창도 같은 3버튼 (사용자 결정 2026-09-11)
+
+// 'confirm' | 'secondary' | 'cancel'
+export type ConfirmChoice
+// message·detail?·confirmLabel·secondaryLabel?
+export type ConfirmOpts
+
+// pending: 웹 내장 창 요청 (message·detail·confirmLabel·secondaryLabel + resolve) — null 이면 창 없음
+export val dialog
+
+export fn confirm(opts) -> choice {
+  role: 확인을 묻고 답('confirm' | 'secondary' | 'cancel')을 기다린다 — 앱은 invoke confirm_dialog (buttons = [confirmLabel, secondaryLabel?, 'Cancel'], index → choice), 웹은 pending 에 걸고 answerConfirm 을 기다린다. 웹에서 이미 하나가 떠 있으면 cancel (모달 하나)
+}
+export fn answerConfirm(choice) {
+  role: 웹 내장 창의 답 (ConfirmDialog 의 confirm·secondary·cancel 이벤트) — pending 을 지우고 resolve
+}
+export fn confirming() -> bool {
+  role: 확인 창이 떠 있는가 — 탐색기·폴더 탭의 키 입력·붙여넣기 가드 (앱의 OS 모달은 웹뷰에 입력이 오지 않아 웹만 의미 있다)
+}

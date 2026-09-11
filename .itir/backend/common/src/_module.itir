@@ -6,6 +6,8 @@ export val COMMIT
 export val BUILT_AT
 export val CHANNEL
 export val SLUG
+// TMUX_BASE_CONF: 내장 tmux 기본 설정 원문(tmux-base.conf) — 데몬이 프로필 없이 뜰 때의 설정, relay 가 읽기 전용 default 프로필로 보이고 새 프로필의 템플릿으로 복사한다 (config-editors)
+export val TMUX_BASE_CONF
 export fn version_line(bin) -> String {
   role: `--version` 한 줄 "superlite-daemon 0.1.0 (8700a11, built <UTC>)" (dev 채널은 버전 뒤에 " dev") — 데몬·백엔드 CLI 가 같은 표기. 버전은 루트 Cargo.toml [workspace.package] 하나에서 상속(CARGO_PKG_VERSION), 커밋은 짧은 해시(미커밋 변경 -dirty, git 부재 unknown). build.rs 재실행 조건은 HEAD·ref 변경뿐이라 dirty 는 마지막 실행 시점 값 — build.sh 가 touch 로 강제한다 (ponytail)
 }

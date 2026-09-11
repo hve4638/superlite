@@ -1,8 +1,10 @@
 import { ctx, viewOf } from './ctx'
 import { notify, errText } from './notifications'
 import { FileContent, ThinBackend, Unopenable, WriteResult } from '../backend/types'
+import { configLabel, isConfigPath, readConfig, writeConfig } from './configfiles'
+import { confirm } from './dialog'
 
-role: 탭·그룹·문서 상태와 열기/저장/충돌 처리. 열 수 없는 파일(크기 초과·이진)도 탭은 열린다 — doc.unopenable 에 사유를 실어 UI 가 편집기 대신 안내 화면을 띄운다 (content 는 '' 고정이라 dirty·저장 경로가 자연히 막힌다). 이미지 확장자(imageMime)는 readFile encoding=base64 로 읽어 doc.image 에 싣는다 — UI 가 편집기 대신 이미지 뷰어를 띄우고, content '' 고정은 unopenable 과 같다 (크기 상한 초과는 이미지도 unopenable(large) 안내). 이미지 뷰어의 해상도·배율 상태는 path 키 imageView 맵 (배율은 'fit' 또는 원본 대비 숫자 — 휠 줌) — ImageView 가 세우고 statusbar 가 활성 탭 경로로 읽는다 (rename·삭제·창 이동 정리는 docs·hex·folderView 와 함께 — 경로 키 맵 목록 pathMaps 를 세 함수가 공유). 문서(docs)는 탭과 분리 — 같은 파일을 여러 탭이 공유한다. 그룹 목록(groups)은 flat 이고 화면 배치는 별도의 행/열 중첩 트리(layout)가 담당 — 순회 로직은 flat 목록만 알면 된다. 외부 삭제된 열린 파일은 orphaned 집합으로 표시(탭 유지 — VS Code closeOnFileDelete=false)하고 저장이 부활시킨다. 세션별 팩토리(createEditors) + 활성 세션 전달 shim. monaco 훅 슬롯(applyExternalEdit·disposeModels)은 세션 공용 모듈 슬롯 — 훅은 UI 능력이지 세션 상태가 아니다
+role: 탭·그룹·문서 상태와 열기/저장/충돌 처리. 열 수 없는 파일(크기 초과·이진)도 탭은 열린다 — doc.unopenable 에 사유를 실어 UI 가 편집기 대신 안내 화면을 띄운다 (content 는 '' 고정이라 dirty·저장 경로가 자연히 막힌다). 이미지 확장자(imageMime)는 readFile encoding=base64 로 읽어 doc.image 에 싣는다 — UI 가 편집기 대신 이미지 뷰어를 띄우고, content '' 고정은 unopenable 과 같다 (크기 상한 초과는 이미지도 unopenable(large) 안내). 이미지 뷰어의 해상도·배율 상태는 path 키 imageView 맵 (배율은 'fit' 또는 원본 대비 숫자 — 휠 줌) — ImageView 가 세우고 statusbar 가 활성 탭 경로로 읽는다 (rename·삭제·창 이동 정리는 docs·hex·folderView 와 함께 — 경로 키 맵 목록 pathMaps 를 세 함수가 공유). 문서(docs)는 탭과 분리 — 같은 파일을 여러 탭이 공유한다. 그룹 목록(groups)은 flat 이고 화면 배치는 별도의 행/열 중첩 트리(layout)가 담당 — 순회 로직은 flat 목록만 알면 된다. 외부 삭제된 열린 파일은 orphaned 집합으로 표시(탭 유지 — VS Code closeOnFileDelete=false)하고 저장이 부활시킨다. 클라이언트 설정 파일(configfiles 의 superlite:/ 가상 경로)은 문서·탭·dirty·저장 흐름을 그대로 쓰되 IO 만 갈아 끼운다 — readDoc/writeDoc 이 isConfigPath 면 데몬 readFile/writeFile 대신 readConfig/writeConfig(relay HTTP), etag '' 로 충돌 검사 없음, 탭 라벨은 configLabel, 읽기 전용(configReadOnly)이면 Doc.readOnly (ticket config-editors). 세션별 팩토리(createEditors) + 활성 세션 전달 shim. monaco 훅 슬롯(applyExternalEdit·disposeModels)은 세션 공용 모듈 슬롯 — 훅은 UI 능력이지 세션 상태가 아니다
 
 export type FileTab
 export type DiffTab
@@ -85,16 +87,7 @@ export fn pinTab(groupId, tabId) {
   role: preview 탭 고정 — 탭 더블클릭 (VS Code 동일)
 }
 export fn closeTab(groupId, tabId, force) {
-  role: 탭 닫기 — 빈 분할 그룹은 접고 이웃으로 포커스 (단, 다른 그룹이 잠겨 있으면(EditorGroup.locked) 빈 채 남긴다 — 잠금은 삭제로 인한 자동 병합 방지, 잠긴 그룹 자신이 비면 접힌다; editor-group-empty-lock 2026-09-08). 닫힌 탭은 복원 이력에 쌓인다 (터미널 탭 제외 — 대신 terminalCloser 훅으로 PTY 를 정리). dirty 문서의 편집 표면(file·diff 탭)이 이 탭 말고 남지 않으면 — preview·hex 탭은 savedContent·디스크만 그리므로 참조로 세지 않고, 닫는 탭이 preview 여도 편집 표면이 없으면 확인한다 (editor-close-vim 2026-09-09) — 곧장 닫지 않고 closeConfirm 을 세워 Save/Don't Save/Cancel 대화상자에 위임한다 (VS Code 동일 — 조용한 닫기는 버퍼가 몰래 살아남는 혼동을 낳는다). force 는 확인 생략 — confirm 처리부·삭제(closePathTabs)용
-}
-export fn confirmCloseSave() {
-  role: 닫기 확인 Save — 저장(saveDoc) 성공 시에만 닫는다. 실패·충돌은 탭 유지 (충돌은 saveConflict 토스트가 이어받는다)
-}
-export fn confirmCloseDiscard() {
-  role: 닫기 확인 Don't Save — 버퍼(docs)·orphan 표시·monaco 모델을 버려 다음 열기가 디스크를 읽게 하고 닫는다
-}
-export fn confirmCloseCancel() {
-  role: 닫기 확인 Cancel — 대화상자만 닫고 탭·버퍼 유지
+  role: 탭 닫기 — dirty 문서의 마지막 편집 표면이면 dialog.confirm (Save / Don't Save / Cancel, 앱은 OS 창)을 거친다: Save 는 저장(saveDoc) 성공 시에만 닫고(실패·충돌은 탭 유지, 충돌은 saveConflict 토스트가 이어받는다), Don't Save 는 버퍼(docs)·orphan 표시·monaco 모델을 버려 다음 열기가 디스크를 읽게 하고 닫고, Cancel 은 탭·버퍼 유지. 빈 분할 그룹은 접고 이웃으로 포커스 (단, 다른 그룹이 잠겨 있으면(EditorGroup.locked) 빈 채 남긴다 — 잠금은 삭제로 인한 자동 병합 방지, 잠긴 그룹 자신이 비면 접힌다; editor-group-empty-lock 2026-09-08). 닫힌 탭은 복원 이력에 쌓인다 (터미널 탭 제외 — 대신 terminalCloser 훅으로 PTY 를 정리). dirty 문서의 편집 표면(file·diff 탭)이 이 탭 말고 남지 않으면 — preview·hex 탭은 savedContent·디스크만 그리므로 참조로 세지 않고, 닫는 탭이 preview 여도 편집 표면이 없으면 확인한다 (editor-close-vim 2026-09-09) — 곧장 닫지 않고 closeConfirm 을 세워 Save/Don't Save/Cancel 대화상자에 위임한다 (VS Code 동일 — 조용한 닫기는 버퍼가 몰래 살아남는 혼동을 낳는다). force 는 확인 생략 — confirm 처리부·삭제(closePathTabs)용
 }
 export fn reopenClosedEditor() {
   role: 마지막으로 닫은 탭 복원 (Ctrl+Shift+T) — 활성 그룹에 고정 탭으로 연다 (file·diff·hex·preview·folder — 터미널은 이력에 없다)
@@ -196,12 +189,6 @@ export fn tabNameOf(kind, path) -> label {
 }
 export fn base64Bytes(b64) -> bytes {
   role: base64 길이 → 원본 바이트 수 (패딩 보정) — statusbar 의 이미지 크기 표시용, 와이어가 크기를 따로 나르지 않는다. 순수 함수, 세션 무관
-}
-export fn languageOf(path) -> languageId {
-  role: 확장자 → monaco 언어 id — 순수 함수, 세션 무관
-}
-export fn languageLabel(path) -> label {
-  role: statusbar 표시용 언어 이름 — 순수 함수, 세션 무관
 }
 export fn indentOf(path) -> spaces {
   role: 들여쓰기 감지 — 최소 양수 선행 공백 (VS Code detectIndentation 근사). 앞 1만 줄 상한 — sync 마다 불리므로 초대형 파일 전체 스캔을 막는다

@@ -6,6 +6,7 @@ import { refreshHosts } from '../model/remote';
 import { collapseAll, refreshTree } from '../model/files';
 import { activeSessionEmpty } from '../model/sessions';
 import { createTerminal, refreshTerminals } from '../model/terminal';
+import { openSshConfig, openTmuxConf } from '../model/configfiles';
 import ExplorerView from './views/ExplorerView.vue';
 import SearchView from './views/SearchView.vue';
 import ScmView from './views/ScmView.vue';
@@ -38,8 +39,8 @@ const title = computed(() => {
   return TITLES[workbench.activeViewlet];
 });
 
-/** 뷰 인스턴스 — 탐색기의 새 파일·새 폴더 인라인 입력, 터미널 뷰의 tmux.conf 편집 토글 (defineExpose) */
-const viewRef = ref<{ newFile?: () => void; newFolder?: () => void; toggleConf?: () => void } | null>(null);
+/** 뷰 인스턴스 — 탐색기의 새 파일·새 폴더 인라인 입력 (defineExpose) */
+const viewRef = ref<{ newFile?: () => void; newFolder?: () => void } | null>(null);
 
 // 뷰별 타이틀 액션 (탐색기는 폴더 pane 헤더의 액션이 제목으로 올라온 것 — 빈 세션엔 없음)
 const ACTIONS: Record<string, { icon: string; label: string; run: () => void }[]> = {
@@ -56,11 +57,12 @@ const ACTIONS: Record<string, { icon: string; label: string; run: () => void }[]
   ],
   remote: [
     { icon: 'codicon-refresh', label: 'Refresh', run: () => void refreshHosts() },
+    { icon: 'codicon-edit', label: 'Edit SSH Config (this machine)', run: openSshConfig },
   ],
   terminals: [
     { icon: 'codicon-add', label: 'New Terminal', run: () => void createTerminal() },
     { icon: 'codicon-refresh', label: 'Refresh', run: () => void refreshTerminals() },
-    { icon: 'codicon-settings-gear', label: 'Edit tmux.conf', run: () => viewRef.value?.toggleConf?.() },
+    { icon: 'codicon-settings-gear', label: 'Edit tmux.conf (applied profile)', run: () => void openTmuxConf() },
   ],
 };
 const actions = computed(() => {

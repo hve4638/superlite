@@ -1,9 +1,8 @@
 import { reactive, watch } from '@vue/reactivity';
 import type { TerminalInfo, TerminalMode, TerminalSession, ThinBackend } from '../backend/types';
 import { ctx, viewOf } from './ctx';
+import { confirm } from './dialog';
 import { errText, notify } from './notifications';
-import { backendApiUrl } from './host';
-import { allSessionCtxs } from './sessions';
 import { EDITOR_ZOOM_MAX, EDITOR_ZOOM_MIN, EDITOR_ZOOM_STEP, editorView, loadWindowZoom, saveWindowZoom, setEditorZoom } from './editors';
 import type { createEditors } from './editors';
 
@@ -52,12 +51,11 @@ export function createTerminals(backend: ThinBackend, editorsM: ReturnType<typeo
   });
 
   /** 내장 tmux 상태 (ticket term-list-reconnect) — 데몬의 방식(attach 응답), plain 대체 사유(사이드바
-   *  아이콘의 경고 배지), 사이드바 목록, 강제 종료 확인 대상. unknown = attach 응답 전 (아이콘 숨김) */
+   *  아이콘의 경고 배지), 사이드바 목록. unknown = attach 응답 전 (아이콘 숨김) */
   const state = reactive({
     mode: 'unknown' as TerminalMode | 'unknown',
     error: null as string | null,
     list: [] as TerminalInfo[],
-    killConfirm: null as TerminalInstance | null,
   });
   backend.onTerminalMode?.((mode, error) => {
     state.mode = mode;
@@ -209,17 +207,15 @@ export function createTerminals(backend: ThinBackend, editorsM: ReturnType<typeo
       void killListed(inst.tmux.id);
       return;
     }
-    state.killConfirm = inst;
+    void askKill(inst.tmux.id);
   }
-  async function confirmKill(dontAsk = false): Promise<void> {
-    const inst = state.killConfirm;
-    state.killConfirm = null;
-    if (dontAsk) localStorage.setItem(KILL_NO_CONFIRM_KEY, '1');
-    if (!inst?.tmux) return;
-    await killListed(inst.tmux.id);
-  }
-  function cancelKill(): void {
-    state.killConfirm = null;
+  /** 강제 종료 확인 — 탭 닫기는 detach 라 세션이 남지만 이것은 tmux 세션을 죽인다.
+   *  보조 버튼 "종료, 다시 묻지 않기" 가 종전 체크박스를 대신한다 (OS 다이얼로그에 체크박스가 없다) */
+  async function askKill(tmuxId: string): Promise<void> {
+    const choice = await confirm({ message: '터미널을 정말 종료하시겠습니까?', confirmLabel: '종료', secondaryLabel: '종료, 다시 묻지 않기' });
+    if (choice === 'cancel') return;
+    if (choice === 'secondary') localStorage.setItem(KILL_NO_CONFIRM_KEY, '1');
+    await killListed(tmuxId);
   }
 
   /** tmux 세션 종료 — 이 창의 탭도 닫는다 (클라이언트는 어차피 서버가 끊는다) */
@@ -274,31 +270,8 @@ export function createTerminals(backend: ThinBackend, editorsM: ReturnType<typeo
 
   return {
     terminals, state, createTerminal, toggleTerminal, attachTerminal, disposeTerminal, snapshot, releaseTerminal, adoptTerminals,
-    refreshTerminals, requestKill, confirmKill, cancelKill, killListed, renameListed,
+    refreshTerminals, requestKill, killListed, renameListed,
   };
-}
-
-// ---- 클라이언트 tmux.conf (ticket term-list-reconnect) — 백엔드 머신의 설정 폴더에 하나. 사이드바
-// 터미널 뷰가 편집하고, 저장하면 접속 중인 모든 세션의 데몬(로컬·원격)에 tmuxConf 로 즉시 적용한다.
-// 이후 접속은 relay 가 attach 직후 밀어 넣는다. 원격별 관리는 없다 (사용자 결정 2026-09-07)
-
-export async function loadTmuxConf(): Promise<string> {
-  const url = backendApiUrl('/tmux-conf');
-  if (url === null) return '';
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
-  return res.text();
-}
-
-export async function saveTmuxConf(content: string): Promise<void> {
-  const url = backendApiUrl('/tmux-conf');
-  if (url === null) return;
-  const res = await fetch(url, { method: 'PUT', body: content });
-  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
-  for (const c of allSessionCtxs()) {
-    const msg = await c.backend.applyTmuxConf?.(content).catch((e) => errText(e));
-    if (msg) notify('warning', `tmux.conf: ${msg}`);
-  }
 }
 
 // ---- 터미널 줌 — 편집기 줌과 별개의 값(사용자 결정 2026-09-08: 터미널 개별 배율). 범위·단위는
@@ -340,8 +313,6 @@ export const attachTerminal = (info: TerminalInfo, opts?: { newTab?: boolean }):
   ctx().terminals.attachTerminal(info, opts);
 export const refreshTerminals = (): Promise<void> => ctx().terminals.refreshTerminals();
 export const requestKillTerminal = (id: number): void => ctx().terminals.requestKill(id);
-export const confirmKillTerminal = (dontAsk?: boolean): Promise<void> => ctx().terminals.confirmKill(dontAsk);
-export const cancelKillTerminal = (): void => ctx().terminals.cancelKill();
 export const killListedTerminal = (tmuxId: string): Promise<void> => ctx().terminals.killListed(tmuxId);
 export const renameListedTerminal = (tmuxId: string, name: string): Promise<void> =>
   ctx().terminals.renameListed(tmuxId, name);

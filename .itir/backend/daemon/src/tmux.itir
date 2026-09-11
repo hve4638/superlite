@@ -1,6 +1,6 @@
 import { err } from '.'
 
-role: 내장 tmux 통합 (ticket term-list-reconnect, ws decision/process-topology.md 2026-09-07 개정) — 터미널의 "꺼지지 않는 실행 요소"를 tmux 서버에 위임한다. 데몬은 PTY 안에서 tmux 클라이언트(attach-session)를 띄울 뿐, 셸 생존·스크롤백·다중 attach·detach 는 tmux 서버 몫. 세션 원장도 tmux 다 — 별도 DB 없이 세션 환경변수 SUPERLITE_TMUX_WORKSPACE_PATH(ENV_ROOT)가 워크스페이스를 가리키고 기본 키는 #{session_id}. 서버는 -L <SLUG> 전용 소켓(사용자의 tmux 서버·~/.tmux.conf 와 격리, SUPERLITE_TMUX_SOCK 이면 -S — check 하니스), 설정은 내장 base.conf(tmux-base.conf — 로그인 셸·TMUX/TMUX_PANE 제거·SUPERLITE_TMUX_SOCKET·status off·prefix None·mouse on·MouseDown2Pane(휠클릭 paste) 해제·바깥 xterm-256color 에 RGB·전역 환경 COLORTERM=truecolor(pane 안 프로그램의 truecolor 판정 — 없으면 256 색 양자화) 등)를 캐시 폴더에 써 두고 -f 로, 그 뒤에 default-terminal(그 머신 terminfo 에 tmux-256color 가 있으면 그것 — 이탤릭·커서 모양·스타일 밑줄 — 없으면 screen-256color, 데몬당 한 번 infocmp 판정)과 사용자 conf(user.conf — 클라이언트 tmux.conf 를 tmuxConf 로 받은 것) source 를 붙인다 (ticket terminal-font-color). unix 전용 — Windows 는 Unsupported (터미널 보존 없음, 사용자 결정)
+role: 내장 tmux 통합 (ticket term-list-reconnect, ws decision/process-topology.md 2026-09-07 개정) — 터미널의 "꺼지지 않는 실행 요소"를 tmux 서버에 위임한다. 데몬은 PTY 안에서 tmux 클라이언트(attach-session)를 띄울 뿐, 셸 생존·스크롤백·다중 attach·detach 는 tmux 서버 몫. 세션 원장도 tmux 다 — 별도 DB 없이 세션 환경변수 SUPERLITE_TMUX_WORKSPACE_PATH(ENV_ROOT)가 워크스페이스를 가리키고 기본 키는 #{session_id}. 서버는 -L <SLUG> 전용 소켓(사용자의 tmux 서버·~/.tmux.conf 와 격리, SUPERLITE_TMUX_SOCK 이면 -S — check 하니스), 설정은 캐시 폴더의 base.conf 를 -f 로 — 내용은 사용자 프로필(user.conf — 클라이언트 tmux 프로필을 tmuxConf 로 받은 것)이 있으면 그것 통째, 없으면 내장 기본값(common TMUX_BASE_CONF — 로그인 셸·TMUX/TMUX_PANE 제거·SUPERLITE_TMUX_SOCKET·status off·prefix None·mouse on·MouseDown2Pane(휠클릭 paste) 해제·바깥 xterm-256color 에 RGB·전역 환경 COLORTERM=truecolor(pane 안 프로그램의 truecolor 판정 — 없으면 256 색 양자화) 등). 프로필은 내장값을 복사해 파생한 완전한 설정이라 겹쳐 source 하지 않는다 (사용자 결정 2026-09-10, config-editors). 그 뒤에 default-terminal(그 머신 terminfo 에 tmux-256color 가 있으면 그것 — 이탤릭·커서 모양·스타일 밑줄 — 없으면 screen-256color, 데몬당 한 번 infocmp 판정)을 붙이되 설정이 스스로 default-terminal 을 정하면 붙이지 않는다 (ticket terminal-font-color). unix 전용 — Windows 는 Unsupported (터미널 보존 없음, 사용자 결정)
 
 export val ENV_ROOT
 export class Mode {
@@ -45,5 +45,5 @@ export fn wait_client_gone(bin, tty, timeout) {
 export fn kill(bin, id)
 export fn rename(bin, id, name)
 export fn apply_conf(bin, content) -> message {
-  role: 클라이언트 tmux.conf 를 user.conf 로 기록하고 서버가 떠 있으면 source-file — 반환은 tmux 가 낸 경고·오류 텍스트(문법 오류는 실패가 아니라 프론트 알림감), 서버 없음은 빈 문자열
+  role: 클라이언트 tmux 프로필을 user.conf 로 기록하고(빈 내용 = 내장 기본값 복귀) base.conf 를 다시 만든 뒤 서버가 떠 있으면 source-file base.conf — 반환은 tmux 가 낸 경고·오류 텍스트(문법 오류는 실패가 아니라 프론트 알림감), 서버 없음은 빈 문자열
 }
