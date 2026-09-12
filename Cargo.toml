@@ -6,4 +6,4 @@ resolver = "2"
 # version 을 비워 앱 crate 의 값을 따른다. 올릴 때는 이 한 줄만 고친다 (태그 절차는 ws
 # docs/HANDOFF.backend.md "릴리스 버전·태그").
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
