@@ -259,6 +259,9 @@ export function setupCommands(): void {
   // 키 배정(사용자 확정): Ctrl+Tab = 워크스페이스 안 에디터 탭 넘기기, Ctrl+Shift+Tab =
   // 세션 탭 순환. 브라우저에서는 둘 다 예약키라 앱 전용이고 (Ctrl+PageUp/Down 이 겸용 대안),
   // Ctrl+Alt+Tab 은 Windows OS 태스크 전환기가 가로채 기각 (실기 확인).
+  // 방향키판(ticket tab-arrow-keys, 2026-09-12): Alt+←/→ 에디터 탭, Ctrl+Alt+←/→ 세션 탭 —
+  // 편집기·터미널 포커스에서도 가로챈다(skipShell — fish 의 Alt+←/→ 디렉토리 이력은 감수).
+  // 폴더 뷰만 Alt+←/→ 를 뒤로/앞으로에 쓰고 전파를 끊어 여기까지 오지 않는다 (FolderView).
   if (sessionsEnabled()) {
     register({
       id: 'workbench.action.nextSessionTab',
@@ -266,7 +269,14 @@ export function setupCommands(): void {
       keybinding: 'Ctrl+Shift+Tab',
       skipShell: true,
       run: () => cycleSession(1),
-    }, 'ctrl+shift+tab');
+    }, 'ctrl+shift+tab', 'ctrl+alt+arrowright');
+    register({
+      id: 'workbench.action.previousSessionTab',
+      title: 'View: Switch to Previous Session Tab',
+      keybinding: 'Ctrl+Alt+Left',
+      skipShell: true,
+      run: () => cycleSession(-1),
+    }, 'ctrl+alt+arrowleft');
   }
 
   register({
@@ -275,7 +285,7 @@ export function setupCommands(): void {
     keybinding: 'Ctrl+Tab',
     skipShell: true,
     run: () => cycleTab(1),
-  }, 'ctrl+tab', 'ctrl+pagedown');
+  }, 'ctrl+tab', 'ctrl+pagedown', 'alt+arrowright');
 
   register({
     id: 'workbench.action.previousEditor',
@@ -283,7 +293,7 @@ export function setupCommands(): void {
     keybinding: 'Ctrl+PageUp',
     skipShell: true,
     run: () => cycleTab(-1),
-  }, 'ctrl+pageup');
+  }, 'ctrl+pageup', 'alt+arrowleft');
 
   // 활성 탭의 경로를 hex 뷰어로 — 이진 안내 탭의 링크와 같은 진입 (텍스트 파일도 hex 로 볼 수 있다)
   register({

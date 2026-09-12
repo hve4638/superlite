@@ -303,6 +303,9 @@ function onKeydown(e: KeyboardEvent): void {
     else if (e.key === 'ArrowUp') goUp();
     else return;
     e.preventDefault();
+    // WHY: Alt+←/→ 는 워크벤치의 에디터 탭 전환 chord 이기도 하다 (window keydown) — 폴더 뷰
+    //      포커스에서는 폴더 이동이 우선이라 전파를 끊는다 (ticket tab-arrow-keys)
+    e.stopPropagation();
     return;
   }
   if (e.ctrlKey || e.altKey || e.metaKey) {
