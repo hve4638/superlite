@@ -1,7 +1,7 @@
 role: 앱 기동 — 127.0.0.1:0 bind 로 포트 충돌 원천 차단, 기동마다 새 랜덤 토큰(외부 브라우저의 /ws 접근 차단), 별도 스레드 tokio 런타임에서 relay serve(세션 레지스트리 모드), initialization_script 로 __SUPERLITE_WS__·__SUPERLITE_SESSIONS__(그 창의 부팅 세션 목록)·__SUPERLITE_OPEN_ROOT__(빈 세션 Open Folder 시작 경로)·__SUPERLITE_WINDOW__(창 label)·__SUPERLITE_OWNER__(서브 창의 소속 메인 label, 메인은 null)·__SUPERLITE_ACTIVE__(묶음의 활성 세션) 주입. 세션 레지스트리(session id → Option root, 순서 = 탭 순서)는 여기(native)가 소유한다 — decision/workspace-session-tabs.md. root 가 None 인 엔트리는 루트 없는 빈 세션(시작 페이지 탭, ticket app-empty-session) — 백엔드 연결 없이 front 에만 그려지고, 폴더를 열면 그 자리가 워크스페이스 세션으로 교체된다. 창은 여럿일 수 있다 (2026-09-03 개정, ticket app-tab-detach-window — VS Code 창을 여러 개 띄우듯 탭을 창 밖으로 끌어 새 창): 프로세스는 하나, 창마다 웹뷰 페이지가 별도라 front 상태·WS 연결은 창 단위 독립. native 는 세션마다 소속 창 label 을 함께 들고(windows 맵, relay 는 sessions Vec 만 본다) list_sessions·sessions-changed 를 창 단위로 보낸다. 메인 창과 서브 창 (2026-09-08 개정, decision/workspace-session-tabs.md): 첫 창·세션 탭 분리 창은 메인(대등·독립), 에디터·터미널 탭 분리(detach_tabs) 창은 서브 — groups.subs 에 소속 메인이 있고 세션 탭 스트립은 메인 목록을 비춘다(infos_for). 활성 세션은 메인 창 단위로 native 가 들고(groups.active, set_active_session → session-active 방송) 메인·서브가 공유한다. 서브 창 소속 세션은 전부 미러(groups.mirrors: 미러 id → 원본 id — 같은 root 의 별도 세션, 데몬이 같은 id 의 두 연결을 허용하지 않아서), 탭이 처음 오는 세션에만 지연 생성(detach_tabs·ensure_mirror). 세션이 메인을 떠나면(close_session·detach_session·move_session_to_window) 미러는 native 가 지운다(drop_mirrors_of — 탭은 front 가 그 전에 session-recall 로 되돌린다). 메인이 닫히면 서브도 destroy(drop_window). 서브 창의 X·탭 0 종료는 front 가 결정. "이 창에 세션 추가" 진입로(open_workspace·open_empty_session·open_group)는 서브에서 불리면 메인에 붙는다(main_label). 메인 창은 각각 독립된 하나: 세션 0 개가 된 메인 창은 닫히고(close_if_empty — 2026-09-05 개정, ticket convenience-features. 종전엔 빈 세션으로 남겼다), 창 닫힘(X·close_if_empty)은 그 창의 세션만 정리한다(drop_window). 마지막 창이 닫히면 앱 종료 (Tauri 기본) — state.json 은 변경마다 즉시 저장돼 종료 훅이 없다. 탭 이동의 front 상태는 JSON 핸드오프 — 출처 창이 만들고 native 는 내용을 모른 채 전달만 한다 (큐 handoffs + take_handoff — 세션 탭은 대상 창이 살아 있어도 큐; 에디터·터미널 탭만 살아 있는 창엔 forward 의 tabs-handoff 로 직결). single-instance — 프로세스는 1개, 두 번째 실행은 argv·cwd 를 첫 프로세스에 넘기고 종료하며 첫 프로세스는 새 메인 창을 연다 (open_second_instance, 2026-09-09 개정 — 기존 창에 탭을 더하지 않는다). 시작은 항상 빈 세션이다 — 마지막 워크스페이스 자동 복원은 하지 않는다 (2026-09-02 사용자 결정 — app-restore-last-workspace 원복). 명시 argv 로 준 폴더만 연다. 대신 state.json(app_data_dir, version 2 — decision/state-persistence.md, ticket start-page-recents)에 최근 연 폴더 MRU(recents)와 사용자가 고정한 그룹(pinned — ticket start-page-redesign, 종전 세션 묶음 이력 bundles 를 대체), 그리고 웹뷰 줌의 마지막 레벨(zoom — 배율 자체는 창마다 따로 zooms 에, ticket zoom-per-window)을 native 가 소유·갱신하고, 시작 페이지가 list_recents 로 보여 사용자가 명시적으로 다시 연다(open_folder_path·open_group)
 
 fn main() {
-  role: listener bind·토큰 생성 → 세션 레지스트리 생성 → relay 스레드 기동 → single-instance 플러그인 등록(두 번째 실행 수신 → open_second_instance) → opener 플러그인 등록(URL 탭의 외부 브라우저 열기, capability opener:allow-open-url 1줄, ticket browser-tab-iframe) → 커맨드 등록(open_folder·open_folder_path·open_empty_session·list_sessions·close_session·move_session·detach_session·move_session_to_window·detach_tabs·ensure_mirror·set_active_session·active_session·list_subs·forward·take_handoff·list_windows·list_recents·forget_recent·set_pinned·open_group·open_groups·pick_save_target·confirm_dialog·local_write·local_mkdir·reveal_in_folder·open_url·open_externally_target·open_externally·set_zoom·set_ime·get_workspace_state·set_workspace_state·set_workspace_sub_state·get_workspace_sub_state·reload_window) → 창 이벤트(Destroyed → drop_window) → setup 에서 사본 폴더(open_externally_dir) 정리 후 초기 세션 등록(명시 argv 폴더 하나, 없으면 루트 없는 빈 세션 — 소속 main) 후 첫 창("main") 생성(build_window) — 주입 목록이 완전하도록 등록이 창 생성보다 앞선다
+  role: listener bind·토큰 생성 → 세션 레지스트리 생성 → relay 스레드 기동 → single-instance 플러그인 등록(두 번째 실행 수신 → open_second_instance) → 커맨드 등록(open_folder·open_folder_path·open_empty_session·list_sessions·close_session·move_session·detach_session·move_session_to_window·detach_tabs·ensure_mirror·set_active_session·active_session·list_subs·forward·take_handoff·list_windows·list_recents·forget_recent·set_pinned·open_group·open_groups·pick_save_target·confirm_dialog·local_write·local_mkdir·reveal_in_folder·open_url·open_externally_target·open_externally·set_zoom·set_ime·get_workspace_state·set_workspace_state·set_workspace_sub_state·get_workspace_sub_state·reload_window) → 창 이벤트(Destroyed → drop_window) → 창 이벤트(Focused(true) → 메인 창 포커스 순서(focus) 갱신 + sync_open) → setup 에서 사본 폴더(open_externally_dir) 정리 후 초기 세션 등록(명시 argv 폴더 하나; 없으면 비정상 종료 복원 — persisted.open 에 남은 창들을 restore_mode·restorable 로 골라 첫 창은 main, 나머지는 w1… 로 세션 탭째 등록하고 활성 탭(groups.active)도 되살린다; 그래도 없으면 루트 없는 빈 세션 — 소속 main) 후 창 생성(build_window, 되살린 창 수만큼) → sync_open — 주입 목록이 완전하도록 등록이 창 생성보다 앞선다 (ticket user-settings restoreWindows, 사용자 결정 2026-09-12)
 }
 fn build_window() {
   role: 창 생성 — 첫 창과 분리로 생기는 창이 같은 빌더(장식 없음·drag-drop 핸들러 해제·WebView2 브라우저 인자(wry 기본 --disable-features 셋 + HideCursorWhileTyping — WebView2 152 의 '입력 중 포인터 숨기기' 구현이 포인터를 복귀시키지 않는 회귀가 있어 끈다, ticket editor-cursor-vanish)·배경색·주입 스크립트 — 세션 목록·창 label·소속 메인(__SUPERLITE_OWNER__)·묶음 활성 세션(__SUPERLITE_ACTIVE__))를 쓴다. 주입 목록은 그 창 소속 세션만 — 호출 전에 소속 배정이 끝나 있어야 한다. zoom 인자(이 창의 웹뷰 줌 레벨 — 분리 창은 출처 창 값 zoom_of, 부모 없는 첫 창·두 번째 실행 창은 저장된 마지막 값 persisted.zoom, 보조창 복원은 저장된 레벨)를 zooms 에 등록하고 생성 직후 set_zoom 으로 적용한다 (ticket zoom-per-window — 종전엔 앱 공통 배율). pos 는 드롭 지점 논리 좌표. Windows 는 OS 드롭 수신(attach_os_drop)과 창 아이콘(win_icon::apply)을 창마다 건다. [mod win_icon — Windows 전용 창 아이콘 (ticket app-icon-quality, itir 는 mod 안 심볼을 앵커하지 않아 여기 적는다): tao 는 ICO 첫 항목(16px)의 RGBA 를 CreateIcon 해 WM_SETICON ICON_SMALL 에만 넣어 ICON_BIG 이 비고, 작업 표시줄·Alt+Tab 이 16px 를 늘려 흐렸다. exe 리소스 ICO(tauri-build 가 id 32512 로 박음)를 창 DPI 의 SM_CXSMICON·SM_CXICON 크기로 LoadImageW(LR_SHARED) 해 둘 다 덮어쓴다 — 리소스에서 온 HICON 은 셸이 필요한 크기를 ICO 에서 다시 꺼낸다. 창 생성 시점 DPI 로 한 번만(WM_DPICHANGED 미처리). 실패는 로그만] 창을 만드는 커맨드(detach_session·detach_tabs)는 반드시 async fn — 동기 커맨드는 메인 스레드에서 돌아 Windows 에서 build() 가 이벤트 루프를 기다리며 교착한다 (실측: 새 창 미로드 + 출처 창 IPC 정지)
@@ -87,6 +87,18 @@ fn load_state() {
 fn save_state() {
   role: state.json 쓰기 — tmp 에 쓴 뒤 rename (torn write 방지). 실패는 로그만 — 이력이 앱을 죽이면 안 된다. state_file 이 None(app_data_dir 준비 실패)이면 무동작
 }
+class OpenWindow {
+  role: 열려 있는 메인 창 하나 (persisted.open 항목, ticket user-settings restoreWindows) — 세션 탭 root 들(빈 세션·서브 창 미러 제외)과 활성 탭 인덱스
+}
+fn sync_open() {
+  role: 열려 있는 메인 창 목록을 persisted.open 에 — 포커스 최근 순(focus 락)으로 정렬, 창마다 소속 세션 root 와 활성 탭 인덱스. 레지스트리 변경(emit_sessions)·창 소멸(drop_window)·포커스 이동(on_window_event Focused) 때 부르고 바뀐 경우만 저장. 창 X 가 자기 항목을 지우므로 정상 종료 뒤엔 빈 목록 — 시작 때 남아 있으면 비정상 종료. 락을 잡지 않은 상태에서 부른다 (focus 는 단독으로 먼저)
+}
+fn restore_mode() -> mode {
+  role: 사용자 설정 restoreWindows — 프론트 model/settings 스키마의 키를 native 가 시작 때 settings.json(superlite_common::config_dir, relay /settings 와 같은 파일)에서 직접 읽는다. 없거나 못 읽으면 "one"
+}
+fn restorable(open, mode) -> windows {
+  role: 시작 때 되살릴 창들 — none 없음, one 마지막 포커스 창(목록 첫 항목), all 전부. 사라진 로컬 root 는 빼고(원격 ssh:// 는 접속해야 알므로 그대로) root 가 하나도 안 남은 창은 뺀다. 활성 인덱스는 걸러낸 뒤 다시 잡는다
+}
 fn note_recent() {
   role: MRU 갱신(순수 함수) — 있으면 앞으로, 없으면 앞에 삽입, 상한 RECENTS_MAX(64 — 2026-09-07 10 에서 확장) 초과는 뒤에서 버림
 }
@@ -118,7 +130,7 @@ fn reveal_in_folder() {
   role: Tauri command — 다운로드 완료 알림 "Open Folder"(ticket download-conveniences): OS 파일 관리자로 path 를 드러낸다. 파일은 그 파일이 든 폴더를 열어 선택 표시(Windows explorer /select,·macOS open -R), 폴더는 그 폴더 자체. Linux 는 xdg-open 으로 폴더만. 임의 로컬 경로의 근거는 open_folder_path 와 같다. spawn 만 하고 종료를 기다리지 않는다 (explorer 는 성공해도 종료 코드 1)
 }
 fn open_url() {
-  role: Tauri command — http(s) URL 을 OS 기본 브라우저로 연다 (터미널 링크 Ctrl+클릭, ticket terminal-links). 웹뷰 안의 window.open 은 새 웹뷰 창이 되거나 막히므로 native 가 `open` crate(Windows ShellExecute·macOS open·Linux xdg-open)로 띄운다. http(s) 스킴만 받는다 — file:·javascript: 등은 거절. spawn 만 하고 종료를 기다리지 않는다 (that_detached)
+  role: Tauri command — http(s) URL 을 OS 기본 브라우저로 연다 (터미널 링크 Ctrl+클릭 ticket terminal-links, URL 탭의 외부 열기 — 같은 일을 하던 tauri-plugin-opener 와 capability opener:allow-open-url 은 ticket user-settings 에서 제거). 웹뷰 안의 window.open 은 새 웹뷰 창이 되거나 막히므로 native 가 `open` crate(Windows ShellExecute·macOS open·Linux xdg-open)로 띄운다. http(s) 스킴만 받는다 — file:·javascript: 등은 거절. spawn 만 하고 종료를 기다리지 않는다 (that_detached)
 }
 fn open_externally_dir() {
   role: "Open Externally"(ticket open-externally) 사본 폴더 — <OS 임시>/superlite-open. setup 이 시작마다 통째로 지운다 (외부 앱이 잠근 파일은 남는다 — 오류 무시)
@@ -187,7 +199,7 @@ fn close_if_empty() {
   role: 세션 0 개가 된 메인 창을 닫는다 (서브 창은 front 가 수명을 정하므로 건너뛴다) — 탭 닫기·분리·병합이 모두 이 규칙을 탄다 (2026-09-05 개정, 종전 ensure_nonempty 는 빈 세션으로 남겼다). 마지막 창이면 Tauri 기본대로 앱 종료. 남은 정리는 Destroyed → drop_window. 분리는 새 창 생성이 성공한 뒤에만 부른다 (실패 롤백 시 출처 창이 남아야 한다)
 }
 fn drop_window() {
-  role: 창 닫힘(Destroyed — X 또는 close_if_empty) — 그 창 소속 세션(서브면 미러)을 레지스트리에서 빼고(재-attach 차단 → 데몬 grace 후 회수) groups(subs·mirrors·active)에서도 지우며 대기 핸드오프도 버린다. 메인 창이면 소속 서브 창들을 destroy 한다 (close 는 서브 front 의 onCloseRequested 가 막고 사라진 메인에 탭을 되돌리려 한다). 다른 창은 영향 없음 창별 줌 레벨(zooms)도 지운다
+  role: 창 닫힘(Destroyed — X 또는 close_if_empty) — 끝에 focus 에서 빼고 sync_open (창 X = 정상 종료라 persisted.open 에서 빠져야 다음 시작이 되살리지 않는다; 마지막 창이면 빈 목록으로 저장된 뒤 앱 종료). 그 창 소속 세션(서브면 미러)을 레지스트리에서 빼고(재-attach 차단 → 데몬 grace 후 회수) groups(subs·mirrors·active)에서도 지우며 대기 핸드오프도 버린다. 메인 창이면 소속 서브 창들을 destroy 한다 (close 는 서브 front 의 onCloseRequested 가 막고 사라진 메인에 탭을 되돌리려 한다). 다른 창은 영향 없음 창별 줌 레벨(zooms)도 지운다
 }
 fn push_session(list, windows, label, root) -> id {
   role: 세션 등록 — id 발급·소속 창 기록·레지스트리 끝에 push. sessions Vec 과 windows 맵을 함께 갱신하는 불변식을 한 곳에 (open_workspace 의 빈 세션 슬롯 교체만 예외). 호출자가 두 락을 잡고 부른다
@@ -223,7 +235,7 @@ fn infos_for() {
   role: 한 창의 세션 탭 목록 — 레지스트리 순서 중 메인 창 소속만. 서브 창은 소속 메인의 목록에 이 창의 미러 id(mirror 필드)를 얹어 준다. 부팅 주입·list_sessions·sessions-changed payload 공용
 }
 fn emit_sessions() {
-  role: 레지스트리 변경을 창마다 자기 몫의 목록으로 sessions-changed 방송(emit_to) — 각 창의 front 세션 관리자가 reconcile 한다. 세션 0 개인 창(닫히는 중)은 건너뛴다 — 빈 목록을 보내면 front 가 활성 없는 상태를 잠깐 그린다.
+  role: 먼저 sync_open (레지스트리 변경 지점이 전부 이 방송을 지난다). 레지스트리 변경을 창마다 자기 몫의 목록으로 sessions-changed 방송(emit_to) — 각 창의 front 세션 관리자가 reconcile 한다. 세션 0 개인 창(닫히는 중)은 건너뛴다 — 빈 목록을 보내면 front 가 활성 없는 상태를 잠깐 그린다.
 }
 fn attach_os_drop() {
   role: (Windows 전용) OS 파일/폴더 드롭 수신 — WebView2 WebMessageReceived 에 핸들러 추가 등록 (멀티캐스트라 wry IPC 와 공존, 부속 객체 유무로 우리 메시지를 구분). 창마다 등록한다 (build_window). front 가 postMessageWithAdditionalObjects 로 넘긴 File 객체에서 절대 경로를 읽고 (FileSystemHandle 은 런타임이 null 로 넣어 못 쓴다 — 실측), 종류는 경로를 직접 stat 해 판별한다. 디렉토리면 그 창에 open_workspace 로 새 세션 탭 (폴더 열기 계열과 의미 통일), 파일이면 절대 경로 목록을 PostWebMessageAsJson 으로 DOM 에 반환 (루트 상대화·열기 판단은 front 몫). 경로는 드롭 객체에서 나온다 — front 의 문자열 경로 지목은 open_folder_path 통로로만 (web-folder-open.md 개정)

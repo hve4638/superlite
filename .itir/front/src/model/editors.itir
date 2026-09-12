@@ -3,6 +3,8 @@ import { notify, errText } from './notifications'
 import { FileContent, ThinBackend, Unopenable, WriteResult } from '../backend/types'
 import { configLabel, isConfigPath, readConfig, writeConfig } from './configfiles'
 import { confirm } from './dialog'
+import { languageOf } from './languages'
+import { wordWrapDefault } from './settings'
 
 role: 탭·그룹·문서 상태와 열기/저장/충돌 처리. 열 수 없는 파일(크기 초과·이진)도 탭은 열린다 — doc.unopenable 에 사유를 실어 UI 가 편집기 대신 안내 화면을 띄운다 (content 는 '' 고정이라 dirty·저장 경로가 자연히 막힌다). 이미지 확장자(imageMime)는 readFile encoding=base64 로 읽어 doc.image 에 싣는다 — UI 가 편집기 대신 이미지 뷰어를 띄우고, content '' 고정은 unopenable 과 같다 (크기 상한 초과는 이미지도 unopenable(large) 안내). 이미지 뷰어의 해상도·배율 상태는 path 키 imageView 맵 (배율은 'fit' 또는 원본 대비 숫자 — 휠 줌) — ImageView 가 세우고 statusbar 가 활성 탭 경로로 읽는다 (rename·삭제·창 이동 정리는 docs·hex·folderView 와 함께 — 경로 키 맵 목록 pathMaps 를 세 함수가 공유). 문서(docs)는 탭과 분리 — 같은 파일을 여러 탭이 공유한다. 그룹 목록(groups)은 flat 이고 화면 배치는 별도의 행/열 중첩 트리(layout)가 담당 — 순회 로직은 flat 목록만 알면 된다. 탭 자리·활성 규칙은 VS Code 기본값 (ticket tab-open-next-mru-close): 자리를 지정하지 않는 열기(openFile·openDiff·openHex·openUrl·openHtmlPreview·openFolderTab·openTerminalTab·acceptTab 의 index 없음)는 활성 탭 바로 오른쪽에 넣고(openPositioning right — preview 교체는 그 자리 유지, index 를 받는 드래그·핸드오프 경로는 그대로), 그룹마다 MRU(EditorGroup.mru, 앞이 최근)를 두어 활성화(activate 헬퍼 — activeTabId 직접 대입은 이 헬퍼로만)마다 앞으로 올리고, 활성 탭을 닫으면(takeTab) 이웃이 아니라 MRU 다음 탭이 활성이 된다(focusRecentEditorAfterClose — MRU 가 비면 종전 이웃 규칙). MRU 는 스냅샷에 실려 창 이동·워크스페이스 복원 뒤에도 유지되고, restore 가 터미널·없는 id 를 걷어낸다. 외부 삭제된 열린 파일은 orphaned 집합으로 표시(탭 유지 — VS Code closeOnFileDelete=false)하고 저장이 부활시킨다. 클라이언트 설정 파일(configfiles 의 superlite:/ 가상 경로)은 문서·탭·dirty·저장 흐름을 그대로 쓰되 IO 만 갈아 끼운다 — readDoc/writeDoc 이 isConfigPath 면 데몬 readFile/writeFile 대신 readConfig/writeConfig(relay HTTP), etag '' 로 충돌 검사 없음, 탭 라벨은 configLabel, 읽기 전용(configReadOnly)이면 Doc.readOnly (ticket config-editors). 세션별 팩토리(createEditors) + 활성 세션 전달 shim. monaco 훅 슬롯(applyExternalEdit·disposeModels)은 세션 공용 모듈 슬롯 — 훅은 UI 능력이지 세션 상태가 아니다
 
@@ -19,6 +21,7 @@ export fn toggleFolderPreviewPane() {
 }
 export type TerminalTab
 export type UrlTab
+export type SettingsTab
 export type Tab
 export type EditorGroup
 export type LayoutNode
@@ -74,6 +77,9 @@ export fn openUrl(url?) {
 }
 export fn navigateUrlTab(tabId, url) {
   role: URL 탭 주소칸 확정 — 탭의 url·name 만 바꾼다. iframe 교체는 UrlView 가 url 을 지켜보다 한다
+}
+export fn openSettings() {
+  role: 설정 탭(SettingsTab, id 'settings:' 고정, ticket user-settings) — 창에 하나: 어느 그룹에 있든 그것을 활성화, 없으면 활성 그룹의 활성 탭 오른쪽에 연다. 문서 없음(path '') — URL 탭과 같이 최근 닫은 탭 이력 밖, 핸드오프는 탭만, acceptTab 은 문서 없이 붙인다, 워크스페이스 저장·복원에 그대로 실린다. 진입점은 팔레트 'Preferences: Open Settings' 와 액티비티바 톱니
 }
 export fn openHex(path) {
   role: hex 뷰어 탭('hex:'+path, "x (Hex)") 열기 — 활성 그룹에 고정 탭. 바이트는 docs 와 분리된 path 키 hex 맵(HexDoc)에 두고 HexView 가 ensureHex·loadHexChunk 로 lazy 로드한다 (창 이동·복원·재열기가 같은 경로로 수렴). 텍스트 문서와 공존 — 이진 unopenable 안내의 "Open in Hex Editor" 와 명령 팔레트가 진입점
@@ -169,8 +175,11 @@ export fn toggleViewerAutoReload(kind) {
   role: 뷰어 자동 갱신 스위치 토글 — 뷰어 종류(html·pdf)별, 세션 무관 전역이라 localStorage 에 기억. 기본 HTML on / PDF off (PDF 는 재렌더 비용 — viewer-cache-refresh). 설정 체계(config-system)가 생기면 그쪽으로
 }
 export val editorView
+export fn wordWrapOf(tab) -> bool {
+  role: 편집기 탭(file·diff)의 자동 줄바꿈 — 탭별 override(FileTab.wrap·DiffTab.wrap, Alt+Z)가 있으면 그것, 없으면 언어별 사용자 설정 기본값(settings.wordWrapDefault(languageOf(path))). 종전 전역 토글(editorView.wordWrap)은 폐지 — 새 탭은 항상 설정값으로 시작한다 (ticket user-settings, 사용자 결정 2026-09-12). MonacoHost 가 활성 탭의 값을 지켜보다 updateOptions
+}
 export fn toggleWordWrap() {
-  role: 자동 줄바꿈 토글 — 전 에디터 공통 뷰 상태(editorView.wordWrap), 세션 안에서만 (VS Code Alt+Z 동일, 영속화 없음). MonacoHost 가 지켜보다 updateOptions
+  role: Alt+Z — 활성 편집기 탭의 wrap 만 뒤집는다 (탭별 임시 override, 탭과 함께 사라진다 — 스냅샷에는 실린다). 편집기가 아닌 탭은 무동작
 }
 export val EDITOR_ZOOM_MIN
 export val EDITOR_ZOOM_MAX

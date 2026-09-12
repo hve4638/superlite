@@ -1,9 +1,9 @@
 import { reactive } from '@vue/reactivity';
 import { openQuickInput, showViewlet, toggleSideBar } from './workbench';
 import { openFolderDialog } from './host';
-import { closeTab, reopenClosedEditor, saveActive, splitGroup, toggleGroupLock, activeGroup, activeTab, openHex, toggleHtmlPreview, isHtml, openUrl, toggleWordWrap, stepEditorZoom, setEditorZoom, setActiveTab } from './editors';
+import { closeTab, reopenClosedEditor, saveActive, splitGroup, toggleGroupLock, activeGroup, activeTab, openHex, toggleHtmlPreview, isHtml, openUrl, openSettings, toggleWordWrap, stepEditorZoom, setEditorZoom, setActiveTab } from './editors';
 import { createTerminal, toggleTerminal } from './terminal';
-import { openSshConfig, openTmuxConf } from './configfiles';
+import { openSettingsJson, openSshConfig, openTmuxConf } from './configfiles';
 import { refreshScm } from './scm';
 import { activeSessionEmpty, cycleSession, sessionsEnabled } from './sessions';
 import { inApp, reloadWindow, zoomWindow } from './window';
@@ -94,6 +94,9 @@ export function installKeybindings(target: Window): void {
 export function setupCommands(): void {
   // URL 탭 (ticket browser-tab-iframe) — 빈 탭을 열고 주소칸에 포커스. 입력 대화상자 대신 탭 자체의 주소칸이 입력처
   register({ id: 'view.openUrl', title: 'View: Open URL...', run: () => openUrl() });
+  // 사용자 설정 (ticket user-settings) — 폼 탭과 JSON 원문 탭 (VS Code 의 두 명령과 같은 이름)
+  register({ id: 'preferences.openSettings', title: 'Preferences: Open Settings', run: () => openSettings() });
+  register({ id: 'preferences.openSettingsJson', title: 'Preferences: Open Settings (JSON)', run: () => openSettingsJson() });
   register({
     id: 'workbench.action.showCommands',
     title: 'Show All Commands',

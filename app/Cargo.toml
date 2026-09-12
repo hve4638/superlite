@@ -12,8 +12,6 @@ superlite-common = { path = "../backend/common" }
 tauri = { version = "2", features = [] }
 # 프로세스 1개 강제 — 두 번째 실행의 argv·cwd 를 첫 프로세스에 전달하고 종료
 tauri-plugin-single-instance = "2"
-# URL 탭의 "외부 브라우저로 열기" (ticket browser-tab-iframe) — capability opener:allow-open-url 만 연다
-tauri-plugin-opener = "2"
 tokio = { version = "1", features = ["rt-multi-thread"] }
 getrandom = "0.3"
 # 세션 탭 payload(list_sessions·sessions-changed)와 상태 지속(state.json,
@@ -26,7 +24,8 @@ serde_json = "1"
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio", "common-controls-v6"] }
 # 탐색기 다운로드의 로컬 쓰기(local_write) — 프론트가 와이어에서 받은 base64 청크를 그대로 넘긴다
 base64 = "0.22"
-# 터미널 링크를 OS 기본 브라우저로 (open_url) — plugin-opener 대신 rfd 처럼 커맨드 안에서 직접.
+# 터미널 링크·URL 탭의 외부 열기를 OS 기본 브라우저로 (open_url) — plugin-opener 대신 rfd 처럼 커맨드 안에서 직접
+# (같은 일을 하던 tauri-plugin-opener 는 ticket user-settings 에서 제거).
 # 편집기 "Open Externally"(ticket open-externally, open_externally) 도 같은 crate 로 임시 사본을 OS 기본 앱으로
 open = "5"
 

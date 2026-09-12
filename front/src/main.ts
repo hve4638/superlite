@@ -14,8 +14,11 @@ import { initOsDrop } from './model/osdrop';
 import { initRecents } from './model/recents';
 import { hasAnyDirty, initSessions } from './model/sessions';
 import { flushAllWorkspaces } from './model/workspaceState';
+import { loadSettings } from './model/settings';
 
 setupCommands();
+// 사용자 설정(ticket user-settings) — 도착 전까지는 코드 기본값으로 동작한다
+void loadSettings();
 installKeybindings(window);
 initOsDrop();
 initSessions();

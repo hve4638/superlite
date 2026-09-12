@@ -4,6 +4,8 @@ import { ctx, viewOf } from './ctx';
 import { errText, notify } from './notifications';
 import { configLabel, configReadOnly, isConfigPath, readConfig, writeConfig } from './configfiles';
 import { confirm } from './dialog';
+import { languageOf } from './languages';
+import { wordWrapDefault } from './settings';
 
 export interface FileTab {
   kind: 'file';
@@ -14,6 +16,8 @@ export interface FileTab {
   dirty: boolean;
   /** preview 탭(이탤릭). 다른 파일을 preview 로 열면 교체된다. */
   preview: boolean;
+  /** 자동 줄바꿈 탭별 임시 override (Alt+Z) — 없으면 언어별 설정 기본값(settings.wordWrapDefault). 탭과 함께 사라진다 */
+  wrap?: boolean;
 }
 
 export interface DiffTab {
@@ -32,6 +36,8 @@ export interface DiffTab {
   commit?: string;
   /** commit 과 함께 — 이름 변경된 파일의 부모 시점 경로 (original 쪽). 없으면 path */
   from?: string;
+  /** 자동 줄바꿈 탭별 임시 override — FileTab.wrap 과 같다 */
+  wrap?: boolean;
 }
 
 /** hex 뷰어 탭 — 바이트는 docs 가 아니라 editors.hex 에 산다 (텍스트 문서와 공존). 편집 없음 */
@@ -112,7 +118,20 @@ export interface UrlTab {
   url: string;
 }
 
-export type Tab = FileTab | DiffTab | HexTab | PreviewTab | TerminalTab | FolderTab | UrlTab;
+/** 설정 탭 (ticket user-settings) — 사용자 설정 폼(SettingsView). 문서 없음(path ''), 창에 하나만(id 고정) —
+ *  다시 열면 있는 탭을 활성화한다. dirty·preview·복원 이력 없음, 원문 편집은 superlite:/settings.json 파일 탭 */
+export interface SettingsTab {
+  kind: 'settings';
+  /** 'settings:' 고정 */
+  id: string;
+  path: '';
+  /** 'Settings' */
+  name: string;
+  dirty: boolean;
+  preview: boolean;
+}
+
+export type Tab = FileTab | DiffTab | HexTab | PreviewTab | TerminalTab | FolderTab | UrlTab | SettingsTab;
 
 /** hex 뷰어 청크 크기 — 범위 읽기(readFile offset) 단위. 4KB 이상이라 항상 payload 프레임으로 온다 */
 export const HEX_CHUNK = 64 * 1024;
@@ -267,12 +286,18 @@ export function saveWindowZoom(key: string, percent: number): void {
   sessionStorage.setItem(key, String(percent));
   localStorage.setItem(key, String(percent));
 }
-/** 자동 줄바꿈 — 전 에디터 공통 뷰 상태 (VS Code Alt+Z 와 같이 세션 안에서만, 영속화 없음).
- *  zoom 은 편집기 전용 줌(퍼센트) — 웹뷰 줌(Ctrl+Shift+=, 창 단위)과 별개로 Monaco 글꼴 크기만 바꾼다.
+/** zoom 은 편집기 전용 줌(퍼센트) — 웹뷰 줌(Ctrl+Shift+=, 창 단위)과 별개로 Monaco 글꼴 크기만 바꾼다.
  *  세션 무관·창 단위라 loadWindowZoom 으로 기억한다 */
-export const editorView = reactive({ wordWrap: false, zoom: loadWindowZoom(EDITOR_ZOOM_KEY) });
+export const editorView = reactive({ zoom: loadWindowZoom(EDITOR_ZOOM_KEY) });
+/** 탭의 자동 줄바꿈 — 탭별 override(Alt+Z)가 있으면 그것, 없으면 언어별 설정 기본값 (ticket user-settings).
+ *  종전 전역 토글은 폐지 — 새 탭은 항상 설정값으로 시작한다 (사용자 결정 2026-09-12) */
+export function wordWrapOf(tab: FileTab | DiffTab): boolean {
+  return tab.wrap ?? wordWrapDefault(languageOf(tab.path));
+}
+/** Alt+Z — 활성 편집기 탭만 뒤집는다 (탭별 임시 override). 편집기가 아닌 탭은 무동작 */
 export function toggleWordWrap(): void {
-  editorView.wordWrap = !editorView.wordWrap;
+  const t = ctx().editors.activeTab();
+  if (t !== null && (t.kind === 'file' || t.kind === 'diff')) t.wrap = !wordWrapOf(t);
 }
 
 /** 폴더 탭 기본값 — 마지막으로 고른 스타일이 새 탭의 기본, 미리보기 창(Windows 탐색기의 '미리보기 창')
@@ -651,6 +676,18 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     }
   }
 
+  /** 설정 탭 (ticket user-settings) — 창에 하나. 어느 그룹에 있든 그것을 활성화, 없으면 활성 그룹에 연다 */
+  function openSettings(): void {
+    const id = tabIdOf('settings', '');
+    for (const g of editors.groups) {
+      if (g.tabs.some((t) => t.id === id)) return setActiveTab(g.id, id);
+    }
+    const group = activeGroup();
+    group.tabs.splice(openIndex(group), 0, { kind: 'settings', id, path: '', name: 'Settings', dirty: false, preview: false });
+    activate(group, id);
+    editors.pendingFocus = true;
+  }
+
   function openHex(path: string): void {
     const group = activeGroup();
     const id = tabIdOf('hex', path);
@@ -983,7 +1020,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     if (tab.kind === 'terminal') {
       // 복원 이력 없음 — 죽은 셸은 되살릴 수 없다. 훅이 PTY 를 정리한다 (removeAt 경유면 이미 없어 무해)
       terminalCloser?.(tab.term);
-    } else if (tab.kind !== 'url') { // URL 탭은 path 가 없어 최근 닫은 탭 이력 밖
+    } else if (tab.kind !== 'url' && tab.kind !== 'settings') { // URL·설정 탭은 path 가 없어 최근 닫은 탭 이력 밖
       editors.recentlyClosed.push(tab.kind === 'diff'
         ? { kind: tab.kind, path: tab.path, deleted: tab.deleted, commit: tab.commit, from: tab.from }
         : { kind: tab.kind, path: tab.path });
@@ -1395,7 +1432,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
   function takeTabForHandoff(groupId: number, tabId: string): TabHandoff | null {
     const tab = takeTab(groupId, tabId);
     if (!tab) return null;
-    if (tab.kind === 'terminal' || tab.kind === 'url') {
+    if (tab.kind === 'terminal' || tab.kind === 'url' || tab.kind === 'settings') {
       // 문서가 없다 — 탭만 뗀다. PTY 스냅샷·해제는 호출측(sessions)이 terminals 로 한다. URL 탭은 url 만 실린다
       collapseIfEmpty(groupId);
       return { tab, doc: null };
@@ -1421,8 +1458,8 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
       // 넘어온 쪽이 미저장인데 이쪽 버퍼를 지킨다 — 조용히 버리지 않고 알린다
       notify('warning', `Unsaved changes of '${baseName(h.tab.path)}' from the other window were discarded (already open here)`);
     }
-    // hex·folder·url 탭은 문서가 필요 없다 — 바이트·나열·페이지는 받는 쪽 뷰가 다시 읽는다
-    if (!editors.docs.has(h.tab.path) && h.tab.kind !== 'hex' && h.tab.kind !== 'folder' && h.tab.kind !== 'url') {
+    // hex·folder·url·settings 탭은 문서가 필요 없다 — 바이트·나열·페이지·폼은 받는 쪽 뷰가 다시 읽는다
+    if (!editors.docs.has(h.tab.path) && h.tab.kind !== 'hex' && h.tab.kind !== 'folder' && h.tab.kind !== 'url' && h.tab.kind !== 'settings') {
       if (!h.doc) {
         void (h.tab.kind === 'diff' ? openDiff(h.tab.path, { deleted: h.tab.deleted, commit: h.tab.commit, from: h.tab.from })
           : h.tab.kind === 'preview' ? openHtmlPreview(h.tab.path)
@@ -1443,7 +1480,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
   }
 
   return {
-    editors, activeGroup, activeTab, openFile, openFileAt, openDiff, openHex, openUrl, navigateUrlTab, ensureHex, loadHexChunk, openHtmlPreview, toggleHtmlPreview, setActiveTab, pinTab,
+    editors, activeGroup, activeTab, openFile, openFileAt, openDiff, openHex, openUrl, navigateUrlTab, openSettings, ensureHex, loadHexChunk, openHtmlPreview, toggleHtmlPreview, setActiveTab, pinTab,
     openFolderTab, openFolderTabSplit, navigateFolderTab, addGroupBeside, setFolderStyle, setFolderSort,
     openFileSplit, closeTab,
     reopenClosedEditor, moveTabToGroup, moveTabSplit,
@@ -1484,6 +1521,7 @@ export const openDiff = (path: string, opts?: { deleted?: boolean }): Promise<vo
   ctx().editors.openDiff(path, opts);
 export const openHex = (path: string): void => ctx().editors.openHex(path);
 export const openUrl = (url?: string): void => ctx().editors.openUrl(url);
+export const openSettings = (): void => ctx().editors.openSettings();
 export const navigateUrlTab = (tabId: string, url: string): void => ctx().editors.navigateUrlTab(tabId, url);
 export const openFolderTab = (path: string, opts: { groupId?: number; index?: number } = {}): void => ctx().editors.openFolderTab(path, opts);
 export const addGroupBeside = (refGroupId: number, side: SplitSide): number | null => ctx().editors.addGroupBeside(refGroupId, side);

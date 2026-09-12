@@ -12,8 +12,9 @@ onBeforeUnmount(trackForeignDrag());
 
 <template>
   <div class="editor-area">
-    <!-- 빈 세션(루트 없음)은 에디터 대신 시작 페이지 — 열 파일 자체가 없다 -->
-    <StartPage v-if="activeSessionEmpty()" />
+    <!-- 빈 세션(루트 없음)은 에디터 대신 시작 페이지 — 열 파일 자체가 없다. 단, 문서 없는 탭(설정 탭·클라이언트 설정
+         파일 탭 — 백엔드 연결이 필요 없다)이 열려 있으면 편집기 영역을 그리고, 다 닫히면 시작 페이지로 돌아온다 (ticket user-settings) -->
+    <StartPage v-if="activeSessionEmpty() && !editors.groups.some((g) => g.tabs.length > 0)" />
     <EditorLayoutNode v-else :node="editors.layout" class="root" />
   </div>
 </template>

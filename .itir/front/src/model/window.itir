@@ -1,6 +1,8 @@
 import { tauri } from './tauri'
 import { flushAllWorkspaces } from './workspaceState'
 import { errText, notify } from './notifications'
+import { ctx } from './ctx'
+import { urlTargetOf } from './settings'
 role: Tauri 창 제어 (앱 전용) — withGlobalTauri 전역(__TAURI__)으로 현재 창의 최소화·최대화 토글·닫기·줌을 노출하고, resize 이벤트로 최대화 상태를 추적한다 (최대화/복원 아이콘 전환용). windowLabel 은 이 창의 Tauri label(native 주입 __SUPERLITE_WINDOW__) — 창 간 탭 이동에서 출처·대상 주소. 브라우저에서는 inApp=false·windowLabel null 이고 TitleBar 가 창 제어 버튼 자체를 숨긴다. ownerWindow 는 서브 창(에디터·터미널 탭 분리로 생긴 창)의 소속 메인 label(native 주입 __SUPERLITE_OWNER__), subWindow 는 그 유무 — 메인 창(첫 창·세션 탭 분리 창)·웹·mock 은 null (decision/workspace-session-tabs.md 2026-09-08 개정). bootActiveSession 은 부팅 시 묶음의 활성 세션(__SUPERLITE_ACTIVE__). destroyWindow 는 onCloseRequested 를 거치지 않는 파괴, onWindowCloseRequested 는 X·OS 닫기 요청을 막고 핸들러를 부른다 — 서브 창이 탭을 메인에 되돌린 뒤 닫는 경로
 
 export val inApp
@@ -19,7 +21,7 @@ export fn setIme(enabled) {
   role: OS 입력기(IME) 전환 — native set_ime 커맨드 호출. vim 모드가 non-insert 로 들어갈 때 false(영문 강제, 그때 상태를 native 가 창 단위로 기억), insert 진입·vim 모드 해제에 true(복원). 편집기 안에서는 OS IME 를 이길 수 없어 VSCodeVim 의 im-select 처럼 밖에서 바꾼다 (app/src/main set_ime, ticket editor-vim-ime-imswitch). Windows 앱만 — 웹·다른 OS 는 무동작
 }
 export fn openUrl(url) {
-  role: URL 을 앱 밖에서 연다 (터미널 링크 Ctrl+클릭, ticket terminal-links) — 앱은 native open_url(OS 기본 브라우저, 실패는 error 알림), 웹은 window.open(_blank, noopener) 새 탭
+  role: URL 열기의 단일 진입점 (터미널 링크 Ctrl+클릭 ticket terminal-links, 앞으로 생길 링크) — 사용자 설정의 분기 규칙(settings.urlTargetOf, ticket user-settings)이 내부면 활성 세션의 URL 탭(ctx().editors.openUrl), 외부면 openExternal
 }
 export fn zoomWindow(action) {
   role: 이 창의 웹뷰 줌 — native set_zoom 커맨드 호출 ('in'·'out'·'reset'). 레벨·저장·적용은 native 몫이고 부른 창에만 적용된다 (app/src/main set_zoom, ticket zoom-per-window). 웹은 무동작
@@ -37,5 +39,5 @@ export fn closeWindow() {
   role: 창 닫기 — 이 창의 X. 먼저 이 창의 워크스페이스 상태를 저장한다(flushAllWorkspaces, ticket workspace-state-restore). native 는 그 창의 세션만 정리하고 다른 창은 두며, 마지막 창이면 앱이 종료된다 (app/src/main 참조)
 }
 export fn openExternal(url) {
-  role: 외부 브라우저로 열기 (ticket browser-tab-iframe) — 앱은 tauri-plugin-opener 의 plugin:opener|open_url invoke(capability opener:allow-open-url 1줄, 실패는 토스트), 웹은 window.open 새 탭(noopener). URL 탭 주소칸의 입력값이 대상
+  role: 외부 브라우저로 열기 — 규칙을 거치지 않는 명시적 외부 열기(URL 탭 바의 버튼, ticket browser-tab-iframe — 주소칸의 입력값이 대상)와 openUrl 의 외부 쪽 출구. 앱은 native open_url(OS 기본 브라우저, 실패는 토스트 — 같은 일을 하던 tauri-plugin-opener 는 ticket user-settings 에서 제거), 웹은 window.open 새 탭(noopener)
 }

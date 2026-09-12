@@ -13,6 +13,7 @@ import HexView from './HexView.vue';
 import HtmlPreview from './HtmlPreview.vue';
 import TerminalView from './TerminalView.vue';
 import UrlView from './UrlView.vue';
+import SettingsView from './SettingsView.vue';
 import FolderView from './FolderView.vue';
 import FileIcon from '../widgets/FileIcon.vue';
 import ProgressBar from '../widgets/ProgressBar.vue';
@@ -104,6 +105,7 @@ type Overlay =
   | { kind: 'hex' | 'preview'; path: string }
   | { kind: 'terminal'; term: number }
   | { kind: 'url' }
+  | { kind: 'settings' }
   | { kind: 'folder'; tabId: string; path: string }
   | { kind: 'image'; path: string; data: string }
   | { kind: 'unopenable'; reason: NonNullable<Doc['unopenable']> }
@@ -114,6 +116,7 @@ const overlay = computed<Overlay | null>(() => {
   if (t.kind === 'hex' || t.kind === 'preview') return { kind: t.kind, path: t.path };
   if (t.kind === 'terminal') return { kind: 'terminal', term: t.term };
   if (t.kind === 'url') return { kind: 'url' }; // 뷰는 아래 v-show 목록이 그린다 — 여기서는 monaco 가림만
+  if (t.kind === 'settings') return { kind: 'settings' };
   if (t.kind === 'folder') return { kind: 'folder', tabId: t.id, path: t.path };
   const doc = editors.docs.get(t.path);
   // 문서가 아직 안 읽힌 파일 탭(openFile 이 탭을 먼저 띄운다) — 빈 본문으로 이전 탭의 모델을 가린다
@@ -163,6 +166,7 @@ const SHORTCUTS = [
       <TerminalView v-else-if="overlay?.kind === 'terminal'" :key="overlay.term" :term="overlay.term" :group-id="group.id" />
       <!-- 폴더 탭 — 탭 안 이동은 id 가 바뀌므로 key 를 두지 않는다 (같은 인스턴스가 path 변화를 따라간다) -->
       <FolderView v-else-if="overlay?.kind === 'folder'" :group-id="group.id" :tab-id="overlay.tabId" :path="overlay.path" />
+      <SettingsView v-else-if="overlay?.kind === 'settings'" />
       <ImageView v-else-if="overlay?.kind === 'image'" :path="overlay.path" :data="overlay.data" />
       <div v-else-if="overlay?.kind === 'loading'" class="loading" />
       <!-- 열 수 없는 파일(크기 초과·이진) 안내 -->

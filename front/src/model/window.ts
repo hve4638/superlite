@@ -2,6 +2,8 @@ import { reactive } from '@vue/reactivity';
 import { tauri } from './tauri';
 import { flushAllWorkspaces } from './workspaceState';
 import { errText, notify } from './notifications';
+import { ctx } from './ctx';
+import { urlTargetOf } from './settings';
 
 // Tauri 창 제어 (앱 전용) — withGlobalTauri 전역으로 현재 창을 다룬다.
 // 브라우저에서는 inApp=false 이고 TitleBar 가 창 제어 버튼 자체를 숨긴다.
@@ -95,24 +97,23 @@ export function setIme(enabled: boolean): void {
 }
 
 /** 이 창의 웹뷰 줌 — 레벨·저장·적용은 native (set_zoom) 몫, 부른 창에만 적용된다 (ticket zoom-per-window). 웹은 브라우저 줌이 있어 무동작 */
-/** URL 을 앱 밖에서 연다 (터미널 링크 Ctrl+클릭) — 앱은 native open_url(OS 기본 브라우저), 웹은 새 탭 */
+/** URL 열기의 단일 진입점 (터미널 링크 Ctrl+클릭, 앞으로 생길 링크) — 사용자 설정의 분기 규칙(settings.urlTargetOf,
+ *  ticket user-settings)으로 내부 URL 탭(editors.openUrl)과 외부 브라우저(openExternal)를 가른다 */
 export function openUrl(url: string): void {
-  if (tauri) {
-    void tauri.core.invoke('open_url', { url }).catch((e: unknown) => notify('error', `Open link: ${errText(e)}`));
-  } else {
-    window.open(url, '_blank', 'noopener');
-  }
+  if (urlTargetOf(url) === 'internal') ctx().editors.openUrl(url);
+  else openExternal(url);
 }
 
 export function zoomWindow(action: 'in' | 'out' | 'reset'): void {
   void tauri?.core.invoke('set_zoom', { action });
 }
 
-/** 외부 브라우저로 열기 (ticket browser-tab-iframe) — 앱은 tauri-plugin-opener(capability opener:allow-open-url),
- *  웹은 새 탭 window.open. URL 탭 주소칸의 입력값이 대상이다 (iframe 안 현재 URL 은 못 읽는다) */
+/** 외부 브라우저로 열기 — 규칙을 거치지 않는 명시적 외부 열기(URL 탭 바의 버튼)와 openUrl 의 외부 쪽 출구.
+ *  앱은 native open_url(OS 기본 브라우저 — 종전 tauri-plugin-opener 는 같은 일의 중복이라 제거, 2026-09-12),
+ *  웹은 새 탭 window.open */
 export function openExternal(url: string): void {
   if (tauri !== undefined) {
-    tauri.core.invoke('plugin:opener|open_url', { url }).catch((e) => notify('error', `Open in browser failed: ${errText(e)}`));
+    void tauri.core.invoke('open_url', { url }).catch((e: unknown) => notify('error', `Open in browser failed: ${errText(e)}`));
     return;
   }
   window.open(url, '_blank', 'noopener');

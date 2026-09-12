@@ -102,6 +102,8 @@ pub struct Profiles {
     pub dir: String,
     /// ~/.ssh/config 절대 경로 — 툴팁용 (홈을 모르면 빈 문자열)
     pub ssh_config: String,
+    /// 사용자 설정 settings.json 절대 경로 — 툴팁용 (ticket user-settings)
+    pub settings: String,
 }
 
 pub fn list() -> Result<Profiles, String> {
@@ -122,6 +124,7 @@ pub fn list() -> Result<Profiles, String> {
         names,
         dir: dir.display().to_string(),
         ssh_config: ssh_config_path().map(|p| p.display().to_string()).unwrap_or_default(),
+        settings: settings_path().map(|p| p.display().to_string()).unwrap_or_default(),
     })
 }
 
@@ -197,4 +200,30 @@ pub fn write_ssh_config(content: &str) -> Result<(), String> {
         let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600));
     }
     Ok(())
+}
+
+// ---- 사용자 설정 (ticket user-settings) — `config_dir()/settings.json`. 프론트 model/settings 가 원장이고
+// relay 는 파일 IO 만 (스키마·기본값은 프론트, 여기서는 내용을 해석하지 않는다). 앱·웹이 같은 relay 를 타므로
+// 같은 파일을 본다. 편집기 JSON 탭(superlite:/settings.json)도 같은 끝점
+
+pub fn settings_path() -> Option<PathBuf> {
+    superlite_common::config_dir().map(|d| d.join("settings.json"))
+}
+
+/// 없으면 빈 객체 `{}` (기본값 = 프론트 코드), 그 외 읽기 실패는 오류
+pub fn read_settings() -> Result<String, String> {
+    let p = settings_path().ok_or("설정 폴더 없음")?;
+    match std::fs::read_to_string(&p) {
+        Ok(s) => Ok(s),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok("{}".to_string()),
+        Err(e) => Err(format!("{}: {e}", p.display())),
+    }
+}
+
+/// 통째 교체 — 설정 폴더가 없으면 만든다
+pub fn write_settings(content: &str) -> Result<(), String> {
+    let p = settings_path().ok_or("설정 폴더 없음")?;
+    let dir = p.parent().unwrap();
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    std::fs::write(&p, content).map_err(|e| format!("{}: {e}", p.display()))
 }

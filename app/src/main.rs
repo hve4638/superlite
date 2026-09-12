@@ -28,9 +28,13 @@
 //! 만들고 native 는 내용을 모른 채 대상 창에 전달만 한다 (아직 로드 전인 새 창은 부팅 후
 //! take_handoff 로 가져간다).
 //!
-//! 시작은 항상 빈 세션(시작 페이지)이다 — 마지막 워크스페이스 자동 복원은 하지 않는다
-//! (2026-09-02 사용자 결정, ticket app-empty-session). 명시 argv 로 준 폴더만 연다.
-//! 대신 state.json(app_data_dir, version 2 — decision/state-persistence.md)에 최근 연 폴더
+//! 시작은 빈 세션(시작 페이지)이다 — 정상 종료(창 X) 뒤 마지막 워크스페이스 자동 복원은 하지 않는다
+//! (2026-09-02 사용자 결정, ticket app-empty-session). 명시 argv 로 준 폴더만 연다. 예외는 비정상 종료
+//! (컴퓨터 꺼짐·강제 종료·업데이트 설치기의 종료) — 열려 있던 메인 창 목록(persisted.open, sync_open 이
+//! 상시 갱신하고 창 X 가 자기 항목을 지운다)이 시작 때 남아 있으면 사용자 설정 restoreWindows(none·one·all,
+//! 기본 one = 마지막 포커스 창 하나, settings.json — ticket user-settings)대로 그 창들을 세션 탭째 되살린다.
+//! argv 폴더가 있으면 그것만 열고 복원은 건너뛴다 (사용자 결정 2026-09-12).
+//! 그 밖에 state.json(app_data_dir, version 2 — decision/state-persistence.md)에 최근 연 폴더
 //! MRU 와 사용자가 고정한 그룹(pinned, ticket start-page-redesign — 종전 세션 묶음 이력을 대체)을
 //! 남기고, 시작 페이지가 그 목록을 보여 사용자가 명시적으로 다시 연다 (ticket start-page-recents). 같은 파일에 웹뷰 줌
 //! 레벨(zoom)도 둔다 — 배율은 창마다 따로고(zooms, set_zoom — 2026-09-09 사용자 결정, ticket zoom-per-window)
@@ -123,6 +127,8 @@ struct AppState {
     groups: Mutex<Groups>,
     /// 창 label → 웹뷰 줌 레벨 (창마다 따로, ticket zoom-per-window). 창 생성 때 넣고(build_window) 파괴 때 지운다
     zooms: Mutex<HashMap<String, i32>>,
+    /// 메인 창 포커스 순서(앞이 최근) — persisted.open 의 정렬 기준 (restoreWindows one 이 고르는 창). 단독 락
+    focus: Mutex<Vec<String>>,
     next_window: AtomicUsize,
     /// 최근 폴더·고정 그룹 — state.json 의 메모리 사본
     persisted: Mutex<Persisted>,
@@ -156,6 +162,19 @@ struct Persisted {
     /// 펼침·커서·터미널 자리, 내용은 native 가 해석하지 않는다). 최근 저장 순(앞이 최신), 최대 WORKSPACES_MAX
     #[serde(default)]
     workspaces: Vec<WorkspaceEntry>,
+    /// 지금 열려 있는 메인 창 목록 (ticket user-settings restoreWindows) — 포커스 최근 순(앞이 마지막 포커스), 창마다
+    /// 세션 탭 root 순서. sync_open 이 레지스트리·포커스 변경마다 갱신하고 창 X(drop_window)가 자기 항목을 지우므로,
+    /// 시작 때 비어 있지 않으면 지난 실행이 비정상 종료된 것 — 설정 restoreWindows 대로 되살린다
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    open: Vec<OpenWindow>,
+}
+
+/// 열려 있는 메인 창 하나 — 세션 탭 root 들(빈 세션 제외, 서브 창 미러 제외)과 활성 탭 인덱스
+#[derive(Clone, Default, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
+struct OpenWindow {
+    roots: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    active: Option<usize>,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -259,6 +278,74 @@ fn save_state(path: Option<&Path>, p: &Persisted) {
     }
 }
 
+/// 열려 있는 메인 창 목록을 persisted.open 에 (ticket user-settings restoreWindows) — 레지스트리 변경(emit_sessions)·
+/// 창 소멸(drop_window)·포커스 이동 때 부른다. 바뀐 경우만 저장. 락을 잡지 않은 상태에서 부른다
+fn sync_open(state: &AppState) {
+    let focus = state.focus.lock().unwrap().clone();
+    let open: Vec<OpenWindow> = {
+        let list = state.sessions.lock().unwrap();
+        let windows = state.windows.lock().unwrap();
+        let groups = state.groups.lock().unwrap();
+        let mut mains: Vec<String> = windows.values().filter(|l| !groups.subs.contains_key(*l)).cloned().collect();
+        mains.sort();
+        mains.dedup();
+        mains.sort_by_key(|l| focus.iter().position(|f| f == l).unwrap_or(usize::MAX));
+        mains
+            .iter()
+            .map(|label| {
+                let roots: Vec<PathBuf> = list
+                    .iter()
+                    .filter(|(id, _)| owns(&windows, id, label))
+                    .filter_map(|(_, r)| r.clone())
+                    .filter(|r| !is_empty_root(Some(r)))
+                    .collect();
+                let active = groups
+                    .active
+                    .get(label)
+                    .and_then(|aid| list.iter().find(|(id, _)| id == aid))
+                    .and_then(|(_, r)| r.as_ref())
+                    .and_then(|ar| roots.iter().position(|r| r == ar));
+                OpenWindow { roots, active }
+            })
+            .collect()
+    };
+    let mut p = state.persisted.lock().unwrap();
+    if p.open != open {
+        p.open = open;
+        save_state(state.state_file.as_deref(), &p);
+    }
+}
+
+/// 사용자 설정 restoreWindows — 프론트 model/settings 스키마의 키를 native 가 시작 때 settings.json
+/// (superlite_common::config_dir, relay /settings 와 같은 파일)에서 직접 읽는다. 없거나 못 읽으면 "one"
+fn restore_mode() -> String {
+    superlite_common::config_dir()
+        .and_then(|d| std::fs::read_to_string(d.join("settings.json")).ok())
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.get("restoreWindows")?.as_str().map(str::to_string))
+        .unwrap_or_else(|| "one".to_string())
+}
+
+/// 시작 때 되살릴 창들 — none 은 없음, one 은 마지막 포커스 창, all 은 전부. 사라진 로컬 root 는 뺀다
+/// (원격 ssh:// 는 접속해야 알므로 그대로), root 가 하나도 안 남은 창은 뺀다
+fn restorable(open: &[OpenWindow], mode: &str) -> Vec<OpenWindow> {
+    let n = match mode {
+        "all" => usize::MAX,
+        "one" => 1,
+        _ => 0,
+    };
+    open.iter()
+        .take(n)
+        .filter_map(|w| {
+            let active_root = w.active.and_then(|i| w.roots.get(i)).cloned();
+            let roots: Vec<PathBuf> =
+                w.roots.iter().filter(|r| r.to_string_lossy().starts_with("ssh://") || r.is_dir()).cloned().collect();
+            let active = active_root.and_then(|a| roots.iter().position(|r| *r == a));
+            (!roots.is_empty()).then_some(OpenWindow { roots, active })
+        })
+        .collect()
+}
+
 /// MRU 갱신 — 있으면 앞으로 당기고 없으면 앞에 넣는다. 상한 초과는 뒤에서 버린다
 fn note_recent(recents: &mut Vec<PathBuf>, root: &Path) {
     recents.retain(|r| r != root);
@@ -335,8 +422,10 @@ fn infos_for(state: &AppState, label: &str) -> Vec<SessionInfo> {
         .collect()
 }
 
-/// 레지스트리 변경 방송 — 창마다 자기 몫의 목록을 보낸다. front 세션 관리자가 reconcile 한다
+/// 레지스트리 변경 방송 — 창마다 자기 몫의 목록을 보낸다. front 세션 관리자가 reconcile 한다.
+/// 열린 창 목록(persisted.open)도 여기서 따라 적는다 — 레지스트리 변경 지점이 전부 이 방송을 지난다
 fn emit_sessions(app: &tauri::AppHandle, state: &AppState) {
+    sync_open(state);
     for label in app.webview_windows().keys() {
         let infos = infos_for(state, label);
         // 세션 0 개인 창은 닫히는 중(close_if_empty) — 빈 목록을 보내면 front 가 활성 세션
@@ -391,6 +480,9 @@ fn drop_window(app: &tauri::AppHandle, state: &AppState, label: &str) {
     }
     state.handoffs.lock().unwrap().remove(label);
     state.zooms.lock().unwrap().remove(label);
+    state.focus.lock().unwrap().retain(|l| l != label);
+    // 창 X = 정상 종료 — 목록에서 빠져야 다음 시작이 이 창을 되살리지 않는다 (마지막 창이면 빈 목록으로 저장된 뒤 앱 종료)
+    sync_open(state);
 }
 
 /// 창의 웹뷰 줌 레벨 — 모르는 창(부팅 전·웹)은 저장된 시작값
@@ -1382,7 +1474,7 @@ fn list_windows(app: tauri::AppHandle, state: tauri::State<AppState>) -> Vec<Win
 }
 
 /// 시작 페이지 목록 — 최근 폴더 MRU 와 고정 그룹. 매 표시마다 부른다 (소실 여부는 그때 검사)
-/// 터미널 링크 Ctrl+클릭 (ticket terminal-links): http(s) URL 을 OS 기본 브라우저로. 웹뷰 안의
+/// 터미널 링크 Ctrl+클릭 (ticket terminal-links)·URL 탭의 외부 열기: http(s) URL 을 OS 기본 브라우저로. 웹뷰 안의
 /// window.open 은 새 웹뷰 창이 되거나 막힌다. 스킴은 http(s) 만 — file:·javascript: 같은 것은 거절.
 /// 종료를 기다리지 않는다 (브라우저 프로세스가 오래 산다)
 #[tauri::command]
@@ -2030,8 +2122,6 @@ fn main() {
         // WHY: single-instance 는 맨 먼저 등록 — 두 번째 실행이 다른 초기화를 밟기 전에
         //      argv·cwd 를 첫 프로세스로 넘기고 즉시 종료해야 한다 (공식 권고).
         .plugin(tauri_plugin_single_instance::init(open_second_instance))
-        // URL 탭의 외부 브라우저 열기 (browser-tab-iframe) — front 가 plugin:opener|open_url 을 invoke
-        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             open_folder,
             open_folder_path,
@@ -2072,10 +2162,31 @@ fn main() {
         ])
         // 창 닫힘(X·close_if_empty) = 그 창의 세션만 정리 (메인 창이면 서브 창도 함께 닫는다)
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
-                let app = window.app_handle();
-                let state = app.state::<AppState>();
-                drop_window(app, &state, window.label());
+            let app = window.app_handle();
+            match event {
+                tauri::WindowEvent::Destroyed => {
+                    let state = app.state::<AppState>();
+                    drop_window(app, &state, window.label());
+                }
+                // 포커스 순서 — restoreWindows one 이 고르는 "마지막 창". 서브 창 포커스는 소속 메인의 것
+                tauri::WindowEvent::Focused(true) => {
+                    let state = app.state::<AppState>();
+                    let main = main_label(&state, window.label());
+                    let changed = {
+                        let mut f = state.focus.lock().unwrap();
+                        if f.first() == Some(&main) {
+                            false
+                        } else {
+                            f.retain(|l| l != &main);
+                            f.insert(0, main);
+                            true
+                        }
+                    };
+                    if changed {
+                        sync_open(&state);
+                    }
+                }
+                _ => {}
             }
         })
         .setup(move |app| {
@@ -2104,6 +2215,8 @@ fn main() {
                 }
             };
             let persisted = load_state(state_file.as_deref());
+            // 비정상 종료 복원 — 지난 실행의 열린 창 목록이 남아 있으면 설정대로. argv 폴더가 있으면 그것만 연다
+            let restore = if cli_root.is_some() { Vec::new() } else { restorable(&persisted.open, &restore_mode()) };
             app.manage(AppState {
                 ws_url,
                 sessions,
@@ -2111,27 +2224,46 @@ fn main() {
                 handoffs: Mutex::default(),
                 groups: Mutex::default(),
                 zooms: Mutex::default(),
+                focus: Mutex::default(),
                 next_window: AtomicUsize::new(0),
                 persisted: Mutex::new(persisted),
                 state_file,
             });
             let state = app.state::<AppState>();
-            // 초기 세션 등록 — 창을 만들기 전에 끝내야 주입 목록이 완전하다
+            // 초기 세션 등록 — 창을 만들기 전에 끝내야 주입 목록이 완전하다. 되살리는 창은 첫 것이 main,
+            // 나머지는 w1… (포커스 최근 순이라 첫 것이 마지막 포커스 창)
+            let mut labels = vec![MAIN_WINDOW.to_string()];
             {
                 let mut list = state.sessions.lock().unwrap();
                 let mut windows = state.windows.lock().unwrap();
+                let mut groups = state.groups.lock().unwrap();
                 for root in roots {
                     // plain: Windows verbatim 루트는 '/' 와이어 경로·자식 cwd 를 깨뜨린다
                     let root = superlite_common::plain(root);
                     remember_recent(&state, &root);
                     push_session(&mut list, &mut windows, MAIN_WINDOW, Some(root));
                 }
+                for (i, w) in restore.iter().enumerate() {
+                    let label = if i == 0 { MAIN_WINDOW.to_string() } else { new_window_label(&state) };
+                    for (j, root) in w.roots.iter().enumerate() {
+                        let id = push_session(&mut list, &mut windows, &label, Some(root.clone()));
+                        if w.active == Some(j) {
+                            groups.active.insert(label.clone(), id);
+                        }
+                    }
+                    if i > 0 {
+                        labels.push(label);
+                    }
+                }
                 if list.is_empty() {
                     push_session(&mut list, &mut windows, MAIN_WINDOW, None);
                 }
             }
             let zoom = state.persisted.lock().unwrap().zoom;
-            build_window(app.handle(), &state, MAIN_WINDOW, None, None, zoom)?;
+            for label in &labels {
+                build_window(app.handle(), &state, label, None, None, zoom)?;
+            }
+            sync_open(&state);
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -2237,6 +2369,24 @@ mod tests {
         std::fs::write(&path, r#"{"version":1,"workspaces":[{"root":"/a"}]}"#).unwrap();
         assert!(load_state(Some(&path)).recents.is_empty());
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn restorable_follows_mode_and_drops_missing_roots() {
+        let tmp = std::env::temp_dir();
+        let gone = tmp.join("superlite-test-no-such-dir-xyz");
+        let open = vec![
+            OpenWindow { roots: vec![gone.clone(), tmp.clone(), PathBuf::from("ssh://h/x")], active: Some(1) },
+            OpenWindow { roots: vec![tmp.clone()], active: None },
+            OpenWindow { roots: vec![gone.clone()], active: Some(0) },
+        ];
+        assert!(restorable(&open, "none").is_empty());
+        let one = restorable(&open, "one");
+        assert_eq!(one, vec![OpenWindow { roots: vec![tmp.clone(), PathBuf::from("ssh://h/x")], active: Some(0) }]);
+        let all = restorable(&open, "all");
+        assert_eq!(all.len(), 2, "root 가 하나도 안 남은 창은 뺀다");
+        assert_eq!(all[1], OpenWindow { roots: vec![tmp], active: None });
+        assert!(restorable(&open, "bogus").is_empty());
     }
 
     #[test]

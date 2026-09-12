@@ -1,0 +1,12 @@
+role: URL 열기 분기 규칙 (ticket user-settings) — host 를 내부 목록·외부 목록과 대조해 내부 URL 탭인지 외부 브라우저인지 정하는 순수 함수. 설정 저장소(settings)와 무관, Node 스모크(front/check-urlrules.mjs)로 검증. 줄 하나 = host 하나, 서브도메인 포함(google.com 이 docs.google.com 도), 포트는 URL 파싱이 뗀다. 예약어 `[IP]`(IP 주소 형태 전부)·`[DOMAIN]`(도메인 이름 형태 전부)·`*`(무엇이든). 두 목록이 다 맞으면 더 구체적인 줄이 이긴다 (정확 일치 4 > 서브도메인 3 > [IP]·[DOMAIN] 2 > * 1) — 외부 목록이 내부 `*` 의 예외 목록 노릇을 하고 그 반대도. 같은 구체성이면 내부, 어느 쪽에도 없으면 외부 (사용자 결정 2026-09-12). 빈 줄·`#` 주석 줄 무시, 대소문자 무시
+
+export type UrlTarget
+fn specificity(host, line) -> number {
+  role: 줄 하나의 구체성 — 0 은 불일치
+}
+fn best(host, lines) -> number {
+  role: 목록에서 가장 구체적인 일치
+}
+export fn urlTarget(url, internal, external) -> UrlTarget {
+  role: url 의 host 를 두 목록과 대조 — 파싱 불가한 url 은 외부
+}

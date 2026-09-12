@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { EditorGroup } from '../../model/editors';
-import { editorView, editors, indentOf } from '../../model/editors';
+import { editorView, editors, indentOf, wordWrapOf } from '../../model/editors';
 import { scm } from '../../model/scm';
 import { openQuickInput } from '../../model/workbench';
 import { EDITOR_OPTIONS, modelFor, monaco, originalModelFor, revisionModelFor } from './monaco';
@@ -22,14 +22,18 @@ let diffEditor: monaco.editor.IStandaloneDiffEditor | null = null;
 // vim 모드(ticket editor-vim-mode) — 코드 편집기만, diff 는 대상 밖. 해제는 언마운트에서
 let unbindVim: (() => void) | null = null;
 
-// 전 에디터 공통 뷰 옵션 — 자동 줄바꿈(Alt+Z)과 편집기 줌(상태바 배율 — 기본 14px 에 퍼센트 적용,
-// lineHeight 는 미지정이라 monaco 가 글꼴에 맞춰 다시 계산한다)
+// 뷰 옵션 — 자동 줄바꿈은 활성 탭 단위(탭 override 또는 언어별 설정 기본값, editors.wordWrapOf — ticket user-settings),
+// 편집기 줌은 공통(상태바 배율 — 기본 14px 에 퍼센트 적용, lineHeight 는 미지정이라 monaco 가 글꼴에 맞춰 다시 계산한다)
+const wrapOn = computed(() => {
+  const t = active.value;
+  return t !== null && (t.kind === 'file' || t.kind === 'diff') ? wordWrapOf(t) : false;
+});
 const wrapOpt = () => ({
-  wordWrap: editorView.wordWrap ? 'on' : 'off',
+  wordWrap: wrapOn.value ? 'on' : 'off',
   fontSize: Math.round((EDITOR_FONT_SIZE * editorView.zoom) / 100),
 } as const);
 // 변경을 이 그룹의 편집기 둘에 반영 — 생성 시점 값은 각 ensure 가 넣는다
-watch(() => [editorView.wordWrap, editorView.zoom], () => {
+watch(() => [wrapOn.value, editorView.zoom], () => {
   codeEditor?.updateOptions(wrapOpt());
   diffEditor?.updateOptions(wrapOpt());
 });
@@ -101,7 +105,7 @@ async function sync() {
   // 뷰어(EditorGroupView)가 편집기를 가리고 있고, diff 쪽은 이진의 gitOriginalContent 요청
   // 자체를 피해야 한다
   // hex·preview·terminal 탭도 모델 없음 — 전용 뷰가 편집기를 가린다
-  if (tab.kind === 'hex' || tab.kind === 'preview' || tab.kind === 'terminal' || tab.kind === 'folder' || tab.kind === 'url') return;
+  if (tab.kind === 'hex' || tab.kind === 'preview' || tab.kind === 'terminal' || tab.kind === 'folder' || tab.kind === 'url' || tab.kind === 'settings') return;
   if (tab.kind === 'diff' && tab.commit) {
     // 커밋 diff — 양쪽 다 git 내용 (문서 없음). 이름 변경이면 original 은 옛 경로(from)
     const ed = ensureDiffEditor();

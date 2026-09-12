@@ -4,6 +4,7 @@ import { workbench, showViewlet, sideBarShown, type ViewletId } from '../model/w
 import { scm } from '../model/scm';
 import { remoteEnabled } from '../model/remote';
 import { terminals, terminalState } from '../model/terminal';
+import { openSettings } from '../model/editors';
 
 // 터미널 뷰 — 데몬이 tmux 방식(또는 tmux 를 못 써 plain 으로 대체 — 경고 배지)일 때만. Windows
 // (unsupported)와 attach 응답 전(unknown)·mock 은 아이콘 자체가 없다 (ticket term-list-reconnect)
@@ -58,7 +59,8 @@ function isActive(id: ViewletId): boolean {
       </div>
     </div>
     <div class="actions-bottom">
-      <div class="action-item" title="Manage">
+      <!-- 사용자 설정 탭 (ticket user-settings) -->
+      <div class="action-item" title="Settings" @click="openSettings()">
         <span class="codicon codicon-settings-gear" />
       </div>
     </div>

@@ -24,7 +24,7 @@ fn write_profile(name, content) {
   role: default 는 거부 (읽기 전용)
 }
 class Profiles {
-  role: GET /tmux-conf/profiles 응답 — active·names(default 먼저, 이름순)·dir(프로필 폴더 절대 경로)·ssh_config(절대 경로) — 뒤 둘은 탭 툴팁용
+  role: GET /tmux-conf/profiles 응답 — active·names(default 먼저, 이름순)·dir(프로필 폴더 절대 경로)·ssh_config(절대 경로)·settings(settings.json 절대 경로) — 뒤 셋은 탭 툴팁용
 }
 fn list() -> Profiles
 fn update(op, name, from) -> Profiles {
@@ -37,4 +37,13 @@ fn read_ssh_config() -> content {
 }
 fn write_ssh_config(content) {
   role: ~/.ssh 가 없으면 만들고(unix 0700), 새로 만드는 config 는 0600 — ssh 가 권한을 따지는 파일
+}
+fn settings_path() -> path? {
+  role: 사용자 설정 `config_dir()/settings.json` (ticket user-settings) — Profiles.settings 로 툴팁에도 실린다
+}
+fn read_settings() -> content {
+  role: 없으면 `{}` (기본값은 프론트 코드), 그 외 읽기 실패는 오류. 내용은 해석하지 않는다 — 스키마는 프론트 model/settings 몫
+}
+fn write_settings(content) {
+  role: 통째 교체 — 설정 폴더가 없으면 만든다
 }

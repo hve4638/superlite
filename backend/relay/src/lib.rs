@@ -106,6 +106,7 @@ pub async fn serve(listener: TcpListener, roots: SessionRoots, token: Option<Str
         .route("/tmux-conf", get(tmux_conf_get).put(tmux_conf_put).options(conf_options))
         .route("/tmux-conf/profiles", get(tmux_profiles_get).post(tmux_profiles_post))
         .route("/ssh-config", get(ssh_config_get).put(ssh_config_put).options(conf_options))
+        .route("/settings", get(settings_get).put(settings_put).options(conf_options))
         .route("/version", get(version_handler))
         .route("/github/oauth", axum::routing::post(github_oauth_handler))
         .route("/git/credentials", get(git_credentials_get).post(git_credentials_post))
@@ -296,7 +297,38 @@ async fn ssh_config_put(
     })
 }
 
-/// OPTIONS /tmux-conf·/ssh-config — PUT 의 CORS preflight 응답. Tauri 앱은 프론트 오리진(tauri.localhost)과
+/// GET /settings — 이 머신의 사용자 설정 settings.json 원문 (없으면 `{}`, ticket user-settings)
+async fn settings_get(
+    State(app): State<App>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Response {
+    if !authed(&app, &query, &headers) {
+        return cors(StatusCode::FORBIDDEN.into_response());
+    }
+    cors(match conf::read_settings() {
+        Ok(text) => text.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    })
+}
+
+/// PUT /settings — 본문으로 통째 교체. 내용 해석은 프론트 몫 (relay 는 파일 IO 만)
+async fn settings_put(
+    State(app): State<App>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    if !authed(&app, &query, &headers) {
+        return cors(StatusCode::FORBIDDEN.into_response());
+    }
+    cors(match conf::write_settings(&body) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    })
+}
+
+/// OPTIONS /tmux-conf·/ssh-config·/settings — PUT 의 CORS preflight 응답. Tauri 앱은 프론트 오리진(tauri.localhost)과
 /// relay 가 달라 PUT 앞에 브라우저가 OPTIONS 를 먼저 보내는데, 종전에는 405 라 저장이 "Failed to
 /// fetch" 로 실패했다 (웹 모드는 같은 오리진이라 드러나지 않았다 — ticket relay-conn-fixes).
 /// 이 파일의 다른 끝점은 쿼리 인자·text/plain 본문으로 preflight 자체를 피하지만, 이 둘은

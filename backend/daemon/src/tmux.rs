@@ -8,7 +8,7 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use serde_json::{json, Value};
 
@@ -247,12 +247,28 @@ fn no_server(e: &str) -> bool {
 
 /// 살아 있는 세션 목록 — root 를 주면 그 워크스페이스 것만, None 이면 전부 (ENV_ROOT 없는 세션은
 /// 우리 것이 아니라 제외). [{id, name, root, attached, activity, created, command}]
+///
+/// 걸러진 세션의 사유(필드 깨짐·ENV_ROOT 없음·root 불일치)와 요약 한 줄을 daemon.log 에 남긴다 — 3초
+/// 폴링이라 진단 블록이 직전과 같으면 찍지 않는다 (상태가 바뀔 때만). ticket term-list-diag-logging
 pub(crate) async fn list(bin: &Path, root: Option<&Path>) -> Result<Vec<Value>, String> {
+    static LAST: Mutex<String> = Mutex::new(String::new());
+    let (items, diag) = list_diag(bin, root).await?;
+    let block = diag.join("\n");
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    if *last != block {
+        eprintln!("{block}");
+        *last = block;
+    }
+    Ok(items)
+}
+
+/// list 본체 — 진단 줄을 stderr 대신 돌려준다 (테스트가 사유를 검사한다). 마지막 줄이 요약
+async fn list_diag(bin: &Path, root: Option<&Path>) -> Result<(Vec<Value>, Vec<String>), String> {
     const FMT: &str = "#{session_id}\t#{session_name}\t#{session_attached}\t#{session_activity}\t#{session_created}\t#{pane_current_command}";
     let o = async_command(bin)?.args(["ls", "-F", FMT]).output().await.map_err(err)?;
     let text = match out_text(o) {
         Ok(t) => t,
-        Err(e) if no_server(&e) => return Ok(Vec::new()),
+        Err(e) if no_server(&e) => return Ok((Vec::new(), vec!["superlite-daemon: tmux ls: 서버 없음 → 0개".into()])),
         Err(e) => {
             // daemon.log 에 남긴다 — 프론트는 실패를 빈 목록으로 오인하기 쉽다 (ticket term-layout-restore-flaky)
             eprintln!("superlite-daemon: tmux ls 실패: {e}");
@@ -261,9 +277,16 @@ pub(crate) async fn list(bin: &Path, root: Option<&Path>) -> Result<Vec<Value>, 
     };
     let want = root.map(|r| r.to_string_lossy().into_owned());
     let mut out = Vec::new();
+    let mut diag = Vec::new();
+    let (mut lines, mut broken, mut no_root, mut other_root) = (0usize, 0usize, 0usize, 0usize);
     for line in text.lines() {
+        lines += 1;
         let f: Vec<&str> = line.split('\t').collect();
         if f.len() < 6 {
+            // C 로케일 tmux 는 탭을 _ 로 찍어 필드가 하나로 뭉친다 — 원문 앞부분을 남겨 로케일 문제를 가려낸다
+            broken += 1;
+            let head: String = line.chars().take(80).collect();
+            diag.push(format!("superlite-daemon: tmux ls 줄 건너뜀 (필드 {}개 < 6): {head:?}", f.len()));
             continue;
         }
         let env = async_command(bin)?.args(["show-environment", "-t", f[0], ENV_ROOT]).output().await.map_err(err)?;
@@ -277,8 +300,14 @@ pub(crate) async fn list(bin: &Path, root: Option<&Path>) -> Result<Vec<Value>, 
                 None
             }
         };
-        let Some(r) = r else { continue };
-        if want.as_deref().is_some_and(|w| w != r) {
+        let Some(r) = r else {
+            no_root += 1;
+            diag.push(format!("superlite-daemon: tmux 세션 {} ({}) 제외: {ENV_ROOT} 없음", f[0], f[1]));
+            continue;
+        };
+        if let Some(w) = want.as_deref().filter(|w| *w != r) {
+            other_root += 1;
+            diag.push(format!("superlite-daemon: tmux 세션 {} ({}) 제외: root 불일치 want={w:?} got={r:?}", f[0], f[1]));
             continue;
         }
         out.push(json!({
@@ -289,7 +318,11 @@ pub(crate) async fn list(bin: &Path, root: Option<&Path>) -> Result<Vec<Value>, 
             "command": f[5],
         }));
     }
-    Ok(out)
+    diag.push(format!(
+        "superlite-daemon: tmux ls: {lines}줄 → {}개 반환 (필드 깨짐 {broken}, {ENV_ROOT} 없음 {no_root}, root 불일치 {other_root}; want={want:?})",
+        out.len()
+    ));
+    Ok((out, diag))
 }
 
 /// 특정 클라이언트(그 pty tty)를 clean detach 하는 인자 — tmux 세션·pane 은 산다. 탭 닫기
@@ -382,5 +415,67 @@ mod tests {
         assert_eq!(locale_fallback_for(false, Some("ko_KR.UTF-8")), None, "이미 UTF-8 이면 존중");
         assert_eq!(locale_fallback_for(false, Some("en_US.utf8")), None, "utf8 표기도 UTF-8");
         assert_eq!(locale_fallback_for(true, None), None, "LC_ALL 이 있으면 존중");
+    }
+
+    /// 걸러진 사유가 진단 줄에 남는다 — 가짜 tmux 스크립트로 세 갈래(C 로케일식 필드 뭉침·ENV_ROOT 없음·
+    /// root 불일치)를 한 번에 재현한다 (ticket term-list-diag-logging)
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn list_diag_names_each_filter_reason() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("superlite-list-diag-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("tmux");
+        // ls: 정상 3줄 + C 로케일처럼 탭이 _ 로 뭉친 1줄. show-environment: $1 은 변수 없음, $2 는 다른 root
+        std::fs::write(
+            &bin,
+            "#!/bin/sh\nfor a in \"$@\"; do case \"$a\" in ls) printf '$0\\tmine-1\\t0\\t1\\t1\\tbash\\n$1\\tstray\\t0\\t1\\t1\\tsh\\n$2\\tother-1\\t0\\t1\\t1\\tvim\\n$3_한글-1_0_1_1_bash\\n'; exit 0;; \
+show-environment) shift; while [ \"$1\" != -t ]; do shift; done; case \"$2\" in '$0') echo 'SUPERLITE_TMUX_WORKSPACE_PATH=/ws/mine'; exit 0;; '$2') echo 'SUPERLITE_TMUX_WORKSPACE_PATH=/ws/other'; exit 0;; *) echo 'unknown variable' >&2; exit 1;; esac;; esac; done\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let (items, diag) = list_diag(&bin, Some(Path::new("/ws/mine"))).await.unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(items.len(), 1, "{diag:?}");
+        assert_eq!(items[0]["id"], "$0");
+        let joined = diag.join("\n");
+        assert!(joined.contains("필드 1개 < 6") && joined.contains("$3_한글-1_0_1_1_bash"), "깨진 줄 원문: {joined}");
+        assert!(joined.contains("$1 (stray) 제외: SUPERLITE_TMUX_WORKSPACE_PATH 없음"), "ENV_ROOT 없음: {joined}");
+        assert!(joined.contains("$2 (other-1) 제외: root 불일치 want=\"/ws/mine\" got=\"/ws/other\""), "root 불일치: {joined}");
+        assert!(joined.ends_with("4줄 → 1개 반환 (필드 깨짐 1, SUPERLITE_TMUX_WORKSPACE_PATH 없음 1, root 불일치 1; want=Some(\"/ws/mine\"))"), "요약: {joined}");
+    }
+
+    /// 진짜 tmux 를 격리 소켓으로 띄워 ENV_ROOT 없는 세션·다른 root 세션이 사유와 함께 걸러지는지 확인.
+    /// tmux 가 없으면 건너뛴다
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn list_diag_with_real_tmux_isolated_socket() {
+        let Ok(out) = std::process::Command::new("tmux").arg("-V").output() else { return };
+        if !out.status.success() {
+            return;
+        }
+        let bin = Path::new("tmux");
+        let sock = std::env::temp_dir().join(format!("superlite-list-diag-{}.sock", std::process::id()));
+        std::env::set_var("SUPERLITE_TMUX_SOCK", &sock);
+        let run = |args: &[&str]| {
+            let o = command(bin).unwrap().args(args).output().unwrap();
+            assert!(o.status.success(), "tmux {args:?}: {}", String::from_utf8_lossy(&o.stderr));
+        };
+        run(&["new-session", "-d", "-s", "noroot"]);
+        run(&["new-session", "-d", "-s", "other", "-e", &format!("{ENV_ROOT}=/ws/other")]);
+        run(&["new-session", "-d", "-s", "mine", "-e", &format!("{ENV_ROOT}=/ws/mine")]);
+        let res = list_diag(bin, Some(Path::new("/ws/mine"))).await;
+        let all = list_diag(bin, None).await;
+        let _ = command(bin).unwrap().arg("kill-server").output();
+        std::env::remove_var("SUPERLITE_TMUX_SOCK");
+        let (items, diag) = res.unwrap();
+        let joined = diag.join("\n");
+        assert_eq!(items.len(), 1, "{joined}");
+        assert_eq!(items[0]["name"], "mine");
+        assert!(joined.contains("(noroot) 제외: SUPERLITE_TMUX_WORKSPACE_PATH 없음"), "{joined}");
+        assert!(joined.contains("(other) 제외: root 불일치 want=\"/ws/mine\" got=\"/ws/other\""), "{joined}");
+        assert!(joined.contains("3줄 → 1개 반환 (필드 깨짐 0, SUPERLITE_TMUX_WORKSPACE_PATH 없음 1, root 불일치 1"), "{joined}");
+        let (items, diag) = all.unwrap();
+        assert_eq!(items.len(), 2, "root None 은 ENV_ROOT 있는 것 전부: {diag:?}");
     }
 }

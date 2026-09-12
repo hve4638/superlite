@@ -3,16 +3,20 @@
 // 이 경로를 만나면 데몬 readFile/writeFile 대신 여기의 readConfig/writeConfig(relay HTTP)를 탄다.
 // 원격 세션에서 열어도 원격 머신이 아니라 클라이언트 머신의 파일이다 — 탭 툴팁이 실제 경로를 보인다.
 // tmux 프로필: 목록·active 는 relay 가 원장(`config_dir()/tmux/`), 여기는 사이드바 폼용 캐시.
+// 사용자 설정 원문 탭 `superlite:/settings.json` 도 같은 방식 (relay /settings, ticket user-settings) — 저장하면
+// model/settings 원장을 갱신하고, 설정 폼이 저장하면 열린 원문 탭을 따라 맞춘다.
 import { reactive } from '@vue/reactivity';
 import { ctx } from './ctx';
 import { backendApiUrl } from './host';
 import { allSessionCtxs } from './sessions';
 import { refreshHosts } from './remote';
 import { errText, notify } from './notifications';
+import { applySettingsText, setSettingsSaved } from './settings';
 
 const PREFIX = 'superlite:/';
 const TMUX_PREFIX = `${PREFIX}tmux/`;
 export const SSH_CONFIG_PATH = `${PREFIX}ssh/config`;
+export const SETTINGS_PATH = `${PREFIX}settings.json`;
 
 export function tmuxProfilePath(name: string): string {
   return `${TMUX_PREFIX}${name}.conf`;
@@ -25,7 +29,7 @@ export function tmuxProfileOf(path: string): string | null {
   return path.startsWith(TMUX_PREFIX) && path.endsWith('.conf') ? path.slice(TMUX_PREFIX.length, -'.conf'.length) : null;
 }
 
-/** 탭 라벨 — "tmux.conf (default)" · "ssh config" */
+/** 탭 라벨 — "tmux.conf (default)" · "ssh config" · "settings.json" */
 export function configLabel(path: string): string {
   const prof = tmuxProfileOf(path);
   if (prof !== null) return `tmux.conf (${prof})`;
@@ -43,7 +47,7 @@ export function configTooltip(path: string): string {
   if (prof === 'default') return 'Built-in default tmux.conf (read-only) — new profiles start from this';
   const real = prof !== null
     ? tmuxProfiles.dir && `${tmuxProfiles.dir}/${prof}.conf`
-    : path === SSH_CONFIG_PATH ? tmuxProfiles.sshConfig : '';
+    : path === SSH_CONFIG_PATH ? tmuxProfiles.sshConfig : path === SETTINGS_PATH ? tmuxProfiles.settings : '';
   return `This machine (not the remote): ${real || configLabel(path)}`;
 }
 
@@ -54,7 +58,8 @@ export function configEnabled(): boolean {
 
 function urlOf(path: string): string {
   const prof = tmuxProfileOf(path);
-  const url = prof !== null ? backendApiUrl('/tmux-conf', { profile: prof }) : backendApiUrl('/ssh-config');
+  const url = prof !== null ? backendApiUrl('/tmux-conf', { profile: prof })
+    : path === SETTINGS_PATH ? backendApiUrl('/settings') : backendApiUrl('/ssh-config');
   if (url === null) throw new Error('backend config files are not available here');
   return url;
 }
@@ -65,17 +70,25 @@ export async function readConfig(path: string): Promise<string> {
   return res.text();
 }
 
-/** 저장 뒤 후속: active tmux 프로필이면 접속 중인 모든 데몬에 즉시 적용, ssh config 면 호스트 목록 갱신 */
+/** 저장 뒤 후속: active tmux 프로필이면 접속 중인 모든 데몬에 즉시 적용, ssh config 면 호스트 목록 갱신,
+ *  settings.json 이면 설정 원장 갱신 */
 export async function writeConfig(path: string, content: string): Promise<void> {
   const res = await fetch(urlOf(path), { method: 'PUT', body: content });
   if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
   const prof = tmuxProfileOf(path);
-  if (prof === null) {
+  if (path === SETTINGS_PATH) {
+    applySettingsText(content);
+  } else if (prof === null) {
     void refreshHosts();
   } else if (prof === tmuxProfiles.active) {
     await applyTmuxConf(content);
   }
 }
+
+// 설정 폼이 저장하면 열린 원문 탭(어느 세션이든)을 새 원문으로 — 미저장 편집 중인 탭은 건드리지 않는다 (reloadDocFromDisk 규칙)
+setSettingsSaved((text) => {
+  for (const c of allSessionCtxs()) c.editors.reloadDocFromDisk(SETTINGS_PATH, { content: text, etag: '' });
+});
 
 // ---- tmux 프로필 폼 (사이드바 터미널 뷰)
 
@@ -85,13 +98,16 @@ export const tmuxProfiles = reactive({
   /** 프로필 폴더의 실제 경로 — 툴팁용. 목록을 읽기 전엔 '' */
   dir: '',
   sshConfig: '',
+  /** settings.json 실제 경로 — 툴팁용 */
+  settings: '',
 });
 
-function takeList(l: { active: string; names: string[]; dir: string; sshConfig: string }): void {
+function takeList(l: { active: string; names: string[]; dir: string; sshConfig: string; settings: string }): void {
   tmuxProfiles.active = l.active;
   tmuxProfiles.names = l.names;
   tmuxProfiles.dir = l.dir;
   tmuxProfiles.sshConfig = l.sshConfig;
+  tmuxProfiles.settings = l.settings;
 }
 
 export async function refreshTmuxProfiles(): Promise<void> {
@@ -152,4 +168,10 @@ export function openSshConfig(): void {
   if (!configEnabled()) return notify('warning', 'SSH config is not editable in this window');
   void ensureProfiles();
   void ctx().editors.openFile(SSH_CONFIG_PATH);
+}
+/** "Preferences: Open Settings (JSON)" — 사용자 설정 원문 탭 (폼은 editors.openSettings) */
+export function openSettingsJson(): void {
+  if (!configEnabled()) return notify('warning', 'Settings are not editable in this window');
+  void ensureProfiles();
+  void ctx().editors.openFile(SETTINGS_PATH);
 }
