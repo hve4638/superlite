@@ -16,11 +16,15 @@ export interface TerminalInstance {
   tmux?: { id: string; name: string };
 }
 
-/** 창 이동 핸드오프의 터미널 한 개 — term 은 백엔드(데몬) 쪽 id, buffer 는 xterm 직렬화 */
+/** 창 이동 핸드오프의 터미널 한 개 — term 은 백엔드(데몬) 쪽 id, buffer 는 xterm 직렬화.
+ *  tmux 도 싣는다 — termTmux 는 spawn 때 한 번만 오고 adopt 는 다시 보내지 않아, 받는 창의 인스턴스가
+ *  tmux 를 잃으면 워크스페이스 저장이 그 탭을 기록 없이 걷어내 재실행 때 빈 자리만 남았다
+ *  (ticket term-restore-missing-again) */
 export interface TerminalSnapshot {
   term: number;
   title: string;
   buffer: string;
+  tmux?: { id: string; name: string };
 }
 
 // xterm 버퍼 직렬화 seam — terminalHost 가 등록한다 (model 은 xterm 을 모른다).
@@ -111,9 +115,10 @@ export function createTerminals(backend: ThinBackend, editorsM: ReturnType<typeo
   }
 
   /** 목록 등록 + 탭 열기 — 생성과 인수(adopt)가 공유한다 */
-  function register(session: TerminalSession, title: string, restoreBuffer?: string, at?: TerminalTabAt): TerminalInstance {
+  function register(session: TerminalSession, title: string, restoreBuffer?: string, at?: TerminalTabAt, tmux?: TerminalInstance['tmux']): TerminalInstance {
     const inst: TerminalInstance = { id: nextId++, title, session };
     if (restoreBuffer) inst.restoreBuffer = restoreBuffer;
+    if (tmux) inst.tmux = tmux;
     // tmux 세션 정보(와이어 v17) — 탭 제목이 세션 이름이 되고 사이드바가 "열려 있음" 을 대조한다.
     // 실패(null)면 이 터미널은 plain 으로 떴다 — 배지에 사유를 올린다 (데몬 방식은 tmux 인 채로)
     session.onTmux?.((info, error) => {
@@ -146,7 +151,7 @@ export function createTerminals(backend: ThinBackend, editorsM: ReturnType<typeo
   }
 
   function snapshotOf(t: TerminalInstance): TerminalSnapshot {
-    return { term: t.session.id, title: t.title, buffer: serializeBuffer?.(t.id) ?? '' };
+    return { term: t.session.id, title: t.title, buffer: serializeBuffer?.(t.id) ?? '', ...(t.tmux ? { tmux: t.tmux } : {}) };
   }
 
   /** 창 이동 핸드오프용 스냅샷 — 데몬 쪽 term id·제목·xterm 버퍼. id 를 주면 그 하나만 */
@@ -179,7 +184,7 @@ export function createTerminals(backend: ThinBackend, editorsM: ReturnType<typeo
     if (!backend.adoptTerminal) return;
     for (const s of snaps) {
       const session = backend.adoptTerminal(from ? { from: { session: from, term: s.term } } : { term: s.term });
-      register(session, s.title, s.buffer, at);
+      register(session, s.title, s.buffer, at, s.tmux);
     }
   }
 

@@ -1,0 +1,5 @@
+import { tauri } from './tauri'
+role: native 부팅 정보 — 앱이면 모듈 평가 시점에 invoke('boot_info') 한 번으로 relay /ws 주소·이 창의 부팅 세션 목록·Open Folder 시작 경로·창 label·소속 메인(owner)·묶음 활성 세션(active)을 받는다 (app/src/main boot_info). 종전 initialization_script 전역(__SUPERLITE_*)의 대체 — Windows(WebView2)는 초기화 스크립트를 iframe 서브프레임에도 주입해 URL 탭에 연 자기 웹 프론트까지 앱 모드로 부팅했다 (ticket app-boot-globals-iframe-leak). IPC 는 앱 오리진 최상위 프레임에서만 성립하고 웹·서브프레임·거부는 null (웹 모드). 최상위 await — 부팅 세션 생성이 UI 모듈 평가보다 앞서야 하는 규약(main.ts import 순서)을 지키려고 import 그래프 전체가 응답을 기다린다. host(조립)·window(label·owner·active)가 읽는다
+
+export type BootInfo
+export val boot

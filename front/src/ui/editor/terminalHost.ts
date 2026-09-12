@@ -28,6 +28,9 @@ interface Binding {
   pending: [string, (() => void) | undefined][];
 }
 
+/** 좌표가 NaN 인 xterm 마우스 보고 — `\e[<0;NaN;NaNm`(SGR)·`\e[0;NaN;NaNM`(urxvt). 숫자·NaN·세미콜론만으로 된 본문 뒤 m/M */
+const NAN_MOUSE_REPORT = /^\x1b\[<?[\d;]*NaN[\d;NaN]*[mM]$/;
+
 const bindings = new Map<number, Binding>();
 
 // 지금 호버 중인 링크 (페이지에 하나) — Ctrl 을 누르고 떼는 동안 밑줄을 따라 켜고 끈다 (open 참조).
@@ -275,6 +278,15 @@ function open(inst: TerminalInstance, b: Binding): void {
                 leave: () => {
                   if (hoveredLink === l) hoveredLink = null;
                 },
+                // WHY: activate 를 다음 매크로태스크로 미룬다 — xterm 은 mouseup 처리 중에 activate 를 부르고 이어서
+                //      마우스 보고(SGR \e[<b;x;ym) 좌표를 element 의 computed padding 으로 계산한다. activate 가 탭을
+                //      동기로 열어 터미널 뷰가 숨으면(v-show) padding 이 빈 문자열 → parseInt NaN 이 되어 셸에
+                //      `NaN;NaNm` 쓰레기가 들어간다 (2026-09-12 경로 링크 스모크 "bash: NaN: command not found",
+                //      같은 날 URL 내부 탭에서 'aN;NaNm' 사용자 보고 — ticket term-url-link-nan-garbage). 여기 한 곳에
+                //      두어 URL·경로·앞으로 생길 링크 종류가 같은 함정을 밟지 않게 한다
+                activate: (e, text) => {
+                  setTimeout(() => link.activate(e, text), 0);
+                },
               };
               return l;
             }),
@@ -390,7 +402,13 @@ function open(inst: TerminalInstance, b: Binding): void {
   }
   for (const [chunk, done] of b.pending) term.write(chunk, done);
   b.pending.length = 0;
-  term.onData((d) => inst.session.write(d));
+  // WHY: 좌표가 NaN 인 마우스 보고(SGR/urxvt `\e[<0;NaN;NaNm`)는 버린다 — 위 activate 지연이 알려진 경로를 막지만,
+  //      뷰가 숨겨진 채 xterm 이 보고를 만드는 다른 경로가 생겨도 셸에 쓰레기가 들어가지 않게 한다. 형태를 마우스 보고에
+  //      한정해 붙여넣기(\e[200~…) 본문의 "NaN" 은 건드리지 않는다
+  term.onData((d) => {
+    if (NAN_MOUSE_REPORT.test(d)) return;
+    inst.session.write(d);
+  });
   term.onResize(({ cols, rows }) => inst.session.resize(cols, rows));
   b.term = term;
   b.fit = fit;

@@ -2,6 +2,7 @@ import { EmptyBackend } from '../backend/empty';
 import { MockBackend } from '../backend/mock';
 import { WsBackend } from '../backend/ws';
 import type { ThinBackend } from '../backend/types';
+import { boot } from './boot';
 import { ctx, viewOf } from './ctx';
 import { daemonClean } from './daemon';
 import { credential, type CredentialRequest } from './gitauth';
@@ -39,16 +40,15 @@ const params = new URLSearchParams(location.search);
 const tkn = params.get('tkn');
 /** 웹 실백엔드 모드 — ?mock 이 없으면 같은 오리진 /ws 에 붙는다 (?ws 는 이제 무해한 잉여) */
 const webBackend = !params.has('mock');
-// Tauri 앱은 자산 로드라 location 이 relay 가 아니다 — 주입된 endpoint 가 최우선.
-// 세션 목록도 함께 주입된다 — native 레지스트리가 발급한 id 만 relay 가 허용한다
-const injected = (window as { __SUPERLITE_WS__?: string }).__SUPERLITE_WS__;
-const injectedSessions = (window as { __SUPERLITE_SESSIONS__?: SessionTab[] }).__SUPERLITE_SESSIONS__;
+// Tauri 앱은 자산 로드라 location 이 relay 가 아니다 — native 부팅 정보(boot_info)의 endpoint 가 최우선.
+// 세션 목록도 함께 온다 — native 레지스트리가 발급한 id 만 relay 가 허용한다
+const injected = boot?.ws;
+const injectedSessions: SessionTab[] | undefined = boot?.sessions;
 
 /** 'Open Folder' 경로 퀵인풋의 시작 경로 (열린 워크스페이스가 없는 빈 세션에서 쓴다).
- *  native 가 OS 에 맞게 주입한다 — Windows 는 드라이브 루트(예: 'C:/'), 그 외 '/'.
- *  주입이 없으면(웹) '/' — 웹은 보통 부팅 세션 root 에서 시작해 이 값을 안 쓴다. */
-export const openRootDefault: string =
-  (window as { __SUPERLITE_OPEN_ROOT__?: string }).__SUPERLITE_OPEN_ROOT__ ?? '/';
+ *  native 가 OS 에 맞게 준다 — Windows 는 드라이브 루트(예: 'C:/'), 그 외 '/'.
+ *  부팅 정보가 없으면(웹) '/' — 웹은 보통 부팅 세션 root 에서 시작해 이 값을 안 쓴다. */
+export const openRootDefault: string = boot?.openRoot ?? '/';
 
 /** 웹 /ws 주소 — 세션(탭)마다 ?folder= 로 root 를 지정한다 (빈 root 는 서버 기본 root) */
 function webWsUrl(folder: string): string {
@@ -72,8 +72,8 @@ if (injected) {
   configureSessions({ kind: 'app', backendFor: appBackendOf, onRequest: handleRequest });
   // 임베드 nvim (편집기 vim 모드) — relay 의 /nvim, /ws 와 같은 주소·토큰
   configureNvim(injected.replace(/\/ws(\?|$)/, '/nvim$1'));
-  // 부팅 세션들 — native 가 initialization_script 로 목록을 주입한다 (복원이면 여럿).
-  // 마지막 탭이 활성이 되고, 묶음의 활성 세션이 주입됐으면(서브 창) 그 탭으로
+  // 부팅 세션들 — native 부팅 정보의 목록 (복원이면 여럿). 마지막 탭이 활성이 되고, 묶음의
+  // 활성 세션이 있으면(서브 창·새로고침) 그 탭으로
   for (const t of injectedSessions ?? []) bootSession(t, appBackendOf(t));
   if (bootActiveSession !== null) activateSession(bootActiveSession, false);
 } else if (webBackend) {

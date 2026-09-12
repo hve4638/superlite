@@ -1,4 +1,5 @@
 import { reactive } from '@vue/reactivity';
+import { boot } from './boot';
 import { tauri } from './tauri';
 import { flushAllWorkspaces } from './workspaceState';
 import { errText, notify } from './notifications';
@@ -11,22 +12,21 @@ const current = tauri?.window.getCurrentWindow();
 
 export const inApp = current !== undefined;
 
-/** 이 창의 Tauri label — native 가 주입한다 (창 간 탭 이동에서 출처·대상을 가리키는 주소).
+/** 이 창의 Tauri label — native 부팅 정보(boot_info)에서 (창 간 탭 이동에서 출처·대상을 가리키는 주소).
  *  웹·mock 은 null (창 개념 없음) */
-export const windowLabel: string | null =
-  (window as { __SUPERLITE_WINDOW__?: string }).__SUPERLITE_WINDOW__ ?? current?.label ?? null;
+export const windowLabel: string | null = boot?.window ?? current?.label ?? null;
 
-/** 서브 창의 소속 메인 창 label — native 주입 __SUPERLITE_OWNER__ (에디터·터미널 탭 분리로 생긴 창만).
+/** 서브 창의 소속 메인 창 label — 부팅 정보 owner (에디터·터미널 탭 분리로 생긴 창만).
  *  메인 창(첫 창·세션 탭 분리로 생긴 창)·웹·mock 은 null */
-export const ownerWindow: string | null = (window as { __SUPERLITE_OWNER__?: string | null }).__SUPERLITE_OWNER__ ?? null;
+export const ownerWindow: string | null = boot?.owner ?? null;
 
 /** 서브 창인가 — 소속 메인이 있다. 셸은 사이드바·액티비티바를 기본 숨기고, 세션 탭 스트립은 메인 것을
  *  비추며 전환만 된다 (decision/workspace-session-tabs.md 2026-09-08 개정, ticket window-secondary-no-sidebar) */
 export const subWindow: boolean = ownerWindow !== null;
 
-/** 부팅 시점의 활성 세션 (메인 창 묶음 공유값) — native 주입, 서브 창이 메인의 활성 탭으로 시작하게 */
-export const bootActiveSession: string | null =
-  (window as { __SUPERLITE_ACTIVE__?: string | null }).__SUPERLITE_ACTIVE__ ?? null;
+/** 부팅 시점의 활성 세션 (메인 창 묶음 공유값) — 부팅 정보 active. 서브 창이 메인의 활성 탭으로 시작하고,
+ *  창 새로고침이 리로드 전 활성 탭을 되찾는다 (페이지 로드마다 native 에 묻는 값이라 굳지 않는다) */
+export const bootActiveSession: string | null = boot?.active ?? null;
 
 export const appWindow = reactive({ maximized: false });
 

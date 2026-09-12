@@ -258,7 +258,7 @@ function removeLocal(id: string): void {
 }
 
 /** 부팅 세션 등록 (host.ts 조립 시점) — 마지막으로 등록된 것이 활성이 된다. 동기화 없이 — 서브 창의
- *  부팅이 메인 묶음의 활성 세션을 덮으면 안 된다 (주입값 bootActiveSession 이 뒤에 적용된다) */
+ *  부팅이 메인 묶음의 활성 세션을 덮으면 안 된다 (부팅 정보의 bootActiveSession 이 뒤에 적용된다) */
 export function bootSession(tab: SessionTab, backend: ThinBackend): void {
   addLocal(tab, backend);
   activateSession(tab.id, false);
@@ -493,14 +493,11 @@ function replaceLocal(tab: SessionTab): void {
 
 export function initSessions(): void {
   if (env.kind !== 'app' || !tauri) return;
-  void Promise.all([tauri.core.invoke('list_sessions'), tauri.core.invoke('active_session')]).then(([r, active]) => {
-    // 창 새로고침이면 native 가 리로드 전 활성 세션을 안다 — 주입값(bootActiveSession·부팅 목록)은 창 생성
-    // 시점에 굳어 reload 에도 그대로라, 그 뒤 나타난 탭의 "새 탭 = 활성" 이 마지막 탭을 활성으로 만들었다.
-    // 초기 동기화는 native 의 활성으로 끝맺는다 (ticket reload-session-focus). 아직 없으면(새 창) 종전대로
-    const list = r as SessionTab[];
-    const known = typeof active === 'string' && list.some((t) => t.id === active);
-    reconcile(list, !known);
-    if (known) activateSession(active, false);
+  void tauri.core.invoke('list_sessions').then((r) => {
+    // 부팅 정보(boot_info)와 리스너 등록 사이에 바뀐 목록을 따라잡는다. 활성 세션은 부팅 정보가 페이지 로드마다
+    // native 의 최신값을 주므로(창 새로고침 포함, ticket reload-session-focus) 여기서 새 탭을 활성으로 만들지
+    // 않는다 — 종전엔 창 생성 시점에 굳은 주입값 탓에 active_session 을 따로 물었다
+    reconcile(r as SessionTab[], false);
     // 분리로 생긴 새 창 — 부팅 전에 적재된 핸드오프를 가져간다
     takeHandoffs();
   });

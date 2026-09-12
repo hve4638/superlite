@@ -8,7 +8,7 @@ import { showViewlet } from '../../model/workbench';
 
 // 터미널 경로 링크 (ticket terminal-path-links) — 호버한 줄의 경로 후보(terminalLinkParsing)를 그 터미널의
 // cwd(데몬 termCwd, 와이어 v21) 기준으로 절대 경로로 풀고 데몬 stat(dir:true) 으로 실존하는 것만 링크로
-// 만든다. 조작은 URL 링크와 같다 — Ctrl 을 누른 동안만 밑줄, 커서 모양 불변, Ctrl+클릭 판정은 terminalHost 의 linkTerm 래퍼가 감싼다.
+// 만든다. 상대 경로가 cwd 기준으로 없으면 워크스페이스 root 기준으로 한 번 더 찾는다 (cwd 기준이 우선). 조작은 URL 링크와 같다 — Ctrl 을 누른 동안만 밑줄, 커서 모양 불변, Ctrl+클릭 판정은 terminalHost 의 linkTerm 래퍼가 감싼다.
 // 파일은 편집기(줄 이동 포함), 워크스페이스 안 디렉토리는 탐색기 reveal + 트리 포커스, 밖 디렉토리는 폴더 탭.
 // 프롬프트 안의 경로(`user@host:~/proj$`)도 제외하지 않는다 (사용자 결정 2026-09-12 — 셸 통합 후속)
 
@@ -147,13 +147,21 @@ export function registerPathLinks(linkTerm: Terminal, term: Terminal, inst: Term
     for (const p of parsed) {
       if (links.length >= MAX_LINKS_PER_LINE) break;
       let hit: { r: Resolved; kind: 'file' | 'directory' } | null = null;
-      for (const v of variants(p)) {
-        const abs = resolve(v.path, os, cwd, home);
-        if (abs === null) continue;
-        const st = await ctx.backend.stat(abs, { dir: true }).catch(() => null);
-        if (!st) continue;
-        hit = { r: { parsed: v, abs }, kind: st.kind ?? 'file' };
-        break;
+      // cwd 기준 변형이 전부 없을 때만 워크스페이스 root 기준으로 한 번 더 (ticket term-path-links-ws-root) —
+      // 하위 폴더로 cd 한 터미널에 찍힌 root 기준 `src/foo.ts:12` 를 연다. 이미 stat 한 절대 경로(절대·`~`
+      // 후보, cwd 가 root 인 경우)는 다시 묻지 않는다.
+      const tried = new Set<string>();
+      for (const base of [cwd, root]) {
+        for (const v of variants(p)) {
+          const abs = resolve(v.path, os, base, home);
+          if (abs === null || tried.has(abs)) continue;
+          tried.add(abs);
+          const st = await ctx.backend.stat(abs, { dir: true }).catch(() => null);
+          if (!st) continue;
+          hit = { r: { parsed: v, abs }, kind: st.kind ?? 'file' };
+          break;
+        }
+        if (hit) break;
       }
       if (!hit) continue;
       const { r, kind } = hit;
@@ -164,11 +172,9 @@ export function registerPathLinks(linkTerm: Terminal, term: Terminal, inst: Term
       links.push({
         range: { start: { x: startCell.x + 1, y: startCell.y + 1 }, end: { x: endCell.x + 1, y: endCell.y + 1 } },
         text: r.parsed.text,
+        // mouseup 중 동기 탭 열기 → NaN 마우스 보고 문제는 linkTerm 래퍼가 activate 를 미뤄 막는다 (terminalHost.ts)
         activate: (e) => {
-          // WHY: 다음 매크로태스크로 미룬다 — activate 는 xterm 의 mouseup 처리 중에 불리는데, 폴더 탭 열기가
-          //      동기라 그 자리에서 터미널 뷰가 숨으면 xterm 이 이어서 계산하는 마우스 보고 좌표가 NaN 이 되어
-          //      셸에 `NaNm` 쓰레기가 들어간다 (2026-09-12 스모크 실측: "bash: NaN: command not found")
-          if (e.ctrlKey || e.metaKey) setTimeout(() => void open(ctx, root, r.abs, kind, r.parsed.row), 0);
+          if (e.ctrlKey || e.metaKey) void open(ctx, root, r.abs, kind, r.parsed.row);
         },
       });
     }

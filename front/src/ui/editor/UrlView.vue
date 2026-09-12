@@ -2,8 +2,8 @@
 // URL 탭 (ticket browser-tab-iframe) — 최소 브라우저 바(뒤로·앞으로·새로고침·주소칸·외부 열기) + sandbox iframe.
 // 부모(EditorGroupView)가 v-show 로 붙여 두므로 탭을 오가도 페이지가 다시 로드되지 않는다.
 //
-// 보안: 앱 origin 과 같은 URL 은 거부한다 — allow-same-origin 이 붙은 같은 origin 프레임은 부모 window 의
-// 데몬 토큰(__SUPERLITE_WS__)에 닿는다. cross-origin 프레임에는 allow-same-origin 을 줘도 부모에 못 닿고
+// 보안: 앱 origin 과 같은 URL 은 거부한다 — allow-same-origin 이 붙은 같은 origin 프레임은 부모 window 와
+// Tauri IPC(boot_info 의 데몬 토큰)에 닿는다. cross-origin 프레임에는 allow-same-origin 을 줘도 부모에 못 닿고
 // (조사 실측 SecurityError), 빼면 dev 앱의 localStorage·cookie 가 깨지므로 준다. 리다이렉트로 앱 origin 에
 // 도달하는 우회는 load 때 contentWindow.location 접근이 성공하는 성질로 잡아 프레임을 내린다.
 // 스킴은 http(s) 만 — javascript: 프레임은 부모 origin 을 상속한다. allow-top-navigation 계열은 주지 않아

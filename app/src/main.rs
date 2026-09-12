@@ -367,7 +367,7 @@ fn remember_recent(state: &AppState, root: &Path) {
     save_state(state.state_file.as_deref(), &p);
 }
 
-/// 세션 탭 표시용 사영 — 부팅 주입(__SUPERLITE_SESSIONS__)·list_sessions 응답·
+/// 세션 탭 표시용 사영 — boot_info 의 sessions·list_sessions 응답·
 /// sessions-changed 이벤트 payload 가 전부 이 모양이다
 #[derive(Clone, serde::Serialize)]
 struct SessionInfo {
@@ -542,7 +542,7 @@ fn new_window_label(state: &AppState) -> String {
 
 /// 'Open Folder' 경로 퀵인풋의 시작 경로 — 열린 워크스페이스가 없을 때(빈 세션) 쓴다.
 /// front 가 navigator 로 OS 를 추측하면 웹(리눅스 서버)에서 틀리므로, 데몬과 같은
-/// 머신인 native 가 정한다. Windows 는 시스템 드라이브 루트(예: `C:/`), 그 외는 `/`.
+/// 머신인 native 가 정한다. Windows 는 시스템 드라이브 루트(예: `C:/`), 그 외는 `/`. boot_info 로 전달
 fn default_open_root() -> String {
     #[cfg(windows)]
     {
@@ -555,8 +555,8 @@ fn default_open_root() -> String {
     }
 }
 
-/// 창 생성 — 첫 창(setup)과 분리로 생기는 창이 같은 빌더를 쓴다. 주입 목록은 그 창 소속
-/// 세션만 (호출 전에 소속 배정이 끝나 있어야 한다). pos 는 논리 좌표 (드롭 지점). zoom 은 이 창의
+/// 창 생성 — 첫 창(setup)과 분리로 생기는 창이 같은 빌더를 쓴다. 부팅 정보는 front 가 boot_info 로
+/// 묻는다 — 호출 전에 소속 배정이 끝나 있어야 한다. pos 는 논리 좌표 (드롭 지점). zoom 은 이 창의
 /// 웹뷰 줌 레벨 — 분리 창은 출처 창 값, 부모 없는 창은 저장된 마지막 값 (ticket zoom-per-window).
 /// WHY: 창을 만드는 커맨드는 반드시 async fn — 동기 커맨드는 메인 스레드에서 돌고, Windows 는
 ///      그 안의 build() 가 이벤트 루프를 기다리며 교착한다 (Tauri 문서 주의). 실측: 새 창이
@@ -569,16 +569,14 @@ fn build_window(
     size: Option<(f64, f64)>,
     zoom: i32,
 ) -> tauri::Result<tauri::WebviewWindow> {
-    // 주입 스크립트는 프론트 코드 실행 전에 평가된다 (host.ts 가 값을 읽는다).
     // WHY: 숨김 기동(visible false → load 후 show)은 쓰지 않는다 — WebView2 가 숨김
     //      상태에서 로딩을 미뤄 오히려 흰 화면이 길어지는 역효과가 실측됐다.
     //      흰 플래시는 창 배경색 + index.html 인라인 배경으로 막는다.
-    let boot = serde_json::to_string(&infos_for(state, label)).expect("세션 목록 직렬화는 실패할 수 없다");
-    let (owner, active) = {
-        let groups = state.groups.lock().unwrap();
-        let main = groups.main_of(label);
-        (groups.subs.get(label).cloned(), groups.active.get(main).cloned())
-    };
+    // WHY: 부팅 정보(relay 주소·세션 목록·창 label 등)는 initialization_script 로 전역에 심지
+    //      않는다 — Windows(wry/WebView2)는 초기화 스크립트를 iframe 서브프레임에도 주입해 URL 탭에
+    //      연 원격 페이지(자기 웹 프론트 포함)까지 앱 부팅 전역을 보게 됐다 (ticket
+    //      app-boot-globals-iframe-leak). front 가 boot_info 커맨드로 묻는다 — Tauri IPC 는 앱 오리진에서만
+    //      허용되므로 서브프레임은 자연히 웹 모드다
     let mut b = tauri::WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::App("index.html".into()))
         // 창 제목은 productName — 채널 overlay(tauri.dev.conf.json)가 "Superlite-Dev" 로 가른다
         .title(app.package_info().name.clone())
@@ -595,16 +593,7 @@ fn build_window(
         //      앞의 셋은 wry 기본값이라 이 호출로 덮이므로 그대로 옮긴다. 다른 OS 는 무시
         .additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,HideCursorWhileTyping")
         // 첫 페인트 전 흰 플래시 방지 — 테마 배경(--vscode-editor-background)과 일치
-        .background_color(tauri::window::Color(0x1f, 0x1f, 0x1f, 0xff))
-        .initialization_script(format!(
-            "window.__SUPERLITE_WS__ = '{}'; window.__SUPERLITE_SESSIONS__ = {boot}; window.__SUPERLITE_OPEN_ROOT__ = {open_root}; window.__SUPERLITE_WINDOW__ = {win}; window.__SUPERLITE_OWNER__ = {owner}; window.__SUPERLITE_ACTIVE__ = {active};",
-            state.ws_url,
-            owner = serde_json::to_string(&owner).expect("문자열 직렬화는 실패할 수 없다"),
-            active = serde_json::to_string(&active).expect("문자열 직렬화는 실패할 수 없다"),
-            // JSON 문자열로 — 경로 이스케이프 안전 (드라이브 문자엔 특수문자 없지만 관례)
-            open_root = serde_json::to_string(&default_open_root()).expect("문자열 직렬화는 실패할 수 없다"),
-            win = serde_json::to_string(label).expect("문자열 직렬화는 실패할 수 없다"),
-        ));
+        .background_color(tauri::window::Color(0x1f, 0x1f, 0x1f, 0xff));
     if let Some((x, y)) = pos {
         b = b.position(x, y);
     }
@@ -1411,13 +1400,31 @@ fn set_active_session(app: tauri::AppHandle, window: tauri::WebviewWindow, id: S
     emit_group(&app, &state, &main, "session-active", id);
 }
 
-/// 묶음의 현재 활성 세션 — 창 새로고침 뒤 front 가 리로드 전 활성 탭을 되찾는 경로 (ticket reload-session-focus).
-/// WHY: 주입값 __SUPERLITE_ACTIVE__ 는 창 생성 시점에 굳어 reload 에도 그대로 재실행되므로 최신값은 여기서 묻는다.
-///      아직 set_active_session 이 온 적 없는 묶음(새 창)은 null — front 는 종전 규칙(마지막 탭)대로 간다
+/// 부팅 정보 — 창 페이지가 뜰 때 front(model/boot)가 한 번 묻는다 (ticket app-boot-globals-iframe-leak).
+/// 종전 initialization_script 전역 여섯 개(__SUPERLITE_WS__·SESSIONS·OPEN_ROOT·WINDOW·OWNER·ACTIVE)를
+/// 한 응답으로 합친 것. 세션 목록은 호출 창 소속만(infos_for). active 는 호출 창이 속한 묶음의 현재 활성
+/// 세션 — 페이지 로드마다 묻는 값이라 창 새로고침 뒤에도 리로드 전 활성 탭이 그대로 온다 (ticket
+/// reload-session-focus 의 active_session 커맨드를 흡수). set_active_session 이 온 적 없는 묶음(새 창)은 null
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BootInfo {
+    ws: String,
+    sessions: Vec<SessionInfo>,
+    open_root: String,
+    window: String,
+    owner: Option<String>,
+    active: Option<String>,
+}
+
 #[tauri::command]
-fn active_session(state: tauri::State<AppState>, window: tauri::WebviewWindow) -> Option<String> {
-    let groups = state.groups.lock().unwrap();
-    groups.active.get(groups.main_of(window.label())).cloned()
+fn boot_info(state: tauri::State<AppState>, window: tauri::WebviewWindow) -> BootInfo {
+    let label = window.label();
+    let sessions = infos_for(&state, label);
+    let (owner, active) = {
+        let groups = state.groups.lock().unwrap();
+        (groups.subs.get(label).cloned(), groups.active.get(groups.main_of(label)).cloned())
+    };
+    BootInfo { ws: state.ws_url.clone(), sessions, open_root: default_open_root(), window: label.to_string(), owner, active }
 }
 
 /// 호출 창의 메인 창에 딸린 서브 창 label 들 — 메인 창이 세션을 떠나보내기 전 탭 회수(session-recall)
@@ -2134,7 +2141,7 @@ fn main() {
             detach_tabs,
             ensure_mirror,
             set_active_session,
-            active_session,
+            boot_info,
             list_subs,
             forward,
             take_handoff,
