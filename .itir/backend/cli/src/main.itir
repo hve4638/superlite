@@ -1,0 +1,11 @@
+role: 셸 심 `superlite <동사> [인자…]` (ticket cli-control-discussion) — superlite 터미널 안에서 에디터를 조작하는 소형 바이너리 (데몬과 별개, serde_json 만). 동사를 해석하지 않는다: argv 를 그대로 데몬 frontRequest 에 실어(params {args, cwd}) 그 터미널을 보는 프론트 세션으로 보내고 응답 한 줄을 기다린다 — 동사 목록·의미·확인 여부는 프론트 host.ts handleRequest 가 정하고, 새 동사는 심을 고치지 않는다. 좌표는 데몬이 PTY 환경에 심은 SUPERLITE_SOCK(이 터미널의 데몬 — 원격이면 원격 데몬)·SUPERLITE_SESSION(폴백)·자기 tty (데몬 resolve_requester). 배치: 데몬 옆 cli/ 폴더에 `superlite` + `sl` 링크 (로컬 배포 세트 daemon/cli/, 원격은 relay ssh ensure_remote_bin 이 cli/superlite 로 업로드), 데몬 term::cli_dir 가 그 폴더를 PTY PATH 앞에 넣는다. 종료 코드 0 성공(result 가 문자열이면 stdout)·1 에러(stderr)·2 사용법. 대기 상한 없음 — download --wait 처럼 사용자 확인을 기다리는 동사는 답이 올 때까지 (연결 소실은 데몬 fail_all)
+
+fn main() {
+  role: argv 해석(첫 인자 = 동사, '-' 로 시작하면 사용법 exit 2) → SUPERLITE_SOCK 필수(없으면 앱 터미널 밖) → roundtrip → error 면 stderr exit 1, result 문자열이면 stdout
+}
+fn roundtrip(sock, req) -> line {
+  role: 요청 한 줄 쓰고 응답 한 줄 읽기 — unix 는 UnixStream, Windows 는 named pipe 를 파일로 open. 데몬은 요청자 연결을 attach 없이 받아 응답 후 끊는다
+}
+fn ctty_name() -> tty? {
+  role: 제어 터미널 경로 (stderr→stdin→stdout ttyname) — 데몬 credential_main 과 같은 규칙. Windows 는 None
+}

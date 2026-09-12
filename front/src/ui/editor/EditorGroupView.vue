@@ -1,23 +1,15 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import type { Doc, EditorGroup, SplitSide } from '../../model/editors';
-import { addGroupBeside, editors, moveTabSplit, moveTabToGroup, openFile, openFileSplit, openFolderTab, openFolderTabSplit, openHex } from '../../model/editors';
+import type { EditorGroup, SplitSide } from '../../model/editors';
+import { addGroupBeside, editors, moveTabSplit, moveTabToGroup, openFile, openFileSplit, openFolderTab, openFolderTabSplit } from '../../model/editors';
 import { createTerminal } from '../../model/terminal';
-import { requestTabsMove, sessionsKind } from '../../model/sessions';
-import { canOpenExternally, downloadEntry, openExternally } from '../../model/transfer';
+import { requestTabsMove } from '../../model/sessions';
 import { editorDrag, endEditorDrag, foreignDrag, isForeignDrag, readForeignDrop } from './tabDnd';
 import TabBar from './TabBar.vue';
-import MonacoHost from './MonacoHost.vue';
-import ImageView from './ImageView.vue';
-import HexView from './HexView.vue';
-import HtmlPreview from './HtmlPreview.vue';
-import TerminalView from './TerminalView.vue';
-import UrlView from './UrlView.vue';
-import SettingsView from './SettingsView.vue';
-import FolderView from './FolderView.vue';
+import TabBody from './TabBody.vue';
+import CardList from './CardList.vue';
 import FileIcon from '../widgets/FileIcon.vue';
 import ProgressBar from '../widgets/ProgressBar.vue';
-import { fmtMB } from './folderFmt';
 
 const props = defineProps<{ group: EditorGroup }>();
 
@@ -96,37 +88,11 @@ const active = computed(() => props.group.tabs.find((t) => t.id === props.group.
 const crumbs = computed(() =>
   active.value && active.value.kind === 'file' ? active.value.path.split('/') : [],
 );
-
-/** 활성 탭이 monaco 대신 편집기 자리에 띄우는 것 — 탭·breadcrumbs 는 그대로. 우선순위는
- *  탭 종류(hex·preview — 문서 상태와 무관한 전용 뷰) > 이미지 데이터 > 열 수 없음 사유이고,
- *  null 이면 monaco. diff 탭도 같은 문서라 이미지·안내가 동일하다 (이미지 diff 는 범위 밖).
- *  종류가 늘면 여기 분기 하나와 템플릿 분기 하나 — monaco 가림(v-show="!overlay")은 자동 */
-type Overlay =
-  | { kind: 'hex' | 'preview'; path: string }
-  | { kind: 'terminal'; term: number }
-  | { kind: 'url' }
-  | { kind: 'settings' }
-  | { kind: 'folder'; tabId: string; path: string }
-  | { kind: 'image'; path: string; data: string }
-  | { kind: 'unopenable'; reason: NonNullable<Doc['unopenable']> }
-  | { kind: 'loading' };
-const overlay = computed<Overlay | null>(() => {
-  const t = active.value;
-  if (!t) return null;
-  if (t.kind === 'hex' || t.kind === 'preview') return { kind: t.kind, path: t.path };
-  if (t.kind === 'terminal') return { kind: 'terminal', term: t.term };
-  if (t.kind === 'url') return { kind: 'url' }; // 뷰는 아래 v-show 목록이 그린다 — 여기서는 monaco 가림만
-  if (t.kind === 'settings') return { kind: 'settings' };
-  if (t.kind === 'folder') return { kind: 'folder', tabId: t.id, path: t.path };
-  const doc = editors.docs.get(t.path);
-  // 문서가 아직 안 읽힌 파일 탭(openFile 이 탭을 먼저 띄운다) — 빈 본문으로 이전 탭의 모델을 가린다
-  if (t.kind === 'file' && doc === undefined) return { kind: 'loading' };
-  if (doc?.image !== undefined) return { kind: 'image', path: t.path, data: doc.image };
-  if (doc?.unopenable) return { kind: 'unopenable', reason: doc.unopenable };
-  return null;
-});
-
-/** 안내 문구용 크기 표기 — 상한이 수십 MB 라 MB 고정으로 충분하다 */
+// 카드 (ticket terminal-tab-panes): 활성 탭에 카드가 있으면 오른쪽에 CardList, 활성 카드가 있으면 본문은 카드 목록의
+// TabBody 로 바뀐다. 탭 자신의 TabBody 는 v-show 로 남긴다 — 카드로 갔다 와도 monaco 가 리마운트되지 않는다
+const withCards = computed(() => (active.value?.cards ? (active.value as typeof active.value & { cards: NonNullable<typeof active.value.cards> }) : null));
+const cardActive = computed(() => withCards.value !== null && withCards.value.cards.activeTabId !== null);
+const groupActive = computed(() => editors.activeGroupId === props.group.id);
 
 function focusGroup() {
   editors.activeGroupId = props.group.id;
@@ -155,41 +121,12 @@ const SHORTCUTS = [
     <div class="editor-body">
       <!-- 활성 탭의 로드가 800ms 를 넘김 — 제목 영역(탭바·breadcrumbs) 아래 2px 진행선 (VS Code editor progress) -->
       <ProgressBar v-if="active && editors.slowTabs.has(active.id)" />
-      <!-- URL 탭은 그룹의 모든 URL 탭을 마운트한 채 v-show 로 활성 것만 보인다 — v-if 로 갈아 끼우면 탭을 오갈 때마다
-           iframe 이 파괴되어 페이지를 처음부터 다시 로드한다 (browser-tab-iframe) -->
-      <template v-for="t in group.tabs" :key="t.id">
-        <UrlView v-if="t.kind === 'url'" v-show="t.id === group.activeTabId" :group-id="group.id" :tab-id="t.id" :url="t.url" @focus="focusGroup" />
-      </template>
-      <!-- overlay 종류별 뷰 (hex·preview 는 path 키라 탭 전환 시 컴포넌트가 갈린다) -->
-      <HexView v-if="overlay?.kind === 'hex'" :key="overlay.path" :path="overlay.path" />
-      <HtmlPreview v-else-if="overlay?.kind === 'preview'" :key="overlay.path" :path="overlay.path" @focus="focusGroup" />
-      <TerminalView v-else-if="overlay?.kind === 'terminal'" :key="overlay.term" :term="overlay.term" :group-id="group.id" />
-      <!-- 폴더 탭 — 탭 안 이동은 id 가 바뀌므로 key 를 두지 않는다 (같은 인스턴스가 path 변화를 따라간다) -->
-      <FolderView v-else-if="overlay?.kind === 'folder'" :group-id="group.id" :tab-id="overlay.tabId" :path="overlay.path" />
-      <SettingsView v-else-if="overlay?.kind === 'settings'" />
-      <ImageView v-else-if="overlay?.kind === 'image'" :path="overlay.path" :data="overlay.data" />
-      <div v-else-if="overlay?.kind === 'loading'" class="loading" />
-      <!-- 열 수 없는 파일(크기 초과·이진) 안내 -->
-      <div v-else-if="overlay?.kind === 'unopenable'" class="unopenable">
-        <p v-if="overlay.reason.kind === 'large'">
-          The file is not displayed in the text editor because it is too large
-          ({{ fmtMB(overlay.reason.size) }}).
-        </p>
-        <p v-else>
-          The file is not displayed in the text editor because it is either binary or
-          uses an unsupported text encoding.
-        </p>
-        <!-- hex 뷰어는 청크 읽기라 크기 상한이 없다 — 두 사유 모두 진입점 -->
-        <a class="unopenable-link" @click="active && openHex(active.path)">Open in Hex Editor</a>
-        <!-- 허용 확장자(Office 계열)만 — 앱은 임시 사본을 OS 기본 앱으로, 웹은 브라우저가 외부 앱을
-             못 여니 같은 자리에 Download (ticket open-externally) -->
-        <template v-if="active && canOpenExternally(active.path)">
-          <a v-if="sessionsKind() === 'app'" class="unopenable-link" @click="openExternally(active.path)">Open Externally</a>
-          <a v-else class="unopenable-link" @click="downloadEntry(active.path, 'file')">Download</a>
-        </template>
+      <div class="body-row">
+        <TabBody v-show="!cardActive" :holder="group" :group-id="group.id" :active="groupActive && !cardActive" @focus="focusGroup" />
+        <TabBody v-if="withCards && cardActive" :key="withCards.id" :holder="withCards.cards" :group-id="group.id" :active="groupActive" @focus="focusGroup" />
+        <CardList v-if="withCards" :tab="withCards" :group-id="group.id" />
       </div>
-      <MonacoHost v-if="group.tabs.length" v-show="!overlay" :group="group" />
-      <div v-else class="watermark">
+      <div v-if="!group.tabs.length" class="watermark">
         <div class="watermark-grid">
           <template v-for="s in SHORTCUTS" :key="s.label">
             <span class="watermark-label">{{ s.label }}</span>
@@ -260,6 +197,12 @@ const SHORTCUTS = [
   display: flex;
   flex-direction: column;
 }
+.body-row {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+}
 .drop-layer {
   position: absolute;
   inset: 0;
@@ -292,35 +235,11 @@ const SHORTCUTS = [
   display: block;
   top: 50%;
 }
-.loading {
-  flex: 1;
-}
 .watermark {
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-}
-/* VS Code binary/large 안내 근사 — 중앙 정렬 텍스트 한 줄 */
-.unopenable-link {
-  display: block;
-  margin-top: 8px;
-  color: var(--vscode-textLink-foreground);
-  cursor: pointer;
-}
-.unopenable-link:hover {
-  text-decoration: underline;
-}
-.unopenable {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 0 20px;
-  text-align: center;
-  color: var(--vscode-editor-foreground);
-  font-size: 13px;
 }
 /* VS Code watermark: 라벨 오른쪽 정렬 / 키 왼쪽 정렬 2열 */
 .watermark-grid {

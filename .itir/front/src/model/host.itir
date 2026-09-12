@@ -7,6 +7,7 @@ import { activateSession, activeSessionEmpty, bootSession, cancelBackground, con
 import { notify, errText } from './notifications'
 import { daemonClean } from './daemon'
 import { credential, CredentialRequest } from './gitauth'
+import { requestDownload } from './downloads'
 import { SessionCtx } from './session'
 
 import { boot } from './boot'
@@ -19,7 +20,16 @@ export val backend
 export val openRootDefault
 
 fn handleRequest(tab, ctx, method, params) {
-  role: 데몬 소켓 요청자(셸 심 `superlite …`)가 세션에 보낸 요청의 처리기 (와이어 v9) — 통로의 첫 핸들러 둘: notify(알림 표시)·open(경로 열기 — stat 성공이면 파일로 그 세션 편집기에, 아니면 browseDir 로 폴더 확인 후 openFolder). 요청이 온 세션 탭으로 전환한다 (VS Code 가 요청한 창을 앞으로 가져오는 의미 — OS 창 포커스는 없음). credential(와이어 v18 — git credential helper 중계 get/store/erase, 데몬이 띄운 git 과 터미널 git 모두, gitauth.credential 이 답한다). 이후 전용 명령은 여기에 method 를 더한다. 결과는 요청자에게 돌아가고 throw(경로 부재·미지 method)는 에러로 돌아간다
+  role: 데몬 소켓 요청자(셸 심 `superlite <동사> [인자…]` backend/cli, 데몬 credential helper)가 세션에 보낸 요청의 처리기 (와이어 v9). 심은 동사를 해석하지 않고 params {args, cwd} 를 실어 보낸다 — 동사의 이름·인자·확인 여부는 전부 여기서 정한다 (ticket cli-control-discussion). 내장 동사: notify(알림 표시)·open(경로 열기 — stat 성공이면 파일로 그 세션 편집기에, 아니면 browseDir 로 폴더 확인 후 openFolder)·download <경로…> [--wait](경로마다 stat 으로 file/directory 판정 → downloads.requestDownload 항목 하나, 글로브는 셸이 펼친다 — 기본은 대기열 등록 후 즉시 'queued [n]', --wait 면 전부의 사용자 확인·전송이 끝나야 응답, 하나라도 취소·실패면 에러)·credential(gitauth 중계). 새 내장 동사는 case 추가, 플러그인 등록 방식은 ticket plugin-architecture 결정을 따른다. 상대 경로는 argPath 가 cwd 기준으로 절대화
+}
+fn argFlags(p) -> set {
+  role: 심 params 의 `--플래그` 인자 집합
+}
+fn argPaths(p) -> paths {
+  role: 심 params 의 경로 인자들 — `--플래그` 를 뺀 args (종전 path 도 받는다). 상대 경로는 cwd 로 절대화
+}
+fn argPath(p) -> path {
+  role: 첫 경로 인자 (open 등 단일 경로 동사) — 없으면 ''. 상대 경로는 cwd 로 절대화, 빈 값이면 ''. 요청이 온 세션 탭으로 전환한다 (VS Code 가 요청한 창을 앞으로 가져오는 의미 — OS 창 포커스는 없음). credential(와이어 v18 — git credential helper 중계 get/store/erase, 데몬이 띄운 git 과 터미널 git 모두, gitauth.credential 이 답한다). 이후 전용 명령은 여기에 method 를 더한다. 결과는 요청자에게 돌아가고 throw(경로 부재·미지 method)는 에러로 돌아간다
 }
 fn requestPath(rootPath, abs) {
   role: 요청자의 절대 경로 → full('/' 구분 절대 경로 — 폴더 열기·browseDir 용)과 wire(파일 단건 RPC 용 — 루트 안이면 상대화, 밖이면 절대 경로 그대로, OS 드롭과 같은 규칙). 드라이브 경로(Windows)만 '\\' 정규화

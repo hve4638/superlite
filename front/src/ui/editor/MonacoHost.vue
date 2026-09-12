@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import type { EditorGroup } from '../../model/editors';
+import type { TabHolder } from '../../model/editors';
 import { editorView, editors, indentOf, wordWrapOf } from '../../model/editors';
 import { scm } from '../../model/scm';
 import { openQuickInput } from '../../model/workbench';
@@ -8,12 +8,13 @@ import { EDITOR_OPTIONS, modelFor, monaco, originalModelFor, revisionModelFor } 
 import { EDITOR_FONT_SIZE } from '../../theme/fonts';
 import { bindVim } from './vim';
 
-const props = defineProps<{ group: EditorGroup }>();
+// holder 는 그룹 또는 덱(카드 목록) — active 는 이 목록이 포커스·커서를 소유하는가 (TabBody 가 계산, ticket terminal-tab-panes)
+const props = defineProps<{ holder: TabHolder; active: boolean }>();
 
 const codeHost = ref<HTMLElement | null>(null);
 const diffHost = ref<HTMLElement | null>(null);
 
-const active = computed(() => props.group.tabs.find((t) => t.id === props.group.activeTabId) ?? null);
+const active = computed(() => props.holder.tabs.find((t) => t.id === props.holder.activeTabId) ?? null);
 // 삭제 파일 탭(diff.deleted)은 diff 편집기가 아니라 코드 편집기에 HEAD 모델을 읽기 전용으로 올린다
 const mode = computed(() => (active.value?.kind === 'diff' && !active.value.deleted ? 'diff' : 'file'));
 
@@ -55,7 +56,7 @@ function ensureCodeEditor(): monaco.editor.IStandaloneCodeEditor {
     codeEditor = monaco.editor.create(codeHost.value!, { ...EDITOR_OPTIONS, ...wrapOpt(), model: null });
     const ed = codeEditor;
     codeEditor.onDidChangeCursorPosition((e) => {
-      if (editors.activeGroupId === props.group.id) {
+      if (props.active) {
         editors.cursor = { line: e.position.lineNumber, col: e.position.column };
       }
       noteViewState(ed);
@@ -73,7 +74,7 @@ function ensureDiffEditor(): monaco.editor.IStandaloneDiffEditor {
     diffEditor = monaco.editor.createDiffEditor(diffHost.value!, { ...EDITOR_OPTIONS, ...wrapOpt(), automaticLayout: true });
     const modified = diffEditor.getModifiedEditor();
     modified.onDidChangeCursorPosition((e) => {
-      if (editors.activeGroupId === props.group.id) {
+      if (props.active) {
         editors.cursor = { line: e.position.lineNumber, col: e.position.column };
       }
     });
@@ -92,7 +93,7 @@ function focusLater(ed: monaco.editor.ICodeEditor) {
 /** pendingReveal(검색 결과 클릭 등)을 이 그룹의 활성 파일이 소유하면 소비한다 */
 function consumeReveal(ed: monaco.editor.IStandaloneCodeEditor, path: string) {
   const req = editors.pendingReveal;
-  if (!req || req.path !== path || editors.activeGroupId !== props.group.id) return;
+  if (!req || req.path !== path || !props.active) return;
   ed.revealLineInCenter(req.line);
   ed.setPosition({ lineNumber: req.line, column: 1 });
   editors.pendingReveal = null;
@@ -115,7 +116,7 @@ async function sync() {
     ed.updateOptions({ readOnly: true });
     const cur = ed.getModel();
     if (!cur || cur.modified !== modified || cur.original !== original) ed.setModel({ original, modified });
-    if (editors.activeGroupId === props.group.id && editors.pendingFocus) {
+    if (props.active && editors.pendingFocus) {
       editors.pendingFocus = false;
       focusLater(ed.getModifiedEditor());
     }
@@ -131,7 +132,7 @@ async function sync() {
     if (active.value?.id !== tab.id) return; // WHY: await 사이에 탭이 바뀌었을 수 있다
     ed.updateOptions({ readOnly: true });
     if (ed.getModel() !== model) ed.setModel(model);
-    if (editors.activeGroupId === props.group.id && editors.pendingFocus) {
+    if (props.active && editors.pendingFocus) {
       editors.pendingFocus = false;
       focusLater(ed);
     }
@@ -149,7 +150,7 @@ async function sync() {
       if (vs) ed.restoreViewState(vs);
     }
     consumeReveal(ed, tab.path);
-    if (editors.activeGroupId === props.group.id) {
+    if (props.active) {
       const pos = ed.getPosition();
       if (pos) editors.cursor = { line: pos.lineNumber, col: pos.column };
       // WHY: 포커스는 요청된 경우만 — 트리 단일 클릭(preview)은 포커스가 트리에 남아야
@@ -169,7 +170,7 @@ async function sync() {
     if (!cur || cur.modified !== modified || cur.original !== original) {
       ed.setModel({ original, modified });
     }
-    if (editors.activeGroupId === props.group.id && editors.pendingFocus) {
+    if (props.active && editors.pendingFocus) {
       editors.pendingFocus = false;
       focusLater(ed.getModifiedEditor());
     }
@@ -178,7 +179,10 @@ async function sync() {
 
 onMounted(() => {
   void sync();
-  watch(() => props.group.activeTabId, () => void sync(), { flush: 'post' });
+  watch(() => props.holder.activeTabId, () => void sync(), { flush: 'post' });
+  // 카드에서 탭 자신으로 돌아올 때(활성 탭은 그대로, 이 목록이 다시 활성) 포커스 요청을 소비하려면 active 변화도 sync 감이다
+  // (ticket terminal-tab-panes)
+  watch(() => props.active, (on) => { if (on) void sync(); }, { flush: 'post' });
   // HEAD 가 움직이면(앱 밖 커밋 포함) 열려 있는 diff 탭의 original 도 갈아끼운다 —
   // 탭 재활성화를 기다리지 않는다. 파일 탭이면 sync 는 모델 동일성 검사로 no-op
   watch(() => scm.head, () => void sync(), { flush: 'post' });

@@ -4,7 +4,7 @@ import { activateSession, activeSessionEmpty, addEmptySession, browseBackend, cl
 import { openFolder, openFolderDialog, openRootDefault, retryActiveConnection } from '../model/host'
 import { answerConfirm, dialog } from '../model/dialog'
 import { forgetRecent, groupTitle, openGroup, openGroups, pinAsGroup, pinIntoGroup, PinSource, RecentEntry, recentName, recents, refreshRecents, setGroupAlias, unpinGroup, unpinMember } from '../model/recents'
-import { activeTab, base64Bytes, EDITOR_ZOOM_MAX, EDITOR_ZOOM_MIN, EDITOR_ZOOM_STEP, editors, editorView, indentOf, openFile, openFolderTab, setEditorZoom, toggleViewerAutoReload, viewerAutoReload } from '../model/editors'
+import { activeLeaf, base64Bytes, EDITOR_ZOOM_MAX, EDITOR_ZOOM_MIN, EDITOR_ZOOM_STEP, editors, editorView, indentOf, openFile, openFolderTab, setEditorZoom, toggleViewerAutoReload, viewerAutoReload } from '../model/editors'
 import { createTerminal, refreshTerminals, setTerminalZoom, terminalState, terminalView } from '../model/terminal'
 import { openSshConfig, openTmuxConf } from '../model/configfiles'
 import { openSettings } from '../model/editors'

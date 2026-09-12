@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read as _, Write as _};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
@@ -385,6 +385,16 @@ pub(crate) fn handle_term(
     }
 }
 
+/// 셸 심 폴더 — SUPERLITE_CLI_DIR 우회, 아니면 데몬 실행 파일 옆 `cli/` (superlite + sl 링크).
+/// 데몬 폴더 자체를 PATH 에 넣지 않는다 — 거기 있는 동봉 tmux 가 사용자의 tmux 를 가린다
+fn cli_dir() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("SUPERLITE_CLI_DIR") {
+        return Some(PathBuf::from(p));
+    }
+    let dir = std::env::current_exe().ok()?.parent()?.join("cli");
+    dir.is_dir().then_some(dir)
+}
+
 /// PTY 에서 돌릴 프로그램 — tmux 방식이면 tmux 클라이언트(attach-session), 아니면 셸 직접.
 /// tmux 새 세션은 여기서 detached 로 먼저 만든다 (id 를 알아야 termTmux 로 프론트에 알린다).
 /// tmux 방식인데 세션 생성·조회가 실패하면 셸 직접 실행으로 대체하고 사유를 돌려준다 (경고용)
@@ -418,6 +428,15 @@ fn program(root: &Path, session: Option<&str>, attach: Option<&str>) -> Program 
     }
     if let Some(lang) = crate::tmux::locale_fallback() {
         env.push(("LANG", lang.to_string()));
+    }
+    // 셸 심 `superlite`·`sl` 을 PATH 앞에 — 데몬 옆 cli/ 폴더(배포 세트·원격 헬퍼 폴더 모두 그
+    // 배치, SUPERLITE_CLI_DIR 우회는 개발용). 폴더가 없으면 PATH 를 건드리지 않는다
+    if let Some(dir) = cli_dir() {
+        let cur = std::env::var_os("PATH").unwrap_or_default();
+        let joined = std::env::join_paths(std::iter::once(dir).chain(std::env::split_paths(&cur)));
+        if let Ok(p) = joined {
+            env.push(("PATH", p.to_string_lossy().into_owned()));
+        }
     }
     let mut fallback = None;
     if let crate::tmux::Mode::Tmux { bin } = crate::tmux::mode() {

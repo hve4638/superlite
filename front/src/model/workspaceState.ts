@@ -1,5 +1,5 @@
 import { effect, stop, type ReactiveEffectRunner } from '@vue/reactivity';
-import type { EditorGroup, LayoutNode } from './editors';
+import type { CardSet, EditorGroup, LayoutNode } from './editors';
 import { notify } from './notifications';
 import type { SessionCtx } from './session';
 import { tauri } from './tauri';
@@ -36,7 +36,13 @@ export interface WorkspaceState {
   expanded: string[];
   views: [string, unknown][];
   /** active: 저장 시점에 그 그룹의 활성 탭이 이 터미널이었다 (groups 의 activeTabId 는 문서 탭으로 대체돼 있다) */
-  terminals: { tmux: string; groupId: number; index: number; active?: boolean }[];
+  terminals: {
+    tmux: string; groupId: number; index: number; active?: boolean;
+    /** 카드였으면 붙어 있던 탭 — host 는 탭 id, 그 탭이 터미널이면 hostTmux (ticket terminal-tab-panes) */
+    host?: string; hostTmux?: string;
+    /** 터미널 탭에 붙어 있던 터미널 아닌 카드들 */
+    cards?: CardSet;
+  }[];
 }
 
 const DEBOUNCE_MS = 1000;
@@ -55,17 +61,35 @@ function serialize(ctx: SessionCtx, sub: boolean): SubSnapshot {
   const s = ctx.editors.snapshot();
   const terminals: WorkspaceState['terminals'] = [];
   for (const g of s.groups) {
+    // 그룹의 터미널 탭과 탭에 붙은 터미널 카드 모두 tmux 세션 id 로 바꿔 싣는다. 카드는 host(탭 id) — 그 탭이 터미널이면
+    // hostTmux(재시작 후 인스턴스 id 는 무의미). 터미널 탭의 터미널 아닌 카드는 탭이 걷히므로 항목의 cards 에 싣는다
+    const tmuxOf = (term: number) => ctx.terminals.terminals.list.find((x) => x.id === term)?.tmux?.id;
+    for (const t of g.tabs) {
+      if (!t.cards) continue;
+      const hostRef = t.kind === 'terminal' ? { hostTmux: tmuxOf(t.term) } : { host: t.id };
+      t.cards.tabs.forEach((c, index) => {
+        if (c.kind !== 'terminal') return;
+        const tmux = tmuxOf(c.term);
+        if (tmux) terminals.push({ tmux, groupId: g.id, index, ...(t.cards!.activeTabId === c.id ? { active: true } : {}), ...hostRef });
+      });
+      t.cards.tabs = t.cards.tabs.filter((c) => c.kind !== 'terminal');
+      if (t.cards.tabs.length === 0) delete t.cards;
+      else if (t.cards.activeTabId !== null && !t.cards.tabs.some((c) => c.id === t.cards!.activeTabId)) t.cards.activeTabId = null;
+    }
     g.tabs.forEach((t, index) => {
       if (t.kind !== 'terminal') return;
-      const inst = ctx.terminals.terminals.list.find((x) => x.id === t.term);
-      if (inst?.tmux) terminals.push({ tmux: inst.tmux.id, groupId: g.id, index, ...(g.activeTabId === t.id ? { active: true } : {}) });
+      const tmux = tmuxOf(t.term);
+      if (tmux) terminals.push({ tmux, groupId: g.id, index, ...(g.activeTabId === t.id ? { active: true } : {}), ...(t.cards ? { cards: t.cards } : {}) });
     });
     g.tabs = g.tabs.filter((t) => t.kind !== 'terminal');
     if (g.activeTabId !== null && !g.tabs.some((t) => t.id === g.activeTabId)) g.activeTabId = g.tabs[0]?.id ?? null;
     // MRU 도 터미널 id 를 뺀다 — 인스턴스 id 는 창마다 달라 복원 때 의미가 없다 (ticket tab-open-next-mru-close)
     g.mru = g.mru?.filter((id) => g.tabs.some((t) => t.id === id));
   }
-  const open = new Set(s.groups.flatMap((g) => g.tabs.map((t) => t.path)));
+  const open = new Set([
+    ...s.groups.flatMap((g) => g.tabs.flatMap((t) => [t.path, ...(t.cards?.tabs.map((c) => c.path) ?? [])])),
+    ...terminals.flatMap((t) => t.cards?.tabs.map((c) => c.path) ?? []),
+  ]);
   return {
     version: 1,
     groups: s.groups,
@@ -172,6 +196,8 @@ export async function restoreSubWorkspace(kind: StoreKind, mirror: string, ctx: 
 /** 스냅샷 하나를 세션에 적용 — 껍데기 탭·배치를 먼저 세우고(즉시 보임) 문서·펼침·터미널은 이어서 채운다.
  *  메인 창(restoreWorkspace)과 서브 창('restore' 핸드오프)이 공유한다 */
 export async function applyWorkspaceState(ctx: SessionCtx, s: WorkspaceState): Promise<void> {
+  // 저장 시점의 탭별 활성 카드 (null = 탭 자신) — restore 가 s.groups 객체를 그대로 편집기 상태로 쓰므로 그 뒤엔 읽을 수 없다
+  const savedCardActive = new Map(s.groups.flatMap((g) => g.tabs.map((t) => [`${g.id}:${t.id}`, t.cards?.activeTabId ?? null] as const)));
   // 터미널만 있던 pane 은 터미널을 뺀 빈 그룹으로 저장돼 있다 — restore 는 원래 빈 그룹을 남기므로 그 자리에 다시 붙인다
   ctx.editors.restore({ groups: s.groups, layout: s.layout, activeGroupId: s.activeGroupId, nextGroupId: s.nextGroupId, docs: [] });
   for (const [p, v] of s.views) ctx.editors.editors.viewStates.set(p, v);
@@ -183,18 +209,41 @@ export async function applyWorkspaceState(ctx: SessionCtx, s: WorkspaceState): P
       const ed = ctx.editors.editors;
       const active = ed.activeGroupId;
       const termActive = new Set<number>();
-      for (const t of s.terminals) {
+      // 탭(카드 아닌 것)을 먼저 붙여 tmux id → 새 탭 id 대응을 만들고, 카드였던 것을 그 탭(hostTmux)·host 탭의 카드로
+      const tabIdByTmux = new Map<string, string>();
+      const isCard = (t: WorkspaceState['terminals'][number]) => t.host !== undefined || t.hostTmux !== undefined;
+      for (const t of [...s.terminals.filter((t) => !isCard(t)), ...s.terminals.filter(isCard)]) {
         const info = list.find((i) => i.id === t.tmux);
         if (!info) continue;
+        const host = t.host ?? (t.hostTmux !== undefined ? tabIdByTmux.get(t.hostTmux) : undefined);
         // newTab 없음 — 창 이동 핸드오프가 같은 tmux 세션을 먼저 붙였으면 중복 탭 대신 그 탭으로
-        ctx.terminals.attachTerminal(info, { at: { groupId: t.groupId, index: t.index } });
-        if (t.active) termActive.add(t.groupId);
+        const inst = ctx.terminals.attachTerminal(info, { at: { groupId: t.groupId, index: t.index, host } });
+        if (!inst) continue;
+        if (!isCard(t)) {
+          tabIdByTmux.set(t.tmux, `terminal:${inst.id}`);
+          if (t.cards) ctx.editors.attachCards(`terminal:${inst.id}`, t.cards);
+        }
+        if (t.active && !isCard(t)) termActive.add(t.groupId);
+      }
+      // 터미널 탭의 카드 목록 — 터미널 카드가 활성이 아니었으면 저장된 활성 카드(null = 탭 자신)로 되돌린다
+      for (const t of s.terminals) {
+        if (isCard(t)) continue;
+        const tab = ed.groups.flatMap((g) => g.tabs).find((x) => x.id === tabIdByTmux.get(t.tmux));
+        if (!tab?.cards || s.terminals.some((e) => e.hostTmux === t.tmux && e.active)) continue;
+        tab.cards.activeTabId = t.cards?.activeTabId ?? null;
       }
       // 터미널 탭 열기는 그 탭·그룹을 활성으로 만든다 — 저장 시점에 터미널이 활성이 아니었던 그룹은 저장된
       // 활성 탭으로, 활성 그룹도 저장된 것으로 되돌린다
       for (const sg of s.groups) {
         const g = ed.groups.find((x) => x.id === sg.id);
         if (g && !termActive.has(g.id) && sg.activeTabId !== null && g.tabs.some((t) => t.id === sg.activeTabId)) ctx.editors.setActiveTab(g.id, sg.activeTabId);
+        // 카드 목록도 같은 되돌림 — 터미널 카드가 활성이 아니었던 탭은 저장된 활성 카드(없으면 null = 탭 자신)로
+        for (const t of g?.tabs ?? []) {
+          // 터미널 탭은 위의 터미널 루프가 되돌렸다 (저장본 s.groups 에 없다)
+          if (t.kind === 'terminal' || !t.cards || s.terminals.some((e) => e.host === t.id && e.active)) continue;
+          const want = savedCardActive.get(`${g!.id}:${t.id}`) ?? null;
+          if (want === null || t.cards.tabs.some((c) => c.id === want)) t.cards.activeTabId = want;
+        }
       }
       if (ed.groups.some((g) => g.id === active)) ed.activeGroupId = active;
       // 목록에 없는 세션은 사유가 보이게 (간헐적 미복원의 단서 — ticket term-layout-restore-flaky): 저장 id·

@@ -8,6 +8,8 @@ import { decorationFor } from '../../model/scm';
 import { DND_FILE, activeSessionEmpty, multiWindow, remoteHost, sessionRoot, sessions } from '../../model/sessions';
 import { windowLabel } from '../../model/window';
 import { downloadEntry, uploadDropped, type DroppedEntry } from '../../model/transfer';
+import { cancelDownload, clearDownload, confirmAllDownloads, confirmDownload, orderedDownloads, pendingDownloads, showAllDownloads, type DownloadState } from '../../model/downloads';
+import Sash from '../widgets/Sash.vue';
 import { connection, failureLabel, stageLabel } from '../../model/watch';
 import { openContextMenu, openQuickInput, workbench, type ContextMenuItem } from '../../model/workbench';
 import { editorDrag, endEditorDrag, startFileDrag } from '../editor/tabDnd';
@@ -32,6 +34,29 @@ function openDefault(): void {
 }
 
 const editing = ref<Editing | null>(null);
+
+// Download 뷰 — 요청이 들어오면 자동으로 펼친다 (사용자가 접어 둔 뒤 새 요청이 와도 다시 펼침)
+const downloadsOpen = ref(false);
+watch(pendingDownloads, (n, prev) => {
+  if (n > prev) downloadsOpen.value = true;
+});
+// 높이 — 위 경계 sash. 최소 = 헤더 22 + 행 2개(최근 1개 + 전체 기록 버튼). 보이는 항목 수는 행 높이로 잘라
+// 스크롤 대신 "전체 다운로드 기록" 버튼(항상 표시)이 나머지를 맡는다
+const DL_ROW = 22;
+const DL_MIN = DL_ROW * 3;
+const dlHeight = ref(DL_ROW * 5);
+let dlStart = 0;
+function resizeDl(dy: number): void {
+  dlHeight.value = Math.max(DL_MIN, dlStart - dy); // 위쪽 경계를 끄므로 위로(dy<0) 갈수록 커진다
+}
+const dlVisible = computed(() => Math.max(1, Math.floor((dlHeight.value - DL_ROW * 2) / DL_ROW)));
+const DL_LABEL: Record<DownloadState, string> = {
+  pending: '대기',
+  running: '받는 중',
+  done: '완료',
+  cancelled: '취소됨',
+  failed: '실패',
+};
 /** 백엔드 거부(동시 생성 등) — 입력을 남겨 정정 기회를 준다 */
 const opError = ref<string | null>(null);
 /** 삭제 확인 대상 — 선택 집합 전체를 한 번에 (VS Code 다중 삭제 확인) */
@@ -643,16 +668,46 @@ defineExpose({
         </div>
       </div>
     </div>
-    <template v-if="!activeSessionEmpty()">
-      <div class="pane-header collapsed">
-        <span class="codicon codicon-chevron-right twisty" />
-        <span class="title">Outline</span>
+    <!-- Download 뷰 (ticket cli-control-discussion) — 셸 심 `superlite download` 요청의 확인·상태.
+         Outline·Timeline 스텁이 있던 자리. 페이지 전역 목록이라 빈 세션에서도 보인다. 위 경계 sash 로 높이
+         조절(최소 = 헤더 + 행 2개 — 최근 1개 + "전체 다운로드 기록" 버튼), 넘치는 항목은 자르고 버튼이
+         에디터 탭(DownloadsView)을 연다. 헤더의 체크는 일괄 다운로드 허용 -->
+    <div class="dl-pane" :style="downloadsOpen ? { height: `${dlHeight}px` } : undefined">
+      <Sash v-if="downloadsOpen" direction="horizontal" class="dl-sash" @dragstart="dlStart = dlHeight" @resize="resizeDl" />
+      <div class="pane-header collapsed" @click="downloadsOpen = !downloadsOpen">
+        <span class="codicon twisty" :class="downloadsOpen ? 'codicon-chevron-down' : 'codicon-chevron-right'" />
+        <span class="title">Download</span>
+        <span v-if="pendingDownloads > 0" class="count">{{ pendingDownloads }}</span>
+        <span class="spacer" />
+        <span
+          class="codicon codicon-check-all action"
+          :class="{ disabled: pendingDownloads === 0 }"
+          title="일괄 다운로드 허용"
+          @click.stop="pendingDownloads > 0 && confirmAllDownloads()"
+        />
       </div>
-      <div class="pane-header collapsed">
-        <span class="codicon codicon-chevron-right twisty" />
-        <span class="title">Timeline</span>
+      <div v-if="downloadsOpen" ref="dlListEl" class="downloads">
+        <div v-if="orderedDownloads.length === 0" class="dl-empty">요청 없음</div>
+        <div v-for="d in orderedDownloads.slice(0, dlVisible)" :key="d.id" class="dl-row" :title="`${d.session}: ${d.path}`">
+          <span class="codicon" :class="d.kind === 'directory' ? 'codicon-folder' : 'codicon-file'" />
+          <span class="dl-name">{{ d.name }}</span>
+          <template v-if="d.state === 'pending'">
+            <button class="dl-btn primary" @click="confirmDownload(d.id)">확인</button>
+            <button class="dl-btn" @click="cancelDownload(d.id)">취소</button>
+          </template>
+          <template v-else>
+            <span class="dl-state" :class="d.state" :title="d.error ?? ''">{{ DL_LABEL[d.state] }}</span>
+            <span v-if="d.state !== 'running'" class="codicon codicon-close dl-close" @click="clearDownload(d.id)" />
+          </template>
+        </div>
       </div>
-    </template>
+      <!-- 크롬의 "전체 다운로드 기록" 처럼 — 일반 글자색, 오른쪽 끝에 열기 아이콘만 -->
+      <div v-if="downloadsOpen" class="dl-row dl-all" @click="showAllDownloads()">
+        <span class="dl-name">전체 다운로드 기록</span>
+        <span v-if="orderedDownloads.length > dlVisible" class="dl-state">+{{ orderedDownloads.length - dlVisible }}</span>
+        <span class="codicon codicon-link-external dl-open" />
+      </div>
+    </div>
   </div>
 </template>
 
@@ -717,7 +772,104 @@ defineExpose({
   font-size: 12px;
   cursor: pointer;
 }
-/* ===== pane header (Outline·Timeline 스텁 — spec .pane-header: 22px, 11px/700, bg #181818) ===== */
+/* ===== Download 뷰 행 ===== */
+.pane-header .count {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 8px;
+  font-size: 10px;
+  line-height: 14px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+}
+.dl-pane {
+  position: relative; /* sash 기준 */
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.dl-sash {
+  position: absolute;
+  top: -2px;
+  left: 0;
+  right: 0;
+  z-index: 1;
+}
+.pane-header .spacer {
+  flex: 1;
+}
+.pane-header .action {
+  font-size: 16px;
+  margin-right: 6px;
+  cursor: pointer;
+}
+.pane-header .action.disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.downloads {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  font-size: 13px;
+}
+.dl-all {
+  flex-shrink: 0;
+  cursor: pointer;
+  border-top: 1px solid var(--vscode-sideBarSectionHeader-border);
+}
+.dl-open {
+  font-size: 14px;
+  color: var(--vscode-descriptionForeground);
+}
+.dl-empty {
+  padding: 4px 12px;
+  color: var(--vscode-descriptionForeground);
+}
+.dl-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+.dl-row:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+.dl-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dl-btn {
+  height: 18px;
+  padding: 0 8px;
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 2px;
+  font-size: 11px;
+  cursor: pointer;
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+}
+.dl-btn.primary {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+}
+.dl-state {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+.dl-state.failed {
+  color: var(--vscode-errorForeground);
+}
+.dl-close {
+  cursor: pointer;
+  font-size: 14px;
+}
+
+/* ===== pane header (Download 뷰 헤더 — spec .pane-header: 22px, 11px/700, bg #181818) ===== */
 .pane-header {
   display: flex;
   align-items: center;

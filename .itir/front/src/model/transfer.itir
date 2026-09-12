@@ -14,8 +14,8 @@ export type DroppedEntry
 // 진행 중인 전송 (label·done·total) — 없으면 null. StatusBar 가 그린다
 export val transfer
 
-export fn downloadEntry(path, kind) {
-  role: 탐색기 Download... — 파일은 저장 위치(앱)·다운로드 폴더(웹)로, 폴더는 고른 폴더 안의 같은 이름 하위 폴더(앱)·<이름>.zip(웹)으로. 파일은 stat 크기만큼 범위 읽기(빈 파일도 생성), 폴더는 readDir 재귀로 목록을 모은 뒤 차례로. 진행: 파일은 바이트, 폴더는 파일 수. dialog 대기도 전송 슬롯 안(이중 dialog 방지), 취소는 무동작, 실패는 notify error, 완료는 notify info (앱은 "Open Folder" 액션 포함 — 웹은 브라우저가 저장하므로 없음)
+export fn downloadEntry(path, kind, backend?) -> got {
+  role: 탐색기 Download... (backend 기본은 활성 세션 — 셸 심 요청 downloads 는 요청한 세션의 것을 넘긴다) — 파일은 저장 위치(앱)·다운로드 폴더(웹)로, 폴더는 고른 폴더 안의 같은 이름 하위 폴더(앱)·<이름>.zip(웹)으로. 파일은 stat 크기만큼 범위 읽기(빈 파일도 생성), 폴더는 readDir 재귀로 목록을 모은 뒤 차례로. 진행: 파일은 바이트, 폴더는 파일 수. dialog 대기도 전송 슬롯 안(이중 dialog 방지), 취소는 무동작, 실패는 notify error, 완료는 notify info (앱은 "Open Folder" 액션 포함 — 웹은 브라우저가 저장하므로 없음)
 }
 export fn canOpenExternally(path) {
   role: 편집기 "Open Externally"(ticket open-externally) 대상인가 — 확장자 목록(OPEN_EXTERNALLY_EXTS: Office 계열 pptx·ppt·xlsx·xls·docx·doc·hwp·hwpx·pdf, 2026-09-11 사용자 결정, 설정 없음) 기준. 앱·웹 구분은 호출 쪽

@@ -6,7 +6,7 @@ import { confirm } from './dialog'
 import { languageOf } from './languages'
 import { wordWrapDefault } from './settings'
 
-role: 탭·그룹·문서 상태와 열기/저장/충돌 처리. 열 수 없는 파일(크기 초과·이진)도 탭은 열린다 — doc.unopenable 에 사유를 실어 UI 가 편집기 대신 안내 화면을 띄운다 (content 는 '' 고정이라 dirty·저장 경로가 자연히 막힌다). 이미지 확장자(imageMime)는 readFile encoding=base64 로 읽어 doc.image 에 싣는다 — UI 가 편집기 대신 이미지 뷰어를 띄우고, content '' 고정은 unopenable 과 같다 (크기 상한 초과는 이미지도 unopenable(large) 안내). 이미지 뷰어의 해상도·배율 상태는 path 키 imageView 맵 (배율은 'fit' 또는 원본 대비 숫자 — 휠 줌) — ImageView 가 세우고 statusbar 가 활성 탭 경로로 읽는다 (rename·삭제·창 이동 정리는 docs·hex·folderView 와 함께 — 경로 키 맵 목록 pathMaps 를 세 함수가 공유). 문서(docs)는 탭과 분리 — 같은 파일을 여러 탭이 공유한다. 그룹 목록(groups)은 flat 이고 화면 배치는 별도의 행/열 중첩 트리(layout)가 담당 — 순회 로직은 flat 목록만 알면 된다. 탭 자리·활성 규칙은 VS Code 기본값 (ticket tab-open-next-mru-close): 자리를 지정하지 않는 열기(openFile·openDiff·openHex·openUrl·openHtmlPreview·openFolderTab·openTerminalTab·acceptTab 의 index 없음)는 활성 탭 바로 오른쪽에 넣고(openPositioning right — preview 교체는 그 자리 유지, index 를 받는 드래그·핸드오프 경로는 그대로), 그룹마다 MRU(EditorGroup.mru, 앞이 최근)를 두어 활성화(activate 헬퍼 — activeTabId 직접 대입은 이 헬퍼로만)마다 앞으로 올리고, 활성 탭을 닫으면(takeTab) 이웃이 아니라 MRU 다음 탭이 활성이 된다(focusRecentEditorAfterClose — MRU 가 비면 종전 이웃 규칙). MRU 는 스냅샷에 실려 창 이동·워크스페이스 복원 뒤에도 유지되고, restore 가 터미널·없는 id 를 걷어낸다. 외부 삭제된 열린 파일은 orphaned 집합으로 표시(탭 유지 — VS Code closeOnFileDelete=false)하고 저장이 부활시킨다. 클라이언트 설정 파일(configfiles 의 superlite:/ 가상 경로)은 문서·탭·dirty·저장 흐름을 그대로 쓰되 IO 만 갈아 끼운다 — readDoc/writeDoc 이 isConfigPath 면 데몬 readFile/writeFile 대신 readConfig/writeConfig(relay HTTP), etag '' 로 충돌 검사 없음, 탭 라벨은 configLabel, 읽기 전용(configReadOnly)이면 Doc.readOnly (ticket config-editors). 세션별 팩토리(createEditors) + 활성 세션 전달 shim. monaco 훅 슬롯(applyExternalEdit·disposeModels)은 세션 공용 모듈 슬롯 — 훅은 UI 능력이지 세션 상태가 아니다
+role: 탭·그룹·문서 상태와 열기/저장/충돌 처리. 탭의 카드 묶음(Tab.cards — addCard 참조)은 그룹과 같은 TabHolder 모양이라 탭 순회가 holders() 로 그룹·카드 목록을 함께 돈다. 열 수 없는 파일(크기 초과·이진)도 탭은 열린다 — doc.unopenable 에 사유를 실어 UI 가 편집기 대신 안내 화면을 띄운다 (content 는 '' 고정이라 dirty·저장 경로가 자연히 막힌다). 이미지 확장자(imageMime)는 readFile encoding=base64 로 읽어 doc.image 에 싣는다 — UI 가 편집기 대신 이미지 뷰어를 띄우고, content '' 고정은 unopenable 과 같다 (크기 상한 초과는 이미지도 unopenable(large) 안내). 이미지 뷰어의 해상도·배율 상태는 path 키 imageView 맵 (배율은 'fit' 또는 원본 대비 숫자 — 휠 줌) — ImageView 가 세우고 statusbar 가 활성 탭 경로로 읽는다 (rename·삭제·창 이동 정리는 docs·hex·folderView 와 함께 — 경로 키 맵 목록 pathMaps 를 세 함수가 공유). 문서(docs)는 탭과 분리 — 같은 파일을 여러 탭이 공유한다. 그룹 목록(groups)은 flat 이고 화면 배치는 별도의 행/열 중첩 트리(layout)가 담당 — 순회 로직은 flat 목록만 알면 된다. 탭 자리·활성 규칙은 VS Code 기본값 (ticket tab-open-next-mru-close): 자리를 지정하지 않는 열기(openFile·openDiff·openHex·openUrl·openHtmlPreview·openFolderTab·openTerminalTab·acceptTab 의 index 없음)는 활성 탭 바로 오른쪽에 넣고(openPositioning right — preview 교체는 그 자리 유지, index 를 받는 드래그·핸드오프 경로는 그대로), 그룹마다 MRU(EditorGroup.mru, 앞이 최근)를 두어 활성화(activate 헬퍼 — activeTabId 직접 대입은 이 헬퍼로만)마다 앞으로 올리고, 활성 탭을 닫으면(takeTab) 이웃이 아니라 MRU 다음 탭이 활성이 된다(focusRecentEditorAfterClose — MRU 가 비면 종전 이웃 규칙). MRU 는 스냅샷에 실려 창 이동·워크스페이스 복원 뒤에도 유지되고, restore 가 터미널·없는 id 를 걷어낸다. 외부 삭제된 열린 파일은 orphaned 집합으로 표시(탭 유지 — VS Code closeOnFileDelete=false)하고 저장이 부활시킨다. 클라이언트 설정 파일(configfiles 의 superlite:/ 가상 경로)은 문서·탭·dirty·저장 흐름을 그대로 쓰되 IO 만 갈아 끼운다 — readDoc/writeDoc 이 isConfigPath 면 데몬 readFile/writeFile 대신 readConfig/writeConfig(relay HTTP), etag '' 로 충돌 검사 없음, 탭 라벨은 configLabel, 읽기 전용(configReadOnly)이면 Doc.readOnly (ticket config-editors). 세션별 팩토리(createEditors) + 활성 세션 전달 shim. monaco 훅 슬롯(applyExternalEdit·disposeModels)은 세션 공용 모듈 슬롯 — 훅은 UI 능력이지 세션 상태가 아니다
 
 export type FileTab
 export type DiffTab
@@ -20,8 +20,12 @@ export fn toggleFolderPreviewPane() {
   role: 폴더 탭 미리보기 창(details·icons 스타일의 오른쪽 창) 토글 — 전역 folderPrefs.previewPane, localStorage 기억
 }
 export type TerminalTab
+export type Card
+export type CardSet
+export type TabHolder
 export type UrlTab
 export type SettingsTab
+export type DownloadsTab
 export type Tab
 export type EditorGroup
 export type LayoutNode
@@ -81,6 +85,9 @@ export fn navigateUrlTab(tabId, url) {
 export fn openSettings() {
   role: 설정 탭(SettingsTab, id 'settings:' 고정, ticket user-settings) — 창에 하나: 어느 그룹에 있든 그것을 활성화, 없으면 활성 그룹의 활성 탭 오른쪽에 연다. 문서 없음(path '') — URL 탭과 같이 최근 닫은 탭 이력 밖, 핸드오프는 탭만, acceptTab 은 문서 없이 붙인다, 워크스페이스 저장·복원에 그대로 실린다. 진입점은 팔레트 'Preferences: Open Settings' 와 액티비티바 톱니
 }
+export fn openDownloads() {
+  role: 다운로드 기록 탭 (ticket cli-control-discussion, kind 'downloads', id 고정) — 설정 탭과 같이 창에 하나, 있으면 활성화. 문서 없음·복원 이력 밖·핸드오프는 탭만
+}
 export fn openHex(path) {
   role: hex 뷰어 탭('hex:'+path, "x (Hex)") 열기 — 활성 그룹에 고정 탭. 바이트는 docs 와 분리된 path 키 hex 맵(HexDoc)에 두고 HexView 가 ensureHex·loadHexChunk 로 lazy 로드한다 (창 이동·복원·재열기가 같은 경로로 수렴). 텍스트 문서와 공존 — 이진 unopenable 안내의 "Open in Hex Editor" 와 명령 팔레트가 진입점
 }
@@ -110,6 +117,21 @@ export fn reopenClosedEditor() {
 }
 export fn hasDirtyDocs() -> Bool {
   role: 미저장 문서 존재 여부 — 탭 닫힘(beforeunload) 안전망 판정용
+}
+export fn addCard(hostTabId, card, opts?) -> Bool {
+  role: 카드 (ticket terminal-tab-panes, 2026-09-11) — 어느 탭이든 카드(Card: file·diff·hex·preview·terminal — 카드 중첩 없음, 폴더 탭은 그룹 좌표에 묶여 제외)를 붙일 수 있다 (Tab.cards: CardSet = tabs + activeTabId, null 이면 탭 자신). 붙으면 탭 본문 오른쪽에 세로 목록(첫 항목은 탭 자신)이 서고 고른 하나가 본문에 보인다 ("탭 = tmux 세션, 카드 = window" 감각이되 구현은 tmux 무관 — 터미널 카드는 보통 터미널 탭과 같은 실체). 마지막 카드를 닫으면 cards 가 사라져 보통 탭으로 돌아간다. 진입점은 팔레트뿐(Tab: New Terminal Card — 사용자 결정: 이후 구현(에이전트의 하위 워커 생성 등)의 준비물이라 사용자 UI 는 나중). CardSet 은 EditorGroup 과 같은 모양(TabHolder)이라 탭을 훑는 코드(터미널 대조·경로 정리·복원·닫기 확인의 참조 세기)는 holders() 로 그룹과 카드 목록을 함께 돌고, 본문(ui TabBody·MonacoHost)도 둘을 같은 prop 으로 받는다. 이 함수: hostTabId(opts.groupId 없으면 전 그룹에서 첫 것)의 탭에 카드 추가 + 활성화, 같은 id 면 활성화만, 문서가 필요한 카드(file·preview·삭제 아닌 diff)는 버퍼가 없으면 ensureDoc 으로 읽기 시작. 터미널 카드는 openTerminalTab(at.host) 이 여기로 온다. 이번 ticket 엔 터미널 외 진입점이 없다 — 이후 셸 심 `superlite open`·에이전트 워커 생성이 쓴다. 탭 닫기(closeTab)는 카드의 터미널을 terminalCloser 로 정리하고 탭·카드 중 dirty 인 첫 것부터 closeConfirm 을 띄운 뒤 확인 처리부가 다시 닫기를 불러 다음으로 이어진다. 카드는 복원 이력(recentlyClosed)에 없다. 스냅샷·핸드오프: 카드는 탭에 실리고 터미널 카드는 restore·워크스페이스 저장이 걷어내 adoptTerminals/attachTerminal(at.host)이 되돌린다, takeTabForHandoff 는 카드 문서를 docs 로 싣고 acceptTab 이 이쪽에 없는 것만 받아 attachCards 로 붙인다
+}
+export fn attachCards(hostTabId, cards, groupId?) -> Bool {
+  role: 복원·핸드오프가 넘어온 카드 묶음을 탭에 붙인다 (있으면 뒤에 잇고, 문서 없는 카드는 읽기 시작) — acceptTab·adoptTerminals·workspaceState 가 쓴다
+}
+export fn setActiveCard(groupId, hostTabId, cardId?) {
+  role: 카드 목록 클릭 — 탭의 활성 카드(null 이면 탭 자신) + 그 탭·그룹 활성화 + 포커스 요청
+}
+export fn closeCard(groupId, hostTabId, cardId, force?) {
+  role: 카드 닫기 (목록 ×·셸 종료·삭제) — closeTab 과 같은 확인 규칙(closeIn 공유), 마지막 카드가 닫히면 cards 가 사라진다
+}
+export fn activeLeaf() -> Tab? {
+  role: 활성 탭에 활성 카드가 있으면 그 카드, 아니면 활성 탭 — 실제로 본문에 보이는 것 (statusbar·terminal 의 포커스 이력이 본다)
 }
 export fn splitGroup() {
   role: 활성 그룹 오른쪽에 빈 그룹을 만들고 포커스 (팔레트 View: Split Editor — 키바인딩 없음, Ctrl+\ 는 사용자 결정으로 제거). 탭 복제가 아니다 — 빈 그룹은 드롭·탐색기 열기(활성 그룹)의 대상 (editor-group-empty-lock, 2026-09-08)

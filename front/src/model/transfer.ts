@@ -188,18 +188,21 @@ async function collectDir(backend: ThinBackend, dir: string, rel: string, sink: 
 
 /**
  * 탐색기 "Download..." — 원격 파일·폴더를 로컬 PC 로. 파일은 저장 위치(앱)·다운로드 폴더(웹),
- * 폴더는 고른 폴더 안의 같은 이름 하위 폴더(앱)·<이름>.zip(웹). 진행: 파일은 바이트, 폴더는 파일 수
+ * 폴더는 고른 폴더 안의 같은 이름 하위 폴더(앱)·<이름>.zip(웹). 진행: 파일은 바이트, 폴더는 파일 수.
+ * backend 기본은 활성 세션 — 셸 심 요청(downloads)은 요청한 세션의 것을 넘긴다 (확인 시점에 다른
+ * 탭이 활성일 수 있다)
  */
-export async function downloadEntry(path: string, kind: 'file' | 'directory'): Promise<void> {
-  const backend = ctx().backend;
+export async function downloadEntry(path: string, kind: 'file' | 'directory', backend: ThinBackend = ctx().backend): Promise<boolean> {
   const name = checkName(baseName(path));
   // as — 클로저 안 대입이라 초기값 null 로 좁혀지지 않게
   let done = null as { message: string; action?: NotifyAction } | null;
+  let picked = false;
   // dialog 대기도 run 안 — 그 사이 두 번째 Download 가 dialog 를 하나 더 띄우지 않게
   const ok = await run(`Downloading ${name}`, async (progress) => {
     const sink =
       sessionsKind() === 'app' ? await appSink(kind, name) : kind === 'file' ? webFileSink(name) : webZipSink(name);
     if (!sink) return; // dialog 취소
+    picked = true;
     if (kind === 'file') {
       await copyFile(backend, path, '', sink, progress);
     } else {
@@ -213,6 +216,7 @@ export async function downloadEntry(path: string, kind: 'file' | 'directory'): P
     done = await sink.finish();
   });
   if (ok && done !== null) notify('info', done.message, done.action);
+  return ok && picked;
 }
 
 // ---- Open Externally

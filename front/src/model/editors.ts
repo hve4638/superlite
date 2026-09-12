@@ -7,7 +7,7 @@ import { confirm } from './dialog';
 import { languageOf } from './languages';
 import { wordWrapDefault } from './settings';
 
-export interface FileTab {
+export interface FileTab extends WithCards {
   kind: 'file';
   /** 탭 식별자. file 탭은 path, diff 탭은 'diff:'+path */
   id: string;
@@ -20,7 +20,7 @@ export interface FileTab {
   wrap?: boolean;
 }
 
-export interface DiffTab {
+export interface DiffTab extends WithCards {
   kind: 'diff';
   id: string;
   path: string;
@@ -41,7 +41,7 @@ export interface DiffTab {
 }
 
 /** hex 뷰어 탭 — 바이트는 docs 가 아니라 editors.hex 에 산다 (텍스트 문서와 공존). 편집 없음 */
-export interface HexTab {
+export interface HexTab extends WithCards {
   kind: 'hex';
   /** 'hex:'+path */
   id: string;
@@ -53,7 +53,7 @@ export interface HexTab {
 }
 
 /** HTML 프리뷰 탭 — 같은 path 의 doc 을 공유하되 savedContent(저장분)만 그린다 (편집 버퍼는 반영하지 않는다). 편집 없음 */
-export interface PreviewTab {
+export interface PreviewTab extends WithCards {
   kind: 'preview';
   /** 'preview:'+path */
   id: string;
@@ -66,7 +66,7 @@ export interface PreviewTab {
 
 /** 터미널 탭 — 하단 패널 대신 편집기 탭에 산다 (terminal-usability). 문서 없음(path ''),
  *  본체는 model/terminal 의 인스턴스(term = 인스턴스 id, 페이지 전역 유일). dirty·preview·복원 이력 없음 */
-export interface TerminalTab {
+export interface TerminalTab extends WithCards {
   kind: 'terminal';
   /** 'terminal:'+term */
   id: string;
@@ -82,7 +82,7 @@ export interface TerminalTab {
 /** 폴더 탭 — 탐색기 폴더를 메인 영역으로 끌어오면 yazi 식 3열(부모/현재/미리보기) 탐색 화면이
  *  탭으로 열린다 (explorer-folder-tab). path 는 현재 폴더('' = 루트) — 탭 안 이동(navigateFolderTab)이
  *  id·path·name 을 같이 바꾼다. 문서 없음, dirty·preview 없음. 커서는 path 키 folderView 맵 */
-export interface FolderTab {
+export interface FolderTab extends WithCards {
   kind: 'folder';
   /** 'folder:'+path */
   id: string;
@@ -102,11 +102,36 @@ export interface FolderTab {
 export type FolderStyle = 'columns' | 'details' | 'icons';
 export type FolderSortKey = 'name' | 'mtime' | 'type' | 'size';
 
+/** 카드 (ticket terminal-tab-panes, 2026-09-11) — 어느 탭이든 카드를 붙일 수 있다 (Tab.cards). 붙으면 탭 본문 오른쪽에
+ *  세로 목록이 서고 첫 항목은 탭 자신, 그 아래가 카드들 — 고른 것 하나가 본문에 보인다 (tmux 세션 안의 window 감각,
+ *  구현은 tmux 무관). 카드는 기존 탭 타입을 그대로 — 렌더링 분기(TabBody) 재사용, 이후 카드↔탭 전환에 타입 변환이 없다.
+ *  카드 중첩 없음(카드에 cards 없음), 폴더 탭은 그룹 좌표(navigateFolderTab)에 묶여 있어 제외. 마지막 카드를 닫으면
+ *  cards 가 사라져 보통 탭으로 돌아간다. 카드는 복원 이력(recentlyClosed)에 없다. 진입점은 팔레트뿐 (Tab: New Terminal Card) */
+export type Card = FileTab | DiffTab | HexTab | PreviewTab | TerminalTab;
+
+/** 탭의 카드 목록 — activeTabId null 이면 탭 자신이 보인다. EditorGroup 과 같은 모양(TabHolder)이라 탭을 훑는 코드
+ *  (holders())와 본문(TabBody·MonacoHost)이 그룹과 카드 목록을 같은 prop 으로 받는다 */
+export interface CardSet {
+  tabs: Card[];
+  activeTabId: string | null;
+}
+
+/** 탭 목록 + 활성 탭 — 그룹과 카드 목록이 공유하는 모양 */
+export interface TabHolder {
+  tabs: Tab[];
+  activeTabId: string | null;
+}
+
+/** 모든 탭 종류의 공통 선택 항목 — 카드 (ticket terminal-tab-panes). 탭 하나에 붙은 카드 묶음, 없으면 보통 탭 */
+interface WithCards {
+  cards?: CardSet;
+}
+
 /** URL 탭 — sandbox iframe 으로 임의 URL 을 띄운다 (ticket browser-tab-iframe, dev 서버 미리보기 용도).
  *  문서 없음(path ''). id 는 탭마다 유일('url:'+난수) — url 은 주소칸 입력으로 바뀌므로 id 에 넣지 않는다.
  *  url 은 사용자가 입력한 값('' = 빈 탭, 주소칸만) — iframe 안에서 링크를 따라간 현재 URL 은 cross-origin 이라
  *  읽을 수 없어 추적하지 않는다 (browser-tab-full 의 자식 웹뷰 몫). 창 이동·워크스페이스 복원에는 이 값이 실린다 */
-export interface UrlTab {
+export interface UrlTab extends WithCards {
   kind: 'url';
   /** 'url:'+난수 */
   id: string;
@@ -120,7 +145,7 @@ export interface UrlTab {
 
 /** 설정 탭 (ticket user-settings) — 사용자 설정 폼(SettingsView). 문서 없음(path ''), 창에 하나만(id 고정) —
  *  다시 열면 있는 탭을 활성화한다. dirty·preview·복원 이력 없음, 원문 편집은 superlite:/settings.json 파일 탭 */
-export interface SettingsTab {
+export interface SettingsTab extends WithCards {
   kind: 'settings';
   /** 'settings:' 고정 */
   id: string;
@@ -131,7 +156,20 @@ export interface SettingsTab {
   preview: boolean;
 }
 
-export type Tab = FileTab | DiffTab | HexTab | PreviewTab | TerminalTab | FolderTab | UrlTab | SettingsTab;
+/** 다운로드 기록 탭 (ticket cli-control-discussion) — 셸 심 download 요청 전체 목록(DownloadsView, 크롬의 "모든
+ *  다운로드 보기"). 설정 탭과 같은 규칙: 문서 없음, 창에 하나(id 고정), dirty·preview·복원 이력 없음 */
+export interface DownloadsTab extends WithCards {
+  kind: 'downloads';
+  /** 'downloads:' 고정 */
+  id: string;
+  path: '';
+  /** 'Downloads' */
+  name: string;
+  dirty: boolean;
+  preview: boolean;
+}
+
+export type Tab = FileTab | DiffTab | HexTab | PreviewTab | TerminalTab | FolderTab | UrlTab | SettingsTab | DownloadsTab;
 
 /** hex 뷰어 청크 크기 — 범위 읽기(readFile offset) 단위. 4KB 이상이라 항상 payload 프레임으로 온다 */
 export const HEX_CHUNK = 64 * 1024;
@@ -162,10 +200,8 @@ export function tabNameOf(kind: Tab['kind'], path: string): string {
   return kind === 'hex' ? `${base} (Hex)` : kind === 'preview' ? `Preview ${base}` : base;
 }
 
-export interface EditorGroup {
+export interface EditorGroup extends TabHolder {
   id: number;
-  tabs: Tab[];
-  activeTabId: string | null;
   /** 최근 본 순서(MRU) — 앞이 최근. 활성화(activate)마다 앞으로 올리고, 활성 탭을 닫으면 이웃이 아니라
    *  여기 다음 탭이 활성이 된다 (VS Code focusRecentEditorAfterClose). 스냅샷(창 이동·워크스페이스 복원)에
    *  그대로 실린다. 옛 저장본엔 없어 optional — 없으면 빈 것으로 본다 (ticket tab-open-next-mru-close) */
@@ -220,6 +256,8 @@ export interface EditorsSnapshot {
 export interface TabHandoff {
   tab: Tab;
   doc: Doc | null;
+  /** 카드가 있는 탭 — 문서가 있는 카드들의 버퍼 (터미널 카드는 호출측 sessions 가 PTY 스냅샷으로 따로 싣는다) */
+  docs?: [string, Doc][];
 }
 
 export function baseName(path: string): string {
@@ -454,30 +492,122 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     terminalCloser = fn;
   }
 
-  /** 터미널 탭 열기 — model/terminal 의 register 가 부른다. at 이 없으면 활성 그룹 끝 */
-  function openTerminalTab(term: number, name: string, at?: { groupId?: number; index?: number }): void {
-    const group = (at?.groupId !== undefined ? editors.groups.find((g) => g.id === at.groupId) : undefined) ?? activeGroup();
+  // ---- 카드 (ticket terminal-tab-panes) — 탭에 붙은 카드 묶음(Tab.cards). 그룹의 탭 목록과 탭의 카드 목록은 같은 모양
+  //      (TabHolder)이라 탭을 훑는 코드는 holders() 로 둘을 함께 돈다 (터미널 대조·경로 정리·복원·닫기 확인의 참조 세기)
+
+  /** 탭을 담는 자리 전부 — 그룹과 카드가 있는 탭. hostTabId 가 있으면 그 탭의 카드 목록 */
+  function holders(): { groupId: number; holder: TabHolder; hostTabId?: string }[] {
+    const out: { groupId: number; holder: TabHolder; hostTabId?: string }[] = [];
+    for (const g of editors.groups) {
+      out.push({ groupId: g.id, holder: g });
+      for (const t of g.tabs) if (t.cards) out.push({ groupId: g.id, holder: t.cards, hostTabId: t.id });
+    }
+    return out;
+  }
+
+  /** 카드를 붙일 탭 찾기 — groupId 가 있으면 그 그룹에서, 없으면 전 그룹 (같은 id 의 탭이 여러 그룹에 있을 수 있어 첫 것) */
+  function hostOf(tabId: string, groupId?: number): { group: EditorGroup; tab: Tab } | null {
+    for (const g of editors.groups) {
+      if (groupId !== undefined && g.id !== groupId) continue;
+      const tab = g.tabs.find((t) => t.id === tabId);
+      if (tab) return { group: g, tab };
+    }
+    return null;
+  }
+
+  /** 탭에 카드 추가 + 활성화 (index 생략 시 끝) — 같은 id 카드가 있으면 활성화만. 첫 카드면 cards 가 생긴다. 문서가 필요한
+   *  카드(file·preview·삭제 아닌 diff)는 버퍼가 없으면 읽기 시작한다 (탭이 먼저 뜨는 openFile 과 같은 순서). 터미널 카드는
+   *  openTerminalTab(at.host) 이 여기로 온다. 이번 ticket 엔 터미널 외 진입점이 없다 — 이후 셸 심·에이전트가 쓴다 */
+  function addCard(hostTabId: string, card: Card, opts: { groupId?: number; index?: number } = {}): boolean {
+    const found = hostOf(hostTabId, opts.groupId);
+    if (!found) return false;
+    const { group, tab } = found;
+    const cards = tab.cards ?? (tab.cards = { tabs: [], activeTabId: null });
+    if (!cards.tabs.some((t) => t.id === card.id)) {
+      cards.tabs.splice(Math.min(opts.index ?? cards.tabs.length, cards.tabs.length), 0, card);
+      if ((card.kind === 'file' || card.kind === 'preview' || (card.kind === 'diff' && !card.deleted)) && !editors.docs.has(card.path)) {
+        void ensureDoc(card.path).catch((e) => notify('error', `Open ${baseName(card.path)}: ${errText(e)}`));
+      }
+    }
+    cards.activeTabId = card.id;
+    group.activeTabId = tab.id;
+    editors.activeGroupId = group.id;
+    return true;
+  }
+
+  /** 복원·핸드오프가 넘어온 카드 묶음을 탭에 붙인다 — 이미 카드가 있으면 뒤에 잇는다. 문서 없는 카드는 읽기 시작 */
+  function attachCards(hostTabId: string, cards: CardSet, groupId?: number): boolean {
+    const found = hostOf(hostTabId, groupId);
+    if (!found || cards.tabs.length === 0) return false;
+    const { tab } = found;
+    const mine = tab.cards ?? (tab.cards = { tabs: [], activeTabId: null });
+    for (const c of cards.tabs) {
+      if (mine.tabs.some((t) => t.id === c.id)) continue;
+      const doc = editors.docs.get(c.path);
+      if (c.kind === 'file' || c.kind === 'diff') c.dirty = doc !== undefined && doc.content !== doc.savedContent;
+      if ((c.kind === 'file' || c.kind === 'preview' || (c.kind === 'diff' && !c.deleted)) && !doc) {
+        void ensureDoc(c.path).catch((e) => notify('error', `Open ${baseName(c.path)}: ${errText(e)}`));
+      }
+      mine.tabs.push(c);
+    }
+    if (cards.activeTabId !== null && mine.tabs.some((t) => t.id === cards.activeTabId)) mine.activeTabId = cards.activeTabId;
+    return true;
+  }
+
+  /** 카드 목록 클릭 — 탭의 활성 카드(null 이면 탭 자신) + 그 탭·그룹 활성화 + 포커스 요청 */
+  function setActiveCard(groupId: number, hostTabId: string, cardId: string | null): void {
+    const found = hostOf(hostTabId, groupId);
+    if (!found?.tab.cards) return;
+    if (cardId !== null && !found.tab.cards.tabs.some((t) => t.id === cardId)) return;
+    found.tab.cards.activeTabId = cardId;
+    found.group.activeTabId = hostTabId;
+    editors.activeGroupId = groupId;
+    editors.pendingFocus = true;
+  }
+
+  /** 카드 닫기 (목록의 ×) — closeTab 과 같은 확인 규칙. 마지막 카드가 닫히면 cards 가 사라진다 */
+  function closeCard(groupId: number, hostTabId: string, cardId: string, force = false): void {
+    const found = hostOf(hostTabId, groupId);
+    if (!found?.tab.cards) return;
+    closeIn(found.tab.cards, { groupId, tabId: cardId, hostTabId }, force);
+    if (found.tab.cards.tabs.length === 0) delete found.tab.cards;
+  }
+
+  /** 활성 탭에 활성 카드가 있으면 그 카드, 아니면 활성 탭 — 실제로 본문에 보이는 것 (statusbar·terminal 포커스 이력이 본다) */
+  function activeLeaf(): Tab | null {
+    const t = activeTab();
+    if (!t?.cards || t.cards.activeTabId === null) return t;
+    return t.cards.tabs.find((c) => c.id === t.cards!.activeTabId) ?? t;
+  }
+
+  /** 터미널 탭 열기 — model/terminal 의 register 가 부른다. at.host 면 그 탭의 카드로(못 찾으면 탭으로), 아니면 at 그룹·index
+   *  (기본 활성 그룹 끝) */
+  function openTerminalTab(term: number, name: string, at?: { groupId?: number; index?: number; host?: string }): void {
     const tab: TerminalTab = { kind: 'terminal', id: `terminal:${term}`, path: '', name, dirty: false, preview: false, term };
+    if (at?.host !== undefined && addCard(at.host, tab, { groupId: at.groupId, index: at.index })) return;
+    const group = (at?.groupId !== undefined ? editors.groups.find((g) => g.id === at.groupId) : undefined) ?? activeGroup();
     group.tabs.splice(Math.min(at?.index ?? openIndex(group), group.tabs.length), 0, tab);
     activate(group, tab.id);
     editors.activeGroupId = group.id;
   }
 
-  /** 터미널 탭 제목 갱신 — tmux 세션 이름이 오면(termTmux) 'bash' 자리에 들어간다 */
+  /** 터미널 탭 제목 갱신 — tmux 세션 이름이 오면(termTmux) 'bash' 자리에 들어간다 (카드 포함) */
   function renameTerminalTab(term: number, name: string): void {
-    for (const g of editors.groups) {
-      for (const t of g.tabs) {
+    for (const { holder } of holders()) {
+      for (const t of holder.tabs) {
         if (t.kind === 'terminal' && t.term === term) t.name = name;
       }
     }
   }
 
-  /** 인스턴스 id 의 터미널 탭을 앞으로 — 사이드바에서 이미 열린 세션을 골랐을 때. 없으면 false */
+  /** 인스턴스 id 의 터미널 탭(카드면 그 탭까지)을 앞으로 — 사이드바에서 이미 열린 세션을 골랐을 때. 없으면 false */
   function focusTerminalTab(term: number): boolean {
-    for (const g of editors.groups) {
-      const t = g.tabs.find((t) => t.kind === 'terminal' && t.term === term);
+    for (const { groupId, holder, hostTabId } of holders()) {
+      const t = holder.tabs.find((t) => t.kind === 'terminal' && t.term === term);
       if (t) {
-        activate(g, t.id);
+        const g = editors.groups.find((g) => g.id === groupId)!;
+        if (hostTabId !== undefined) { holder.activeTabId = t.id; activate(g, hostTabId); }
+        else activate(g, t.id);
         editors.activeGroupId = g.id;
         return true;
       }
@@ -485,11 +615,13 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     return false;
   }
 
-  /** 인스턴스 id 의 터미널 탭을 모든 그룹에서 닫는다 — 셸 종료·세션 회수 (PTY 는 이미 정리됨) */
+  /** 인스턴스 id 의 터미널 탭·카드를 모든 그룹에서 닫는다 — 셸 종료·세션 회수 (PTY 는 이미 정리됨) */
   function closeTerminalTabs(term: number): void {
-    for (const g of [...editors.groups]) {
-      for (const t of [...g.tabs]) {
-        if (t.kind === 'terminal' && t.term === term) closeTab(g.id, t.id, true);
+    for (const { groupId, holder, hostTabId } of holders()) {
+      for (const t of [...holder.tabs]) {
+        if (t.kind !== 'terminal' || t.term !== term) continue;
+        if (hostTabId !== undefined) closeCard(groupId, hostTabId, t.id, true);
+        else closeTab(groupId, t.id, true);
       }
     }
   }
@@ -684,6 +816,18 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     }
     const group = activeGroup();
     group.tabs.splice(openIndex(group), 0, { kind: 'settings', id, path: '', name: 'Settings', dirty: false, preview: false });
+    activate(group, id);
+    editors.pendingFocus = true;
+  }
+
+  /** 다운로드 기록 탭 (ticket cli-control-discussion) — 설정 탭과 같이 창에 하나 */
+  function openDownloads(): void {
+    const id = tabIdOf('downloads', '');
+    for (const g of editors.groups) {
+      if (g.tabs.some((t) => t.id === id)) return setActiveTab(g.id, id);
+    }
+    const group = activeGroup();
+    group.tabs.splice(openIndex(group), 0, { kind: 'downloads', id, path: '', name: 'Downloads', dirty: false, preview: false });
     activate(group, id);
     editors.pendingFocus = true;
   }
@@ -942,15 +1086,21 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
    *  (옛 저장본) 이웃(같은 인덱스, 없으면 왼쪽) */
   function takeTab(groupId: number, tabId: string): Tab | null {
     const group = editors.groups.find((g) => g.id === groupId);
-    if (!group) return null;
-    const idx = group.tabs.findIndex((t) => t.id === tabId);
+    return group ? takeFrom(group, tabId) : null;
+  }
+
+  /** 목록(그룹 또는 덱)에서 탭 하나를 뗀다 — 활성이었으면 이웃으로 */
+  function takeFrom(holder: TabHolder, tabId: string): Tab | null {
+    const idx = holder.tabs.findIndex((t) => t.id === tabId);
     if (idx === -1) return null;
-    const [tab] = group.tabs.splice(idx, 1);
-    forgetMru(group, tabId);
-    if (group.activeTabId === tabId) {
-      const recent = group.mru?.find((id) => group.tabs.some((t) => t.id === id));
-      const next = recent ?? group.tabs[Math.min(idx, group.tabs.length - 1)]?.id ?? null;
-      activate(group, next);
+    const [tab] = holder.tabs.splice(idx, 1);
+    const group = editors.groups.find((g) => g === holder);
+    if (group) forgetMru(group, tabId);
+    if (holder.activeTabId === tabId) {
+      const recent = group?.mru?.find((id) => holder.tabs.some((t) => t.id === id));
+      const next = recent ?? holder.tabs[Math.min(idx, holder.tabs.length - 1)]?.id ?? null;
+      if (group) activate(group, next);
+      else holder.activeTabId = next;
     }
     return tab;
   }
@@ -995,44 +1145,70 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
 
   /** force: 확인 대화상자를 거치지 않는 닫기 — confirm 처리부·삭제(closePathTabs)가 쓴다 */
   function closeTab(groupId: number, tabId: string, force = false): void {
+    const group = editors.groups.find((g) => g.id === groupId);
+    if (group) closeIn(group, { groupId, tabId }, force);
+  }
+
+  /** 닫기 확인이 필요한 탭인가 — 같은 문서의 편집 표면(file·diff)이 다른 탭·카드로 남으면 버퍼는 계속 보이는 중이라
+   *  확인 불요. preview·hex 탭은 savedContent·디스크만 그려 참조로 세지 않는다 (세면 미저장 버퍼가 보이지 않은 채
+   *  살아남는다, review-front-model C2). 남는 편집 표면이 없으면 닫는 탭이 preview 여도 확인한다 — 버퍼가 닿을 곳이
+   *  없어지는 것은 같다. 반환은 확인할 문서 path */
+  function needsConfirm(target: Tab): string | null {
+    if (target.kind === 'terminal' || target.kind === 'url') return null;
+    const doc = editors.docs.get(target.path);
+    // 커밋 diff 탭은 문서를 그리지 않는다 — 참조로 세지 않는다
+    const isEditor = (t: Tab) => t.kind === 'file' || (t.kind === 'diff' && !t.commit);
+    const editorRefs = holders().reduce(
+      (n, { holder }) => n + holder.tabs.filter((t) => t.path === target.path && isEditor(t)).length,
+      0,
+    );
+    const lastEditor = editorRefs === (isEditor(target) ? 1 : 0);
+    return doc && doc.content !== doc.savedContent && lastEditor ? target.path : null;
+  }
+
+  /** 탭·카드 닫기의 몸체 — holder 는 그룹 또는 탭의 카드 목록(loc.hostTabId). 카드가 있는 탭은 자신과 카드 중 확인이 필요한
+   *  첫 것으로 확인을 띄우고, 확인 처리부가 다시 이 닫기를 부르면 다음으로 이어진다 (Save 뒤엔 깨끗하고 Don't Save 뒤엔
+   *  버퍼가 없다). 탭을 닫으면 카드도 같이 닫힌다 (터미널 카드는 정리) */
+  function closeIn(holder: TabHolder, loc: { groupId: number; tabId: string; hostTabId?: string }, force: boolean): void {
     if (!force) {
-      const target = editors.groups.find((g) => g.id === groupId)?.tabs.find((t) => t.id === tabId);
+      const target = holder.tabs.find((t) => t.id === loc.tabId);
       if (!target) return;
-      const doc = editors.docs.get(target.path);
-      // 같은 문서의 편집 표면(file·diff)이 다른 탭으로 남으면 버퍼는 계속 보이는 중 — 확인 불요.
-      // preview·hex 탭은 savedContent·디스크만 그려 참조로 세지 않는다 (세면 미저장 버퍼가
-      // 보이지 않은 채 살아남는다, review-front-model C2). 남는 편집 표면이 없으면 닫는 탭이
-      // preview 여도 확인한다 — 버퍼가 닿을 곳이 없어지는 것은 같다
-      // 커밋 diff 탭은 문서를 그리지 않는다 — 참조로 세지 않는다
-      const isEditor = (t: Tab) => t.kind === 'file' || (t.kind === 'diff' && !t.commit);
-      const editorRefs = editors.groups.reduce(
-        (n, g) => n + g.tabs.filter((t) => t.path === target.path && isEditor(t)).length,
-        0,
-      );
-      const lastEditor = editorRefs === (isEditor(target) ? 1 : 0);
-      if (doc && doc.content !== doc.savedContent && lastEditor) {
-        void askClose(groupId, tabId, target.path);
+      const path = [target, ...(target.cards?.tabs ?? [])].map(needsConfirm).find((p) => p !== null) ?? null;
+      if (path !== null) {
+        void askClose({ ...loc }, path);
         return;
       }
     }
-    const tab = takeTab(groupId, tabId);
+    const tab = takeFrom(holder, loc.tabId);
     if (!tab) return;
-    if (tab.kind === 'terminal') {
-      // 복원 이력 없음 — 죽은 셸은 되살릴 수 없다. 훅이 PTY 를 정리한다 (removeAt 경유면 이미 없어 무해)
-      terminalCloser?.(tab.term);
-    } else if (tab.kind !== 'url' && tab.kind !== 'settings') { // URL·설정 탭은 path 가 없어 최근 닫은 탭 이력 밖
-      editors.recentlyClosed.push(tab.kind === 'diff'
-        ? { kind: tab.kind, path: tab.path, deleted: tab.deleted, commit: tab.commit, from: tab.from }
-        : { kind: tab.kind, path: tab.path });
-      if (editors.recentlyClosed.length > RECENTLY_CLOSED_CAP) editors.recentlyClosed.shift();
+    for (const t of [tab, ...(tab.cards?.tabs ?? [])]) {
+      if (t.kind === 'terminal') {
+        // 복원 이력 없음 — 죽은 셸은 되살릴 수 없다. 훅이 PTY 를 정리한다 (removeAt 경유면 이미 없어 무해)
+        terminalCloser?.(t.term);
+      } else if (t === tab && loc.hostTabId === undefined && t.kind !== 'url' && t.kind !== 'settings' && t.kind !== 'downloads') {
+        // 카드는 이력에 없다 — 복원은 그룹의 탭으로만 (카드 없이 되살아난다). URL·설정 탭은 path 가 없어 이력 밖
+        editors.recentlyClosed.push(t.kind === 'diff'
+          ? { kind: t.kind, path: t.path, deleted: t.deleted, commit: t.commit, from: t.from }
+          : { kind: t.kind, path: t.path });
+        if (editors.recentlyClosed.length > RECENTLY_CLOSED_CAP) editors.recentlyClosed.shift();
+      }
     }
-    collapseIfEmpty(groupId);
+    if (loc.hostTabId === undefined) collapseIfEmpty(loc.groupId);
+  }
+
+  /** 닫기 확인 뒤 같은 대상을 다시 닫는다 — force 없이: 카드가 있는 탭이면 다음 dirty 카드의 확인으로 이어지고, 낱개는
+   *  방금 저장·폐기한 문서라 확인 없이 닫힌다 */
+  function closeAgain(c: { groupId: number; tabId: string; hostTabId?: string }): void {
+    if (c.hostTabId !== undefined) closeCard(c.groupId, c.hostTabId, c.tabId);
+    else closeTab(c.groupId, c.tabId);
   }
 
   /** dirty 문서의 마지막 탭 닫기 확인 (VS Code Save / Don't Save / Cancel).
    *  Save 는 저장 성공 시에만 닫는다 (실패·충돌은 탭 유지, 충돌은 토스트가 이어받는다).
-   *  Don't Save 는 버퍼·monaco 모델을 버려 다음 열기가 디스크를 읽게 한다. Cancel 은 탭·버퍼 유지 */
-  async function askClose(groupId: number, tabId: string, path: string): Promise<void> {
+   *  Don't Save 는 버퍼·monaco 모델을 버려 다음 열기가 디스크를 읽게 한다. Cancel 은 탭·버퍼 유지.
+   *  닫기는 force 없이 다시 부른다 — 카드가 있는 탭이면 다음 dirty 카드의 확인으로 이어지고, 낱개는 방금 저장·폐기한
+   *  문서라 확인 없이 닫힌다 (ticket terminal-tab-panes) */
+  async function askClose(loc: { groupId: number; tabId: string; hostTabId?: string }, path: string): Promise<void> {
     const choice = await confirm({
       message: `Do you want to save the changes you made to '${baseName(path)}'?`,
       detail: "Your changes will be lost if you don't save them.",
@@ -1040,12 +1216,12 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
       secondaryLabel: "Don't Save",
     });
     if (choice === 'confirm') {
-      if (await saveDoc(path)) closeTab(groupId, tabId, true);
+      if (await saveDoc(path)) closeAgain(loc);
     } else if (choice === 'secondary') {
       editors.docs.delete(path);
       editors.orphaned.delete(path);
       disposeModelsHook(path);
-      closeTab(groupId, tabId, true);
+      closeAgain(loc);
     }
   }
 
@@ -1161,14 +1337,15 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
       }
     }
     disposeModelsHook(from);
-    for (const g of editors.groups) {
+    for (const { holder: g } of holders()) {
       for (const t of g.tabs) {
         if (t.kind === 'diff' && t.commit) continue; // 커밋 시점 경로 — 워킹트리 rename 을 따르지 않는다
         const np = mapPath(t.path);
         if (np === null) continue;
         const newId = tabIdOf(t.kind, np);
         if (g.activeTabId === t.id) g.activeTabId = newId;
-        renameMru(g, t.id, newId);
+        const grp = editors.groups.find((x) => x === g);
+        if (grp) renameMru(grp, t.id, newId); // 카드 목록에는 MRU 가 없다
         t.id = newId;
         t.path = np;
         t.name = t.kind === 'diff' ? `${baseName(np)} (${t.deleted ? 'Deleted' : 'Working Tree'})` : tabNameOf(t.kind, np);
@@ -1194,10 +1371,12 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
    */
   function closePathTabs(path: string): void {
     const match = (p: string) => p === path || p.startsWith(`${path}/`);
-    for (const g of [...editors.groups]) {
-      for (const t of [...g.tabs]) {
+    for (const { groupId, holder, hostTabId } of holders()) {
+      for (const t of [...holder.tabs]) {
         // force — 삭제는 이미 confirm 을 거쳤다 (dirty 경고는 삭제 confirm 이 겸한다)
-        if (match(t.path)) closeTab(g.id, t.id, true);
+        if (!match(t.path)) continue;
+        if (hostTabId !== undefined) closeCard(groupId, hostTabId, t.id, true);
+        else closeTab(groupId, t.id, true);
       }
     }
     for (const m of pathMaps()) {
@@ -1375,6 +1554,8 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
       g.tabs = g.tabs.filter((t) => t.kind !== 'terminal');
       if (n > 0 && g.tabs.length === 0) emptied.push(g.id);
       if (g.activeTabId !== null && !g.tabs.some((t) => t.id === g.activeTabId)) g.activeTabId = g.tabs[0]?.id ?? null;
+      // 탭의 터미널 카드도 같은 이유로 — adoptTerminals 가 host 탭 id 로 카드를 되돌린다
+      for (const t of g.tabs) stripTerminalCards(t);
       // MRU 도 터미널·없는 id 를 걷어내고 활성 탭이 맨 앞이 되게 맞춘다 (옛 저장본은 mru 가 없다)
       g.mru = (g.mru ?? []).filter((id) => g.tabs.some((t) => t.id === id));
       activate(g, g.activeTabId);
@@ -1389,35 +1570,48 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     for (const id of emptied) collapseIfEmpty(id);
   }
 
+  /** 탭의 카드에서 터미널을 걷어낸다 (스냅샷 복원·워크스페이스 저장) — 활성 카드가 빠지면 탭 자신, 비면 cards 삭제 */
+  function stripTerminalCards(t: Tab): void {
+    if (!t.cards) return;
+    t.cards.tabs = t.cards.tabs.filter((c) => c.kind !== 'terminal');
+    if (t.cards.tabs.length === 0) delete t.cards;
+    else if (t.cards.activeTabId !== null && !t.cards.tabs.some((c) => c.id === t.cards!.activeTabId)) t.cards.activeTabId = null;
+  }
+
   /** 워크스페이스 상태 복원의 문서 채우기 (ticket workspace-state-restore) — restore 로 세운 껍데기 탭
    *  중 문서가 필요한 것(file·preview·삭제 아닌 diff)을 활성 탭부터 읽는다. 탭마다 loadingTabs 로 진행선을
    *  올리고, 읽기 실패(사라진 파일 등)한 탭은 걷어낸다. 반환은 걷어낸 탭 이름 — 호출측이 알림 한 줄로 합친다.
    *  hex·folder 탭은 뷰가 스스로 읽고, 이미 문서가 있는 경로는 건너뛴다 */
   async function hydrate(): Promise<string[]> {
     const order: { groupId: number; tab: Tab }[] = [];
-    const push = (g: EditorGroup, t: Tab) => {
+    const push = (groupId: number, t: Tab) => {
       if (t.kind !== 'file' && t.kind !== 'preview' && !(t.kind === 'diff' && !t.deleted && !t.commit)) return;
       if (editors.docs.has(t.path)) return;
-      if (!order.some((o) => o.tab.path === t.path)) order.push({ groupId: g.id, tab: t });
+      if (!order.some((o) => o.tab.path === t.path)) order.push({ groupId, tab: t });
     };
     const act = activeGroup();
     for (const g of [act, ...editors.groups.filter((g) => g !== act)]) {
       const a = g.tabs.find((t) => t.id === g.activeTabId);
-      if (a) push(g, a);
+      const c = a?.cards?.tabs.find((t) => t.id === a.cards!.activeTabId);
+      if (c) push(g.id, c);
+      else if (a) push(g.id, a);
     }
-    for (const g of editors.groups) for (const t of g.tabs) push(g, t);
+    for (const { groupId, holder } of holders()) for (const t of holder.tabs) push(groupId, t);
     const failed: string[] = [];
     // 순차 읽기 — 활성 탭이 먼저 채워지고, 원격에서 탭 수만큼 동시 요청을 쏟지 않는다
     for (const { tab } of order) {
-      const ids = editors.groups.flatMap((g) => g.tabs.filter((t) => t.path === tab.path).map((t) => t.id));
+      const ids = holders().flatMap(({ holder }) => holder.tabs.filter((t) => t.path === tab.path).map((t) => t.id));
       for (const id of ids) editors.loadingTabs.add(id);
       try {
         await ensureDoc(tab.path);
       } catch {
         failed.push(baseName(tab.path));
-        for (const g of [...editors.groups]) {
-          for (const t of [...g.tabs]) if (t.path === tab.path && takeTab(g.id, t.id)) collapseIfEmpty(g.id);
+        for (const { groupId, holder, hostTabId } of holders()) {
+          for (const t of [...holder.tabs]) {
+            if (t.path === tab.path && takeFrom(holder, t.id) && hostTabId === undefined) collapseIfEmpty(groupId);
+          }
         }
+        for (const g of editors.groups) for (const t of g.tabs) if (t.cards?.tabs.length === 0) delete t.cards;
         viewStates.delete(tab.path);
       } finally {
         for (const id of ids) editors.loadingTabs.delete(id);
@@ -1432,55 +1626,72 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
   function takeTabForHandoff(groupId: number, tabId: string): TabHandoff | null {
     const tab = takeTab(groupId, tabId);
     if (!tab) return null;
-    if (tab.kind === 'terminal' || tab.kind === 'url' || tab.kind === 'settings') {
+    // 마지막 참조였던 문서의 버퍼·뷰 상태·monaco 모델을 버린다 (다음 열기는 디스크에서) — 탭은 이미 뗐다
+    const releaseDoc = (path: string) => {
+      const refs = holders().reduce((n, { holder }) => n + holder.tabs.filter((t) => t.path === path).length, 0);
+      if (refs > 0) return;
+      for (const m of pathMaps()) m.delete(path);
+      editors.orphaned.delete(path);
+      disposeModelsHook(path);
+    };
+    // 카드들의 문서를 함께 싣는다. 터미널 카드는 그대로 둔 채 넘긴다 — sessions 가 PTY 스냅샷으로 바꿔 싣는다
+    const docs: [string, Doc][] = [];
+    for (const c of tab.cards?.tabs ?? []) {
+      if (c.kind === 'terminal') continue;
+      const d = editors.docs.get(c.path);
+      if (d && !docs.some(([p]) => p === c.path)) docs.push([c.path, { ...d }]);
+      releaseDoc(c.path);
+    }
+    const extra = docs.length ? { docs } : {};
+    if (tab.kind === 'terminal' || tab.kind === 'url' || tab.kind === 'settings' || tab.kind === 'downloads') {
       // 문서가 없다 — 탭만 뗀다. PTY 스냅샷·해제는 호출측(sessions)이 terminals 로 한다. URL 탭은 url 만 실린다
       collapseIfEmpty(groupId);
-      return { tab, doc: null };
+      return { tab, doc: null, ...extra };
     }
     const doc = editors.docs.get(tab.path);
-    const refs = editors.groups.reduce((n, g) => n + g.tabs.filter((t) => t.path === tab.path).length, 0);
-    if (refs === 0) {
-      for (const m of pathMaps()) m.delete(tab.path);
-      editors.orphaned.delete(tab.path);
-      disposeModelsHook(tab.path);
-    }
+    releaseDoc(tab.path);
     collapseIfEmpty(groupId);
-    return { tab: { ...tab, preview: false }, doc: doc ? { ...doc } : null };
+    return { tab: { ...tab, preview: false }, doc: doc ? { ...doc } : null, ...extra };
   }
 
   /** 다른 창에서 넘어온 탭을 받는다 — 문서 버퍼가 없던(로드 전) 탭은 디스크에서 연다.
    *  이 세션이 같은 문서를 이미 열고 있으면 이쪽 버퍼를 유지한다 (같은 root 라 같은 파일 —
    *  두 버퍼 중 하나는 잃는데, 받는 쪽이 보고 있던 것을 지킨다). 같은 탭이 이미 있으면 활성화만 */
   function acceptTab(h: TabHandoff, groupId?: number, index?: number): void {
-    if (h.tab.kind === 'terminal') return; // 터미널은 adoptTerminals 가 새 인스턴스로 탭을 연다
+    if (h.tab.kind === 'terminal') return; // 터미널은 adoptTerminals 가 새 인스턴스로 탭을 연다 (카드는 스냅샷의 cards 로)
     const group = (groupId !== undefined ? editors.groups.find((g) => g.id === groupId) : undefined) ?? activeGroup();
-    if (editors.docs.has(h.tab.path) && h.doc && h.doc.content !== h.doc.savedContent) {
+    // 카드 문서는 이쪽에 없는 것만 받는다 (있으면 이쪽 버퍼 유지). 카드 자체는 탭을 붙인 뒤 attachCards 로 — 터미널 카드는
+    // 걷어내고 adoptTerminals 가 host 탭 id 로 되돌린다
+    for (const [p, d] of h.docs ?? []) if (!editors.docs.has(p)) editors.docs.set(p, d);
+    const { cards, ...src } = h.tab;
+    if (editors.docs.has(src.path) && h.doc && h.doc.content !== h.doc.savedContent) {
       // 넘어온 쪽이 미저장인데 이쪽 버퍼를 지킨다 — 조용히 버리지 않고 알린다
-      notify('warning', `Unsaved changes of '${baseName(h.tab.path)}' from the other window were discarded (already open here)`);
+      notify('warning', `Unsaved changes of '${baseName(src.path)}' from the other window were discarded (already open here)`);
     }
     // hex·folder·url·settings 탭은 문서가 필요 없다 — 바이트·나열·페이지·폼은 받는 쪽 뷰가 다시 읽는다
-    if (!editors.docs.has(h.tab.path) && h.tab.kind !== 'hex' && h.tab.kind !== 'folder' && h.tab.kind !== 'url' && h.tab.kind !== 'settings') {
+    if (!editors.docs.has(src.path) && src.kind !== 'hex' && src.kind !== 'folder' && src.kind !== 'url' && src.kind !== 'settings' && src.kind !== 'downloads') {
       if (!h.doc) {
-        void (h.tab.kind === 'diff' ? openDiff(h.tab.path, { deleted: h.tab.deleted, commit: h.tab.commit, from: h.tab.from })
-          : h.tab.kind === 'preview' ? openHtmlPreview(h.tab.path)
-            : openFile(h.tab.path, { groupId: group.id }));
+        void (src.kind === 'diff' ? openDiff(src.path, { deleted: src.deleted, commit: src.commit, from: src.from })
+          : src.kind === 'preview' ? openHtmlPreview(src.path)
+            : openFile(src.path, { groupId: group.id }));
         return;
       }
-      editors.docs.set(h.tab.path, h.doc);
+      editors.docs.set(src.path, h.doc);
     }
-    const doc = editors.docs.get(h.tab.path);
-    const editable = h.tab.kind === 'file' || (h.tab.kind === 'diff' && !h.tab.commit);
-    const tab: Tab = { ...h.tab, dirty: editable && doc !== undefined && doc.content !== doc.savedContent, preview: false };
+    const doc = editors.docs.get(src.path);
+    const editable = src.kind === 'file' || (src.kind === 'diff' && !src.commit);
+    const tab: Tab = { ...src, dirty: editable && doc !== undefined && doc.content !== doc.savedContent, preview: false };
     if (!group.tabs.some((t) => t.id === tab.id)) {
       group.tabs.splice(Math.min(index ?? openIndex(group), group.tabs.length), 0, tab);
     }
+    if (cards) attachCards(tab.id, { ...cards, tabs: cards.tabs.filter((c) => c.kind !== 'terminal') }, group.id);
     activate(group, tab.id);
     editors.activeGroupId = group.id;
     editors.pendingFocus = true;
   }
 
   return {
-    editors, activeGroup, activeTab, openFile, openFileAt, openDiff, openHex, openUrl, navigateUrlTab, openSettings, ensureHex, loadHexChunk, openHtmlPreview, toggleHtmlPreview, setActiveTab, pinTab,
+    editors, activeGroup, activeTab, openFile, openFileAt, openDiff, openHex, openUrl, navigateUrlTab, openSettings, openDownloads, ensureHex, loadHexChunk, openHtmlPreview, toggleHtmlPreview, setActiveTab, pinTab,
     openFolderTab, openFolderTabSplit, navigateFolderTab, addGroupBeside, setFolderStyle, setFolderSort,
     openFileSplit, closeTab,
     reopenClosedEditor, moveTabToGroup, moveTabSplit,
@@ -1488,6 +1699,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     reloadDocFromDisk, hasDirtyDocs, saveActive, overwriteConflict, revertConflict, indentOf,
     snapshot, restore, hydrate, takeTabForHandoff, acceptTab,
     openTerminalTab, closeTerminalTabs, setTerminalCloser, renameTerminalTab, focusTerminalTab,
+    addCard, attachCards, setActiveCard, closeCard, activeLeaf,
   };
 }
 
@@ -1522,6 +1734,7 @@ export const openDiff = (path: string, opts?: { deleted?: boolean }): Promise<vo
 export const openHex = (path: string): void => ctx().editors.openHex(path);
 export const openUrl = (url?: string): void => ctx().editors.openUrl(url);
 export const openSettings = (): void => ctx().editors.openSettings();
+export const openDownloads = (): void => ctx().editors.openDownloads();
 export const navigateUrlTab = (tabId: string, url: string): void => ctx().editors.navigateUrlTab(tabId, url);
 export const openFolderTab = (path: string, opts: { groupId?: number; index?: number } = {}): void => ctx().editors.openFolderTab(path, opts);
 export const addGroupBeside = (refGroupId: number, side: SplitSide): number | null => ctx().editors.addGroupBeside(refGroupId, side);
@@ -1549,6 +1762,15 @@ export const moveTabToGroup = (fromGroupId: number, tabId: string, toGroupId: nu
 export const moveTabSplit = (fromGroupId: number, tabId: string, refGroupId: number, side: SplitSide): void =>
   ctx().editors.moveTabSplit(fromGroupId, tabId, refGroupId, side);
 export const splitGroup = (): void => ctx().editors.splitGroup();
+// 카드 (ticket terminal-tab-panes) — 팔레트·CardList 용
+export const addCard = (hostTabId: string, card: Card, opts?: { groupId?: number; index?: number }): boolean =>
+  ctx().editors.addCard(hostTabId, card, opts);
+export const attachCards = (hostTabId: string, cards: CardSet, groupId?: number): boolean => ctx().editors.attachCards(hostTabId, cards, groupId);
+export const setActiveCard = (groupId: number, hostTabId: string, cardId: string | null): void =>
+  ctx().editors.setActiveCard(groupId, hostTabId, cardId);
+export const closeCard = (groupId: number, hostTabId: string, cardId: string, force = false): void =>
+  ctx().editors.closeCard(groupId, hostTabId, cardId, force);
+export const activeLeaf = (): Tab | null => ctx().editors.activeLeaf();
 export const closeEmptyGroup = (groupId: number): void => ctx().editors.closeEmptyGroup(groupId);
 export const toggleGroupLock = (groupId: number): void => ctx().editors.toggleGroupLock(groupId);
 export const updateContent = (path: string, content: string): void =>

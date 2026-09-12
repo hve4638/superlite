@@ -36,8 +36,11 @@ fn handle_term() {
 fn reset_flow() {
   role: 세션 전 터미널의 미ack 카운터 리셋 — 재접속 시 프론트 카운터와 함께 0 에서 재시작 (유실 프레임 몫의 영구 누적 방지)
 }
+fn cli_dir() -> path? {
+  role: 셸 심 폴더 (ticket cli-control-discussion) — SUPERLITE_CLI_DIR 우회, 아니면 데몬 실행 파일 옆 cli/ (superlite + sl 링크). 데몬 폴더 자체를 PATH 에 넣지 않는다 — 동봉 tmux 가 사용자 tmux 를 가린다. 없으면 None (PATH 불변)
+}
 fn program() {
-  role: PTY 에서 돌릴 프로그램 (와이어 v17) — 데몬이 tmux 방식이면 tmux 세션을 먼저 detached 로 만들거나(attach 인자 없음) 지목된 세션 이름을 조회한 뒤 `tmux -L <SLUG> -f base.conf -u attach-session -t <id>` 를 TMUX/TMUX_PANE 없이 띄운다 (셸 심 좌표·ENV_ROOT 는 세션 환경변수로; -u 는 클라이언트 로케일 부재 시 한글 _ 방지). 데몬 환경에 UTF-8 로케일이 없으면(ssh 원격 데몬) LANG 을 채워 준다 — 설치돼 있으면 ko_KR.UTF-8, 아니면 C.UTF-8 (tmux::locale_fallback, ticket tmux-server-cwd-utf8). tmux 실패면 사유를 들고 셸 직접 실행으로 대체. plain·Windows 는 종전대로 $SHELL/COMSPEC + 환경변수 직접 주입 (unix plain 은 TERM=xterm-256color·COLORTERM=truecolor — tmux 방식에서 base.conf 전역 환경이 주는 것과 같은 값)
+  role: PTY 에서 돌릴 프로그램 (와이어 v17) — 셸 심 폴더(cli_dir)가 있으면 PATH 앞에 붙여 env 에 싣는다 (tmux 는 new_session 이 클라이언트 env 로 넘긴다). 데몬이 tmux 방식이면 tmux 세션을 먼저 detached 로 만들거나(attach 인자 없음) 지목된 세션 이름을 조회한 뒤 `tmux -L <SLUG> -f base.conf -u attach-session -t <id>` 를 TMUX/TMUX_PANE 없이 띄운다 (셸 심 좌표·ENV_ROOT 는 세션 환경변수로; -u 는 클라이언트 로케일 부재 시 한글 _ 방지). 데몬 환경에 UTF-8 로케일이 없으면(ssh 원격 데몬) LANG 을 채워 준다 — 설치돼 있으면 ko_KR.UTF-8, 아니면 C.UTF-8 (tmux::locale_fallback, ticket tmux-server-cwd-utf8). tmux 실패면 사유를 들고 셸 직접 실행으로 대체. plain·Windows 는 종전대로 $SHELL/COMSPEC + 환경변수 직접 주입 (unix plain 은 TERM=xterm-256color·COLORTERM=truecolor — tmux 방식에서 base.conf 전역 환경이 주는 것과 같은 값)
 }
 fn spawn_term() {
   role: PTY 생성 + 전용 리더 스레드. 프로그램은 program() — tmux 세션에 붙었으면 첫 출력 전에 termTmux{term,id,name}, tmux 대체면 termTmux{term,error} 를 sink 로 보낸다 (와이어 v17). — 출력은 UTF-8 경계 분할로 termData 푸시(id·sink 는 Route 에서 매번 읽음), 셸 자연 종료 시 자기 정리(소속 맵도 Route 기준 — adopt 로 옮겨졌으면 그쪽에서 빠진다). 자연 종료 termExit 에는 exit code 를 싣는다 (spawn 실패·dispose 경유는 code 없음). 셸 기본값은 $SHELL(unix) / COMSPEC(Windows). 환경변수 SUPERLITE_SOCK(이 데몬의 socket_path — common 의 우회 변수와 같은 이름이라 셸 안의 심·백엔드가 격리 인스턴스 포함 이 데몬에 붙는다)·SUPERLITE_SESSION(세션 id, 익명은 생략)을 주입한다 (와이어 v9) — 셸 심이 이 데몬·세션을 찾는 좌표, 원격에서는 원격 데몬 소켓. GIT_CONFIG_*(credential.helper 에 이 데몬 실행 파일의 helper 모드를 덧붙임)도 주입한다 (와이어 v18) — 터미널의 git 이 그 머신의 helper 로 못 채운 인증은 앱 대화상자로 가고, 성공 store·실패 erase 도 받는다 (VS Code git.terminalAuthentication 대응). 대상 세션은 요청자 tty 로 데몬이 해석하므로(main.rs resolve_requester) 세션 id 환경변수가 낡아도 된다. Term 은 tty·tmux_id 를 들어 그 대조에 쓴다. 쓰기 스레드는 셸에 쓴 몫을 termInputAck(UTF-16 단위 — 프론트 data.length 와 일치)로 통지한다 — 프론트 입력 배압 창의 반쪽

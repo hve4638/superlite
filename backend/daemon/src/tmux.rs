@@ -213,6 +213,12 @@ pub(crate) fn new_session(bin: &Path, root: &Path, env: &[(&str, String)]) -> Re
         c.args(["new-session", "-d", "-s", &name, "-c"]).arg(root).args(["-P", "-F", "#{session_id}"]);
         for (k, v) in env {
             c.arg("-e").arg(format!("{k}={v}"));
+            // PATH 만은 -e 로 안 들어간다 — tmux 는 새 pane 의 PATH 를 세션 환경이 아니라 new-session 을
+            // 부른 클라이언트(이 프로세스)의 환경에서 가져온다 (3.7b 실측: -e FOO 는 보이고 -e PATH 는
+            // 무시). 클라이언트 환경에 같이 실어 셸 심 폴더가 PATH 앞에 남게 한다
+            if *k == "PATH" {
+                c.env("PATH", v);
+            }
         }
         match out_text(c.output().map_err(err)?) {
             Ok(id) => return Ok((id, name)),

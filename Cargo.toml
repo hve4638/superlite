@@ -1,5 +1,5 @@
 [workspace]
-members = ["backend/common", "backend/daemon", "backend/relay", "app"]
+members = ["backend/common", "backend/daemon", "backend/relay", "backend/cli", "app"]
 resolver = "2"
 
 # 릴리스 버전의 단일 출처 — crate 4개가 version.workspace 로 상속하고, tauri.conf.json 은

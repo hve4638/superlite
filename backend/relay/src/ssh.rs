@@ -575,17 +575,22 @@ pub async fn ensure_remote_bin(
     // 없으면 원격의 tmux 에 맡긴다
     let tmux = crate::tmux_bin_for(&info.os, &info.arch).and_then(|p| std::fs::read(p).ok());
     let tmux_target = format!("{dir}/tmux");
+    // 셸 심(ticket cli-control-discussion)은 하위 폴더 cli/ 에 `superlite` + `sl` 링크로 — 데몬이 그
+    // 폴더만 PATH 앞에 넣는다 (데몬 폴더째 넣으면 동봉 tmux 가 사용자 tmux 를 가린다). 폴더 키는
+    // 데몬 해시 그대로 — 심만 바뀐 빌드는 데몬이 같은 폴더의 옛 심을 쓴다 (데몬과 함께 바뀌는 게 보통)
+    let cli = crate::cli_bin_for(&info.os, &info.arch).and_then(|p| std::fs::read(p).ok());
+    let cli_target = format!("{dir}/cli/superlite");
     stage(tx, "helper", None);
     // 존재 검사와 업로드를 나눈다 — 한 번에 하면 이미 있을 때도 stdin 으로 바이너리를 다
     // 보내게 된다 (원격이 안 읽으면 전송이 어중간히 끊긴다). ControlMaster 덕에 두 번째
     // exec 는 왕복 하나 값이다. 검사 하나로 둘 다 — stdout 에 있는 것의 표식을 찍는다
-    let probe = run_ssh(host, opts, &format!(r#"test -x "{target}" && echo D; test -x "{tmux_target}" && echo T; true"#), b"").await?;
+    let probe = run_ssh(host, opts, &format!(r#"test -x "{target}" && echo D; test -x "{tmux_target}" && echo T; test -x "{cli_target}" && echo C; true"#), b"").await?;
     if !probe.status.success() {
         return Err(ssh_err(&probe)); // true 로 끝나므로 실패는 접속 실패(255 등)뿐
     }
     let have = String::from_utf8_lossy(&probe.stdout);
     // $$(원격 셸 pid)로 임시명 충돌 방지 — 동시 접속 둘이 같은 파일을 쓰지 않게
-    let up = |t: &str| format!(r#"mkdir -p "{dir}" && cat > "{t}.$$" && chmod +x "{t}.$$" && mv "{t}.$$" "{t}""#);
+    let up = |t: &str| format!(r#"mkdir -p "$(dirname "{t}")" && cat > "{t}.$$" && chmod +x "{t}.$$" && mv "{t}.$$" "{t}""#);
     if !have.contains('D') {
         stage(tx, "upload", Some(data.len() as u64));
         let out = run_ssh(host, opts, &up(&target), &data).await?;
@@ -601,6 +606,15 @@ pub async fn ensure_remote_bin(
             return Err(format!("tmux 업로드 실패: {}", ssh_err(&out)));
         }
         eprintln!("backend: ssh {host} — tmux 업로드 완료 ({} bytes)", t.len());
+    }
+    if let Some(c) = cli.filter(|_| !have.contains('C')) {
+        stage(tx, "upload", Some(c.len() as u64));
+        let cmd = format!(r#"{} && ln -sfn superlite "{dir}/cli/sl""#, up(&cli_target));
+        let out = run_ssh(host, opts, &cmd, &c).await?;
+        if !out.status.success() {
+            return Err(format!("셸 심 업로드 실패: {}", ssh_err(&out)));
+        }
+        eprintln!("backend: ssh {host} — 셸 심 업로드 완료 ({} bytes)", c.len());
     }
     Ok(target)
 }

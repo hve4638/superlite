@@ -7,7 +7,10 @@
     "resources": {
       "../target/x86_64-pc-windows-gnu/release/superlite-daemon.exe": "daemon/windows-x86_64.exe",
       "../target/x86_64-unknown-linux-musl/release/superlite-daemon": "daemon/linux-x86_64",
-      "../target/tmux/tmux-linux-x86_64": "daemon/tmux-linux-x86_64"
+      "../target/tmux/tmux-linux-x86_64": "daemon/tmux-linux-x86_64",
+      "../target/x86_64-pc-windows-gnu/release/superlite.exe": "daemon/cli/superlite.exe",
+      "../target/x86_64-pc-windows-gnu/release/sl.exe": "daemon/cli/sl.exe",
+      "../target/x86_64-unknown-linux-musl/release/superlite": "daemon/cli-linux-x86_64"
     },
     "windows": {
       "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },

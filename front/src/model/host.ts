@@ -5,6 +5,7 @@ import type { ThinBackend } from '../backend/types';
 import { boot } from './boot';
 import { ctx, viewOf } from './ctx';
 import { daemonClean } from './daemon';
+import { requestDownload } from './downloads';
 import { credential, type CredentialRequest } from './gitauth';
 import { errText, notify } from './notifications';
 import { configureNvim } from './nvim';
@@ -90,11 +91,16 @@ if (injected) {
 }
 
 /**
- * 데몬 소켓 요청자(셸 심 `superlite …`, ticket cli-open-command)가 세션에 보낸 요청의 처리
- * (와이어 v9). 통로의 첫 핸들러 둘 — notify(알림 표시)·open(경로 열기: 파일은 그 세션
- * 편집기, 폴더는 폴더 열기). 이후 전용 명령은 여기에 method 를 더한다. 결과는 요청자에게
- * 돌아가고 throw 는 에러로 돌아간다. 요청이 온 세션 탭으로 전환한다 (VS Code 가 요청한
- * 창을 앞으로 가져오는 것과 같은 의미 — OS 수준 창 포커스는 없음)
+ * 데몬 소켓 요청자(셸 심 `superlite <동사> [인자…]`, backend/cli — ticket cli-control-discussion,
+ * 데몬 credential helper 모드)가 세션에 보낸 요청의 처리 (와이어 v9). 심은 동사를 해석하지
+ * 않고 params 에 {args: 나머지 인자, cwd: 셸의 작업 폴더} 를 실어 보낸다 — 동사의 이름·인자·
+ * 확인 여부는 전부 여기서 정한다. 내장 동사: notify(알림)·open(경로 열기: 파일은 그 세션 편집기,
+ * 폴더는 폴더 열기)·download(Download 뷰 대기열에 넣고 바로 'queued' — `--wait` 면 사용자 확인·전송이
+ * 끝나야 돌아간다)·credential(git helper 중계). 새 내장 동사는 case 를 더한다; 플러그인이
+ * 동사를 등록하는 방식은 ticket plugin-architecture 의 결정을 따른다. 결과는 요청자에게 돌아가고
+ * throw 는 에러로 돌아간다. 요청이 온 세션 탭으로 전환한다 (VS Code 가 요청한 창을 앞으로
+ * 가져오는 것과 같은 의미 — OS 수준 창 포커스는 없음). 상대 경로는 cwd 기준 (에이전트는
+ * `superlite open src/a.ts` 처럼 친다)
  */
 async function handleRequest(
   tab: SessionTab,
@@ -110,8 +116,8 @@ async function handleRequest(
       return null;
     }
     case 'open': {
-      const abs = typeof p.path === 'string' ? p.path : '';
-      if (!abs) throw new Error('path 필요');
+      const abs = argPath(p);
+      if (!abs) throw new Error('경로 필요: superlite open <경로>');
       const { full, wire } = requestPath(ctx.workbench.workbench.rootPath, abs);
       // 파일인가 — stat 은 정규 파일만 성공한다. 아니면 폴더 나열(browseDir, 절대 경로)로
       // 확인, 그것도 실패하면 그 에러(경로 부재 등)가 요청자에게 돌아간다
@@ -128,6 +134,27 @@ async function handleRequest(
       openFolder(full); // 활성 세션 기준 원격 판정 — 방금 전환했으므로 이 세션의 호스트다
       return { kind: 'folder' };
     }
+    // download [--wait]: 기본은 Download 뷰 대기열에 넣고 바로 돌아온다 (에이전트가 막히지 않는다 — 사용자
+    // 결정 2026-09-12). --wait 면 사용자의 확인·전송이 끝나야 돌아오고 취소·실패는 에러
+    // 경로는 여럿 가능 (`superlite download a b c`, 글로브는 셸이 펼친다) — 경로마다 대기열 항목 하나
+    case 'download': {
+      const paths = argPaths(p);
+      if (paths.length === 0) throw new Error('경로 필요: superlite download <경로…> [--wait]');
+      activateSession(tab.id);
+      const jobs: Promise<void>[] = [];
+      for (const abs of paths) {
+        const { wire } = requestPath(ctx.workbench.workbench.rootPath, abs);
+        // 정규 파일이면 file, 아니면 폴더로 본다 — 부재는 전송 단계에서 에러로 돌아간다
+        const isFile = await ctx.backend.stat(wire).then(() => true, () => false);
+        jobs.push(requestDownload(ctx.backend, tab.name, wire, isFile ? 'file' : 'directory'));
+      }
+      if (argFlags(p).has('--wait')) {
+        await Promise.all(jobs); // 하나라도 취소·실패면 에러
+        return null;
+      }
+      for (const j of jobs) j.catch(() => {}); // 결과는 뷰가 보여 준다 — 요청자는 이미 떠났다
+      return paths.length === 1 ? 'queued' : `queued ${paths.length}`;
+    }
     // git credential helper 중계 (와이어 v18 — 데몬이 띄운 git 과 터미널 git 모두): get 은 {username,
     // password} 또는 null, store/erase 는 null
     case 'credential':
@@ -135,6 +162,26 @@ async function handleRequest(
     default:
       throw new Error(`미지 요청: ${method}`);
   }
+}
+
+/** 심 params 의 `--플래그` 인자 집합 */
+function argFlags(p: Record<string, unknown>): Set<string> {
+  return new Set((Array.isArray(p.args) ? p.args : []).filter((a): a is string => typeof a === 'string' && a.startsWith('--')));
+}
+
+/** 심 params 의 경로 인자들 — `--플래그` 를 뺀 args (종전 path 도 받는다). 상대 경로는 cwd 로 절대화 */
+function argPaths(p: Record<string, unknown>): string[] {
+  const positional = (Array.isArray(p.args) ? p.args : []).filter((a): a is string => typeof a === 'string' && !a.startsWith('--'));
+  const raws = typeof p.path === 'string' ? [p.path] : positional;
+  const cwd = typeof p.cwd === 'string' ? p.cwd.replace(/[\\/]+$/, '') : '';
+  return raws
+    .filter((r) => r !== '')
+    .map((raw) => (/^([a-zA-Z]:|\/)/.test(raw) || cwd === '' ? raw : `${cwd}/${raw}`));
+}
+
+/** 첫 경로 인자 (open 등 단일 경로 동사) — 없으면 '' */
+function argPath(p: Record<string, unknown>): string {
+  return argPaths(p)[0] ?? '';
 }
 
 /** 요청자가 준 절대 경로 → full('/' 구분 절대 경로 — 폴더 열기·browseDir 용)과 wire(파일

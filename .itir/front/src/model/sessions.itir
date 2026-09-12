@@ -124,7 +124,7 @@ export fn sessionRoot(id) -> String? {
   role: 세션 root 문자열 — 에디터·터미널 탭 이동은 같은 root 사이에서만 (와이어 경로가 root 상대)
 }
 export fn detachEditorTab(groupId, tabId, x, y) {
-  role: 활성 세션의 에디터 탭 창 밖 드롭 → 탭을 떼어(takeTabForHandoff) native detach_tabs — 이 창의 메인 소속 서브 창이 생기고 그 세션의 미러가 탭을 받는다 (toSession 은 native 가 원본 id 로 채움, fromSession 은 데몬 세션 id). 핸드오프에 fontZoom 을 실어 새 서브 창이 이 창의 배율을 물려받는다 (ticket zoom-per-window)
+  role: 활성 세션의 에디터 탭 창 밖 드롭 → 탭을 떼어(takeTabForHandoff — 카드가 있는 탭이면 터미널 카드를 PTY 스냅샷(host·hostTerm 포함)으로 바꿔 terminals 에 싣고 문서 카드는 docs 로, 터미널 탭이면 그 탭의 다른 카드를 스냅샷의 cards 로) native detach_tabs — 이 창의 메인 소속 서브 창이 생기고 그 세션의 미러가 탭을 받는다 (toSession 은 native 가 원본 id 로 채움, fromSession 은 데몬 세션 id). 핸드오프에 fontZoom 을 실어 새 서브 창이 이 창의 배율을 물려받는다 (ticket zoom-per-window)
 }
 export fn requestTabsMove(fromWindow, pick, to) {
   role: 대상 창의 탭바·편집기 본문 드롭 — forward 로 출처에 tabs-move-request. to.toSplit(본문 가장자리, ticket cross-window-editor-drop)이 있으면 받는 쪽 applyHandoff 가 toGroupId 옆에 addGroupBeside 로 새 그룹을 만들어 붙인다 (요청 시점에 만들면 거절됐을 때 빈 그룹이 남는다). 터미널 탭도 같은 경로 — 출처(tabsHandoff)가 떼어낸 탭이 terminal 종류면 에디터 핸드오프 대신 terminals.snapshot(버퍼)+releaseTerminal 로 싣고, 받는 쪽은 adoptTerminals(와이어 v10)로 데몬 터미널을 가져와 toGroupId/toIndex 에 탭을 연다. 출처가 탭을 떼어 tabs-handoff 를 대상 창에 forward 로 바로 보낸다 (native 큐를 거치지 않는다). root 일치 검사는 호출측(UI)이 드래그 데이터의 root 로 미리 한다. 핸드오프 생성은 파괴적(탭 제거·터미널 핸들 해제)이라 invoke 가 거절되면 undoTabsHandoff 로 출처 세션에 되돌린다 (미저장 버퍼·살아 있는 PTY 가 고아가 되지 않게)

@@ -4,8 +4,10 @@ import { editors } from '../../model/editors';
 import { TERMINAL_BACKGROUND, attachTerminal, fitTerminal, focusTerminal } from './terminalHost';
 
 // 터미널 탭의 본문 — xterm 은 terminalHost 의 바인딩이 소유하고 여기는 붙이고 크기를 맞출 뿐.
-// 탭 전환·세션 전환으로 언마운트돼도 스크롤백은 바인딩에 그대로 남는다
-const props = defineProps<{ term: number; groupId: number }>();
+// 탭 전환·세션 전환으로 언마운트돼도 스크롤백은 바인딩에 그대로 남는다.
+// active: 이 터미널이 활성 그룹의 활성 탭(덱이면 활성 덱의 활성 카드)인가 — TabBody 가 계산한다. 마운트돼 있다는 것이
+// 곧 자기 목록의 활성 탭이라는 뜻이므로 목록의 활성 여부만 받으면 된다
+const props = defineProps<{ term: number; active: boolean }>();
 
 const host = ref<HTMLElement | null>(null);
 let ro: ResizeObserver | null = null;
@@ -19,7 +21,7 @@ onMounted(() => {
     fitTerminal(props.term);
     // 탭 활성화·새 터미널은 바로 입력 가능해야 한다 — 활성 그룹일 때만 (여러 그룹의 터미널이
     // 동시에 마운트되면 마지막 것이 포커스를 뺏는다). monaco 용 포커스 요청은 여기서 소비한다
-    if (isActiveTab()) {
+    if (props.active) {
       editors.pendingFocus = false;
       focusTerminal(props.term);
     }
@@ -29,15 +31,8 @@ onMounted(() => {
 // 이미 마운트된 채 다시 활성화(Ctrl+`·탭 클릭) — remount 가 없으니 포커스 요청을 지켜본다.
 // WHY: 활성 탭이 이 터미널일 때만 — 다른 탭으로 옮기는 요청(pre flush, 아직 언마운트 전)을
 //      여기서 삼키면 monaco 가 포커스를 못 받는다
-// 탭 id 문자열을 여기서 다시 조립하지 않는다 — id 규칙은 model/editors 의 것이라, 활성 탭 객체를 찾아 종류·term 으로 본다
-const isActiveTab = () => {
-  if (editors.activeGroupId !== props.groupId) return false;
-  const g = editors.groups.find((g) => g.id === props.groupId);
-  const t = g?.tabs.find((t) => t.id === g.activeTabId);
-  return t?.kind === 'terminal' && t.term === props.term;
-};
 watch(
-  () => editors.pendingFocus && isActiveTab(),
+  () => editors.pendingFocus && props.active,
   (on) => {
     if (!on) return;
     editors.pendingFocus = false;

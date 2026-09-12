@@ -6,6 +6,8 @@
 #   superlite.exe, WebView2Loader.dll
 #   daemon/windows-x86_64.exe   앱이 로컬에서 띄우는 데몬
 #   daemon/linux-x86_64         musl 정적 linux 데몬 — linux 원격(ssh)에 올려 실행
+#   daemon/cli/superlite.exe    셸 심 `superlite <동사>` (sl.exe 는 같은 파일 복사) — 데몬이 PTY PATH 앞에 cli/ 를 넣는다
+#   daemon/cli-linux-x86_64     musl 정적 셸 심 — linux 원격에 데몬과 함께 cli/superlite (+sl 링크) 로 올린다
 #   daemon/tmux-linux-x86_64    musl 정적 tmux (고정 버전 릴리스 바이너리) — 내장 터미널 서버, 데몬과 함께
 #                               원격에 올린다 (ticket term-list-reconnect). Windows 는 tmux 없음 (터미널 보존 없음)
 # 데몬은 앱 옆 daemon/<os>-<arch>[.exe] 한 규칙으로 찾는다 (backend/relay lib.rs
@@ -97,8 +99,12 @@ fi
 # 빌드 정보(커밋·dirty·시각)는 common 의 build.rs 가 굽는다 — 재실행 조건이 HEAD 변경뿐이라
 # 배포 빌드는 touch 로 강제 재실행해 현재 트리 상태를 정확히 박는다
 touch backend/common/build.rs
-cargo build --release --target x86_64-pc-windows-gnu -p superlite-daemon
-cargo build --release --target x86_64-unknown-linux-musl -p superlite-daemon
+cargo build --release --target x86_64-pc-windows-gnu -p superlite-daemon -p superlite-cli
+cargo build --release --target x86_64-unknown-linux-musl -p superlite-daemon -p superlite-cli
+# 셸 심 (ticket cli-control-discussion): 로컬 Windows 는 daemon/cli/{superlite,sl}.exe (심볼릭 링크 대신
+# 복사 — Windows 링크는 권한이 필요하다), 원격용 musl 은 daemon/cli-linux-x86_64 (relay 가 cli/superlite
+# + sl 링크로 올린다). 데몬이 자기 옆 cli/ 를 PTY PATH 앞에 넣는다
+cp target/x86_64-pc-windows-gnu/release/superlite.exe target/x86_64-pc-windows-gnu/release/sl.exe
 # 앱은 tauri-cli 로 — 같은 --release --target 이라 target/ 산출물은 위와 같은 자리에 나오고,
 # 이어서 NSIS 설치 파일을 묶는다. 번들 설정은 tauri.bundle.conf.json 에만 두고 --config 로
 # 얹는다: 데몬 바이너리를 리소스로 동봉하는데(설치본에서도 앱 옆 daemon/<os>-<arch> 규칙 유지)

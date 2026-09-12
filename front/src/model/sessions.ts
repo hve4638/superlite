@@ -723,12 +723,24 @@ function tabsHandoff(key: string, picks: TabPick[]): Extract<Handoff, { kind: 't
   const terminals: TerminalSnapshot[] = [];
   for (const pick of picks) {
     const h = ctx.editors.takeTabForHandoff(pick.groupId, pick.tabId);
-    if (h && h.tab.kind === 'terminal') {
-      // 터미널 탭 — 탭 대신 PTY 스냅샷(버퍼)을 싣는다. 데몬 터미널은 살려 둔다 (받는 쪽이 adoptTerminal 로)
-      terminals.push(...ctx.terminals.snapshot(h.tab.term));
+    if (!h) continue;
+    // 탭은 이미 떼어졌으므로 스냅샷이 자리(host·cards)를 못 찾는다 — 여기서 직접 채운다.
+    // 터미널 카드는 PTY 스냅샷(호스트 참조 포함)으로 바꿔 싣는다 (받는 쪽 adoptTerminals 가 되돌린다)
+    const hostInst = h.tab.kind === 'terminal' ? ctx.terminals.terminals.list.find((t) => t.id === (h.tab as { term: number }).term) : undefined;
+    const hostRef = hostInst ? { hostTerm: hostInst.session.id } : { host: h.tab.id };
+    const cardTerms = (h.tab.cards?.tabs ?? []).flatMap((c) => (c.kind === 'terminal' ? [c.term] : []));
+    if (h.tab.kind === 'terminal') {
+      // 터미널 탭 — 탭 대신 PTY 스냅샷(버퍼)을 싣는다. 데몬 터미널은 살려 둔다 (받는 쪽이 adoptTerminal 로).
+      // 터미널 아닌 카드는 스냅샷의 cards 로 (탭이 걷히므로)
+      const cards = h.tab.cards ? { ...h.tab.cards, tabs: h.tab.cards.tabs.filter((c) => c.kind !== 'terminal') } : undefined;
+      terminals.push(...ctx.terminals.snapshot(h.tab.term).map((s) => (cards && cards.tabs.length ? { ...s, cards } : s)));
       ctx.terminals.releaseTerminal(h.tab.term);
-    } else if (h) {
+    } else {
       editors.push(h);
+    }
+    for (const term of cardTerms) {
+      terminals.push(...ctx.terminals.snapshot(term).map((s) => ({ ...s, ...hostRef })));
+      ctx.terminals.releaseTerminal(term);
     }
   }
   if (editors.length === 0 && terminals.length === 0) return null;

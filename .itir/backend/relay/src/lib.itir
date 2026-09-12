@@ -72,6 +72,9 @@ fn daemon_build() -> str {
 fn daemon_conn() {
   role: 데몬 소켓 접속. spawn 인자는 제어 루프만 true — relay 까지 spawn 하면 백엔드 하나가 데몬을 두 번 띄우는 race 가 생기므로 relay 는 재시도만 한다 (데몬 부재 시 제어 루프가 곧 재기동)
 }
+fn cli_bin_for(os, arch) -> path? {
+  role: 동봉 셸 심 바이너리(원격 업로드용, ticket cli-control-discussion) — 앱 옆 daemon/cli-<os>-<arch> (build.sh 가 musl 정적 빌드를 둔다). 없으면 None — 원격 셸에 superlite 명령이 없을 뿐
+}
 fn tmux_bin_for(os, arch) -> path? {
   role: 동봉 tmux 바이너리 — 앱 옆 daemon/tmux-<os>-<arch> (build.sh 가 정적 릴리스를 둔다), 로컬은 SUPERLITE_TMUX_BIN 우회 먼저. 없으면 None — 원격은 원격 호스트의 tmux, 로컬 데몬은 PATH
 }

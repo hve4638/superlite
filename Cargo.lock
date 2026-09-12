@@ -4430,6 +4430,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "superlite-cli"
+version = "0.3.0"
+dependencies = [
+ "libc",
+ "serde_json",
+]
+
+[[package]]
 name = "superlite-common"
 version = "0.3.0"
 

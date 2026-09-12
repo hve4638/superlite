@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { EDITOR_ZOOM_MAX, EDITOR_ZOOM_MIN, EDITOR_ZOOM_STEP, activeTab, base64Bytes, editorView, editors, indentOf, setEditorZoom, toggleViewerAutoReload, viewerAutoReload } from '../model/editors';
+import { EDITOR_ZOOM_MAX, EDITOR_ZOOM_MIN, EDITOR_ZOOM_STEP, activeLeaf, base64Bytes, editorView, editors, indentOf, setEditorZoom, toggleViewerAutoReload, viewerAutoReload } from '../model/editors';
 import { languageLabel } from '../model/languages';
 import { activeRepo } from '../model/scm';
 import { transfer } from '../model/transfer';
@@ -8,8 +8,8 @@ import { connection, stageLabel, failureLabel } from '../model/watch';
 import { cmdlineKey, inputText, toggleVimMode, vimMode, vimModeLabel } from '../model/nvim';
 import { setTerminalZoom, terminalView } from '../model/terminal';
 
-// diff 탭도 path 를 가지므로 kind 무관하게 파일 정보를 표시한다 (VS Code 동일)
-const fileTab = computed(() => activeTab());
+// diff 탭도 path 를 가지므로 kind 무관하게 파일 정보를 표시한다 (VS Code 동일). 활성 카드가 있으면 그 카드 (activeLeaf)
+const fileTab = computed(() => activeLeaf());
 // 활성 편집기 파일이 속한 저장소의 브랜치 (VS Code 동일 — 다중 저장소면 파일을 따라 바뀐다)
 const repo = computed(() => activeRepo());
 const branchLabel = computed(() => (repo.value ? (repo.value.dirty ? `${repo.value.branch}*` : repo.value.branch) : ''));
@@ -19,7 +19,7 @@ const branchLabel = computed(() => (repo.value ? (repo.value.dirty ? `${repo.val
 /** 텍스트 편집기가 아닌 전용 뷰 탭 — 이 종류에는 Ln/Col·언어 같은 텍스트 항목을 그리지 않는다. 종류가 늘면 여기 한 곳 */
 const viewerTab = computed(() => {
   const t = fileTab.value;
-  return t !== null && (t.kind === 'hex' || t.kind === 'preview' || t.kind === 'terminal' || t.kind === 'folder' || t.kind === 'url' || t.kind === 'settings');
+  return t !== null && (t.kind === 'hex' || t.kind === 'preview' || t.kind === 'terminal' || t.kind === 'folder' || t.kind === 'url' || t.kind === 'settings' || t.kind === 'downloads');
 });
 const image = computed(() => {
   const t = fileTab.value;

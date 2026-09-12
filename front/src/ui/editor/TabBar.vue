@@ -207,7 +207,7 @@ function onForeignDrop(e: DragEvent) {
           'drop-before': tabDragging && dropIndex === i,
           'drop-after': tabDragging && dropIndex === i + 1 && i === group.tabs.length - 1,
         }"
-        :title="tab.kind === 'terminal' || tab.kind === 'url' || tab.kind === 'settings' ? tab.name : isConfigPath(tab.path) ? configTooltip(tab.path) : tab.path"
+        :title="tab.kind === 'terminal' || tab.kind === 'url' || tab.kind === 'settings' || tab.kind === 'downloads' ? tab.name : isConfigPath(tab.path) ? configTooltip(tab.path) : tab.path"
         draggable="true"
         @dragstart="onDragStart($event, tab)"
         @dragend="onDragEnd($event)"
@@ -222,6 +222,7 @@ function onForeignDrop(e: DragEvent) {
         <span v-else-if="tab.kind === 'folder'" class="codicon codicon-folder tab-icon" />
         <span v-else-if="tab.kind === 'url'" class="codicon codicon-globe tab-icon" />
         <span v-else-if="tab.kind === 'settings' || isConfigPath(tab.path)" class="codicon codicon-settings-gear tab-icon" />
+        <span v-else-if="tab.kind === 'downloads'" class="codicon codicon-cloud-download tab-icon" />
         <FileIcon v-else :name="iconName(tab)" />
         <span class="tab-label">{{ tab.name }}</span>
         <span v-if="descriptions.get(tab.id)" class="tab-description">{{ descriptions.get(tab.id) }}</span>

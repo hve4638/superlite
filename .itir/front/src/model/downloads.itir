@@ -1,0 +1,31 @@
+import { ThinBackend } from '../backend/types'
+import { baseName, openDownloads } from './editors'
+import { errText } from './notifications'
+import { downloadEntry } from './transfer'
+
+role: 셸 심 `superlite download <경로>` 의 확인 대기열 (ticket cli-control-discussion) — 다운로드는 반드시 사용자가 묻고 실행한다 (사용자 결정 2026-09-11). 요청은 탐색기 아래 Download 뷰에 한 줄로 뜨고 확인·취소로 답한다. 심은 기본으로 바로 돌아가고(host.ts 'queued') `--wait` 일 때만 답이 올 때까지 기다린다 — 타임아웃 없음, 프론트 연결이 끊기면 데몬이 에러 회신. 목록은 페이지 전역 — 항목이 자기 세션의 backend 를 들고 있어 사용자가 다른 탭에서 확인해도 요청한 세션에서 받는다. 정렬(orderedDownloads): 선택이 필요한 대기 항목이 항상 위, 그 안과 나머지는 최신순(items 는 unshift 로 최신이 앞) — 답하면 최신순 자리로 돌아간다 (2026-09-12 사용자 요구). 전체 기록은 에디터 Downloads 탭(ui/editor DownloadsView). ponytail: 끝난 항목은 × 로 지운다, 자동 정리 없음
+
+export type DownloadState
+export type DownloadItem
+export val downloads
+export val orderedDownloads
+export val pendingDownloads
+
+export fn requestDownload(backend, session, path, kind) {
+  role: 요청 등록(reactive 항목 — settle 이 같은 참조로 state 를 바꾼다) — 사용자가 확인하면 직렬 큐(chain — 전송 슬롯이 하나라 일괄 허용도 차례로)로 downloadEntry(요청 세션 backend)까지 끝난 뒤 resolve, 취소·대화상자 취소·전송 거절(got=false → cancelled)·실패면 reject (심에 에러로 간다)
+}
+export fn confirmDownload(id) {
+  role: 대기 항목 확인 → running → done|failed
+}
+export fn cancelDownload(id) {
+  role: 대기 항목 취소 → cancelled, 심은 "사용자가 취소했다" 에러
+}
+export fn confirmAllDownloads() {
+  role: 일괄 다운로드 허용 — 대기 중 전부 확인 (전송은 transfer 슬롯이 하나라 차례로)
+}
+export fn showAllDownloads() {
+  role: 전체 다운로드 기록 — editors.openDownloads (창에 하나인 Downloads 탭)
+}
+export fn clearDownload(id) {
+  role: 끝난 항목 제거 (×) — 대기·진행 중은 남긴다
+}

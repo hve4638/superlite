@@ -4,6 +4,7 @@ import { openFolderDialog } from './host';
 import { closeTab, reopenClosedEditor, saveActive, splitGroup, toggleGroupLock, activeGroup, activeTab, openHex, toggleHtmlPreview, isHtml, openUrl, openSettings, toggleWordWrap, stepEditorZoom, setEditorZoom, setActiveTab } from './editors';
 import { createTerminal, imeDiag, toggleTerminal } from './terminal';
 import { openSettingsJson, openSshConfig, openTmuxConf } from './configfiles';
+import { showAllDownloads } from './downloads';
 import { refreshScm } from './scm';
 import { activeSessionEmpty, cycleSession, sessionsEnabled } from './sessions';
 import { inApp, reloadWindow, zoomWindow } from './window';
@@ -96,6 +97,7 @@ export function setupCommands(): void {
   register({ id: 'view.openUrl', title: 'View: Open URL...', run: () => openUrl() });
   // 사용자 설정 (ticket user-settings) — 폼 탭과 JSON 원문 탭 (VS Code 의 두 명령과 같은 이름)
   register({ id: 'preferences.openSettings', title: 'Preferences: Open Settings', run: () => openSettings() });
+  register({ id: 'downloads.showAll', title: 'Downloads: Show All Downloads', run: () => showAllDownloads() });
   register({ id: 'preferences.openSettingsJson', title: 'Preferences: Open Settings (JSON)', run: () => openSettingsJson() });
   register({
     id: 'workbench.action.showCommands',
@@ -194,6 +196,19 @@ export function setupCommands(): void {
     id: 'workbench.action.splitEditor',
     title: 'View: Split Editor',
     run: () => splitGroup(),
+  });
+
+  // 카드 (ticket terminal-tab-panes) — 활성 탭에 터미널 카드를 붙인다. 진입점은 팔레트뿐 (사용자 결정 2026-09-11: 이후
+  // 구현(에이전트의 하위 워커 생성 등)의 준비물이라 사용자 UI 는 나중). 폴더 탭·빈 그룹은 대상이 아니다
+  register({
+    id: 'workbench.action.tab.newTerminalCard',
+    title: 'Tab: New Terminal Card',
+    run: () => {
+      if (activeSessionEmpty()) return;
+      const t = activeTab();
+      if (!t || t.kind === 'folder') return;
+      createTerminal({ groupId: activeGroup().id, host: t.id });
+    },
   });
 
   register({

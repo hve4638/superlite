@@ -185,6 +185,14 @@ pub(crate) fn daemon_bin_for(os: &str, arch: &str) -> Result<PathBuf, String> {
     }
 }
 
+/// 동봉 셸 심 바이너리(원격 업로드용) — 앱 옆 `daemon/cli-<os>-<arch>` (build.sh 가 musl 정적
+/// 빌드를 둔다, ticket cli-control-discussion). 없으면 None — 원격 셸에 `superlite` 명령이 없을 뿐
+pub(crate) fn cli_bin_for(os: &str, arch: &str) -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let p = exe.with_file_name("daemon").join(format!("cli-{os}-{arch}"));
+    p.is_file().then_some(p)
+}
+
 /// 동봉 tmux 바이너리 — 앱 옆 `daemon/tmux-<os>-<arch>` (build.sh 가 정적 릴리스를 내려받아 둔다).
 /// 로컬은 SUPERLITE_TMUX_BIN 우회 먼저. 없으면 None — 로컬 데몬은 PATH 의 tmux 를, 원격은 원격
 /// 호스트의 tmux 를 쓴다 (없으면 데몬이 plain 으로 대체하고 경고)

@@ -4,7 +4,7 @@ import { ctx, viewOf } from './ctx';
 import { confirm } from './dialog';
 import { errText, notify } from './notifications';
 import { EDITOR_ZOOM_MAX, EDITOR_ZOOM_MIN, EDITOR_ZOOM_STEP, editorView, loadWindowZoom, saveWindowZoom, setEditorZoom } from './editors';
-import type { createEditors } from './editors';
+import type { CardSet, createEditors } from './editors';
 
 export interface TerminalInstance {
   id: number;
@@ -24,6 +24,14 @@ export interface TerminalSnapshot {
   term: number;
   title: string;
   buffer: string;
+  /** 카드였으면 붙어 있던 탭 (ticket terminal-tab-panes) — host 는 탭 id(파일 경로 등, 창을 넘어도 같다), 그 탭이 터미널이면
+   *  hostTerm(데몬 term id — 인스턴스 id 는 창마다 달라 쓸 수 없다). 받는 쪽 adoptTerminals 가 같은 탭의 카드로 되돌린다 */
+  host?: string;
+  hostTerm?: number;
+  /** 이 터미널 탭에 붙어 있던 터미널 아닌 카드들 — 탭이 걷혀 함께 잃으므로 여기 싣는다 (터미널 카드는 각자 hostTerm 으로) */
+  cards?: CardSet;
+  /** tmux 도 싣는다 — termTmux 는 spawn 때 한 번만 오고 adopt 는 다시 보내지 않아, 받는 창의 인스턴스가
+   *  tmux 를 잃으면 워크스페이스 저장이 그 탭을 기록 없이 걷어낸다 (ticket term-restore-missing-again) */
   tmux?: { id: string; name: string };
 }
 
@@ -38,8 +46,8 @@ export function setTerminalSerializer(fn: (id: number) => string | null): void {
 //      바인딩 맵(id 키, 세션 전환에도 살아남는다)이 세션 간에 충돌하지 않는다
 let nextId = 1;
 
-/** 탭을 열 자리 — 그룹·index (창 간 드롭 위치). 없으면 활성 그룹 끝 */
-export type TerminalTabAt = { groupId?: number; index?: number };
+/** 탭을 열 자리 — 그룹·index (창 간 드롭 위치), host 면 그 탭(id)의 카드. 없으면 활성 그룹 끝 */
+export type TerminalTabAt = { groupId?: number; index?: number; host?: string };
 
 // 강제 종료 확인창의 "다시 묻지 않기" — 창·세션 무관 전역이라 localStorage
 const KILL_NO_CONFIRM_KEY = 'superlite.terminalKillNoConfirm';
@@ -78,7 +86,7 @@ export function createTerminals(backend: ThinBackend, editorsM: ReturnType<typeo
   // 터미널 탭 포커스 이력 (최근이 앞, 인스턴스 id) — 활성 탭이 터미널이 될 때마다 앞으로 옮긴다.
   // "최근" 은 연 시각이 아니라 마지막으로 활성이 된 시각 (VS Code 와 같다, ticket terminal-toggle-keys)
   const focusOrder: number[] = [];
-  watch(() => editorsM.activeTab(), (t) => {
+  watch(() => editorsM.activeLeaf(), (t) => {
     if (t?.kind !== 'terminal') return;
     const i = focusOrder.indexOf(t.term);
     if (i >= 0) focusOrder.splice(i, 1);
@@ -151,7 +159,34 @@ export function createTerminals(backend: ThinBackend, editorsM: ReturnType<typeo
   }
 
   function snapshotOf(t: TerminalInstance): TerminalSnapshot {
-    return { term: t.session.id, title: t.title, buffer: serializeBuffer?.(t.id) ?? '', ...(t.tmux ? { tmux: t.tmux } : {}) };
+    return { term: t.session.id, title: t.title, buffer: serializeBuffer?.(t.id) ?? '', ...placeOf(t.id), ...(t.tmux ? { tmux: t.tmux } : {}) };
+  }
+
+  /** 이 인스턴스의 자리 — 카드면 붙은 탭(host 탭 id, 터미널 탭이면 hostTerm 데몬 id), 탭이면 그 탭의 터미널 아닌 카드들.
+   *  스냅샷이 실어 받는 쪽이 같은 자리에 되돌린다 (탭이 이미 떼어졌으면 빈 값 — sessions 가 직접 채운다) */
+  function placeOf(id: number): Pick<TerminalSnapshot, 'host' | 'hostTerm' | 'cards'> {
+    for (const g of editorsM.editors.groups) {
+      for (const t of g.tabs) {
+        if (t.kind === 'terminal' && t.term === id) return cardsOf(t.cards);
+        if (t.cards?.tabs.some((c) => c.kind === 'terminal' && c.term === id)) return hostRef(t);
+      }
+    }
+    return {};
+  }
+  /** 탭을 host 참조로 — 터미널 탭은 데몬 term id 로 (인스턴스 id 는 창마다 다르다) */
+  function hostRef(t: { kind: string; id: string; term?: number }): Pick<TerminalSnapshot, 'host' | 'hostTerm'> {
+    if (t.kind === 'terminal' && t.term !== undefined) {
+      const inst = terminals.list.find((x) => x.id === t.term);
+      if (inst) return { hostTerm: inst.session.id };
+    }
+    return { host: t.id };
+  }
+  /** 터미널 아닌 카드만 (JSON 왕복 가능한 사본) — 없으면 빈 객체 */
+  function cardsOf(cards: CardSet | undefined): Pick<TerminalSnapshot, 'cards'> {
+    const tabs = (cards?.tabs ?? []).filter((c) => c.kind !== 'terminal');
+    if (tabs.length === 0) return {};
+    const active = cards!.activeTabId !== null && tabs.some((c) => c.id === cards!.activeTabId) ? cards!.activeTabId : null;
+    return { cards: JSON.parse(JSON.stringify({ tabs, activeTabId: active })) as CardSet };
   }
 
   /** 창 이동 핸드오프용 스냅샷 — 데몬 쪽 term id·제목·xterm 버퍼. id 를 주면 그 하나만 */
@@ -179,12 +214,23 @@ export function createTerminals(backend: ThinBackend, editorsM: ReturnType<typeo
 
   /** 다른 창에서 넘어온 터미널 인수 — from 이 없으면 같은 세션(id 재-attach)의 기존 터미널,
    *  있으면 같은 root 의 다른 세션 것을 데몬에서 옮겨 받는다 (와이어 v10). 백엔드가 인수를
-   *  지원하지 않으면(mock·empty) 무동작. at 은 탭을 열 그룹·index (드롭 위치) */
+   *  지원하지 않으면(mock·empty) 무동작. at 은 탭을 열 그룹·index (드롭 위치).
+   *  두 번 돈다 — 탭(카드 아닌 것)을 먼저 열어 옛 데몬 term id → 새 탭 id 대응을 만들고, 카드였던 것을 그 탭(hostTerm)
+   *  또는 host 탭 id 의 카드로 붙인다. 탭이 이쪽에 없으면(단독 이동) at 대로 탭으로 연다 */
   function adoptTerminals(snaps: TerminalSnapshot[], from?: string, at?: TerminalTabAt): void {
     if (!backend.adoptTerminal) return;
+    const tabIdByTerm = new Map<number, string>();
+    const adopt = (s: TerminalSnapshot, place?: TerminalTabAt) => {
+      const session = backend.adoptTerminal!(from ? { from: { session: from, term: s.term } } : { term: s.term });
+      const inst = register(session, s.title, s.buffer, place, s.tmux);
+      tabIdByTerm.set(s.term, `terminal:${inst.id}`);
+      if (s.cards) editorsM.attachCards(`terminal:${inst.id}`, s.cards);
+    };
+    for (const s of snaps) if (s.host === undefined && s.hostTerm === undefined) adopt(s, at);
     for (const s of snaps) {
-      const session = backend.adoptTerminal(from ? { from: { session: from, term: s.term } } : { term: s.term });
-      register(session, s.title, s.buffer, at, s.tmux);
+      if (s.host === undefined && s.hostTerm === undefined) continue;
+      const host = s.host ?? (s.hostTerm !== undefined ? tabIdByTerm.get(s.hostTerm) : undefined);
+      adopt(s, host !== undefined ? { ...at, host } : at);
     }
   }
 
