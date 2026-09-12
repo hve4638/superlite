@@ -2,7 +2,7 @@ import { reactive } from '@vue/reactivity';
 import { openQuickInput, showViewlet, toggleSideBar } from './workbench';
 import { openFolderDialog } from './host';
 import { closeTab, reopenClosedEditor, saveActive, splitGroup, toggleGroupLock, activeGroup, activeTab, openHex, toggleHtmlPreview, isHtml, openUrl, openSettings, toggleWordWrap, stepEditorZoom, setEditorZoom, setActiveTab } from './editors';
-import { createTerminal, toggleTerminal } from './terminal';
+import { createTerminal, imeDiag, toggleTerminal } from './terminal';
 import { openSettingsJson, openSshConfig, openTmuxConf } from './configfiles';
 import { refreshScm } from './scm';
 import { activeSessionEmpty, cycleSession, sessionsEnabled } from './sessions';
@@ -200,6 +200,12 @@ export function setupCommands(): void {
     id: 'workbench.action.reloadWindow',
     title: 'Developer: Reload Window',
     run: reloadWindow,
+  });
+  // 임시 (ticket term-ime-window-topright) — terminal.imeDiag 를 클립보드로
+  register({
+    id: 'developer.copyImeDiagnostics',
+    title: 'Developer: Copy IME Diagnostics',
+    run: () => void navigator.clipboard?.writeText(imeDiag.join('\n') || '(no entries)'),
   });
 
   register({

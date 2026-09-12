@@ -32,21 +32,24 @@ export const sshConfig: CustomLanguage = {
   monarch: {
     defaultToken: '',
     tokenPostfix: '.ssh',
+    // 줄 끝을 토큰으로 받아야(includeLF) 인자 상태를 줄 끝에서 닫을 수 있다 — monarch 는 줄 끝에 닿으면 규칙 평가를
+    // 멈추므로 /$/ 규칙은 실행되지 않았다 (editor-language-coverage 에서 발견)
+    includeLF: true,
     ignoreCase: true,
     blocks: BLOCKS,
     keywords: KEYWORDS,
     tokenizer: {
       root: [
         [/\s+/, 'white'],
-        [/#.*$/, 'comment'],
+        [/#.*/, 'comment'],
         // 키워드는 줄 머리 — 뒤는 값 상태 ('=' 구분도 허용)
         [/[a-zA-Z]\w*/, { cases: { '@blocks': { token: 'keyword.control', next: '@pattern' }, '@keywords': { token: 'keyword', next: '@value' }, '@default': { token: 'identifier', next: '@value' } } }],
       ],
       // Host/Match 의 패턴 — 와일드카드·부정
       pattern: [
         [/[ \t=]+/, 'white'],
-        [/$/, '', '@pop'],
-        [/#.*$/, 'comment', '@pop'],
+        [/\n/, 'white', '@pop'],
+        [/#.*/, 'comment', '@pop'],
         [/[*?!]/, 'type.identifier'],
         [/"[^"]*"/, 'string'],
         [/\b(?:all|canonical|final|exec|localnetwork|host|originalhost|tagged|user|localuser)\b/, 'keyword'],
@@ -54,8 +57,8 @@ export const sshConfig: CustomLanguage = {
       ],
       value: [
         [/[ \t=]+/, 'white'],
-        [/$/, '', '@pop'],
-        [/#.*$/, 'comment', '@pop'],
+        [/\n/, 'white', '@pop'],
+        [/#.*/, 'comment', '@pop'],
         [/"[^"]*"/, 'string'],
         [/%[%dhikLlnprTu]/, 'variable'],
         [/~\/?/, 'variable'],

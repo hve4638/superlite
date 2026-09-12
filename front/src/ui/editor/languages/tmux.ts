@@ -37,12 +37,15 @@ export const tmux: CustomLanguage = {
   monarch: {
     defaultToken: '',
     tokenPostfix: '.tmux',
+    // 줄 끝을 토큰으로 받아야(includeLF) 인자 상태를 줄 끝에서 닫을 수 있다 — monarch 는 줄 끝에 닿으면 규칙 평가를
+    // 멈추므로 /$/ 규칙은 실행되지 않았다 (editor-language-coverage 에서 발견)
+    includeLF: true,
     commands: COMMANDS,
     tokenizer: {
       // 줄 머리 = 명령 자리. 명령 뒤는 인자 상태 — ';' 나 '{' 가 다시 명령 자리를 연다
       root: [
         [/\s+/, 'white'],
-        [/#.*$/, 'comment'],
+        [/#.*/, 'comment'],
         [/[{}]/, '@brackets'],
         [/;/, 'delimiter'],
         [/[a-zA-Z][\w-]*/, { cases: { '@commands': { token: 'keyword', next: '@args' }, '@default': { token: 'identifier', next: '@args' } } }],
@@ -50,9 +53,9 @@ export const tmux: CustomLanguage = {
       ],
       args: [
         [/[ \t]+/, 'white'],
-        [/\\$/, 'keyword.control'], // 줄 이어짐
-        [/$/, '', '@pop'],
-        [/#.*$/, 'comment', '@pop'],
+        [/\\\n/, 'keyword.control'], // 줄 이어짐 — 줄 끝을 같이 삼켜 인자 상태를 유지
+        [/\n/, 'white', '@pop'],
+        [/#.*/, 'comment', '@pop'],
         [/;/, 'delimiter', '@pop'],
         [/\{/, '@brackets', '@pop'],
         [/\}/, '@brackets'],

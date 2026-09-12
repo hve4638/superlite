@@ -6,7 +6,7 @@ import { SerializeAddon } from '@xterm/addon-serialize';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
-import { setTerminalSerializer, setTerminalZoom, stepTerminalZoom, terminalView } from '../../model/terminal';
+import { pushImeDiag, setTerminalSerializer, setTerminalZoom, stepTerminalZoom, terminalView } from '../../model/terminal';
 import type { TerminalInstance } from '../../model/terminal';
 import { allTerminals } from '../../model/sessions';
 import { isShellSkippingChord } from '../../model/commands';
@@ -36,6 +36,16 @@ const onCtrlChange = (e: KeyboardEvent): void => {
 };
 window.addEventListener('keydown', onCtrlChange, true);
 window.addEventListener('keyup', onCtrlChange, true);
+// 임시 진단 (ticket term-ime-window-topright) — xterm textarea 밖에서 시작된 조합(포커스가 다른 곳에 있을 때)도 남긴다
+document.addEventListener(
+  'compositionstart',
+  (e) => {
+    const t = e.target as Element | null;
+    if (t?.classList.contains('xterm-helper-textarea')) return;
+    pushImeDiag(`${new Date().toISOString().slice(11, 23)} outside target=${t ? `${t.tagName}.${t.className}` : 'null'} docFocus=${document.hasFocus()}`);
+  },
+  true,
+);
 
 // 창 이동 핸드오프의 버퍼 몫 — model 이 xterm 을 모르므로 여기서 등록한다.
 // 아직 열리지 않은(탭을 한 번도 안 본) 터미널은 pending 청크를 이어 붙여 넘긴다
@@ -169,6 +179,15 @@ function open(inst: TerminalInstance, b: Binding): void {
   term.loadAddon(fit);
   const serialize = new SerializeAddon();
   term.loadAddon(serialize);
+  const core = (
+    term as unknown as {
+      _core: {
+        _syncTextArea?: () => void;
+        _charSizeService: { measure(): void };
+        _compositionHelper?: { keydown(e: KeyboardEvent): boolean };
+      };
+    }
+  )._core;
   term.attachCustomKeyEventHandler((e) => {
     // WHY: xterm 은 포커스 중 모든 키를 삼킨다 — skipShell 표식 키바인딩(Ctrl+P, Ctrl+` 등)만
     //      xterm 처리를 건너뛰어 전역 디스패처로 버블시킨다 (VS Code commandsToSkipShell 동작).
@@ -179,6 +198,11 @@ function open(inst: TerminalInstance, b: Binding): void {
     // 셸 안 프로그램(Claude Code 등)이 Ctrl 을 잃는다. 제어 문자라 tmux 몇 겹이든 설정 없이 통과한다
     // (확장 키 프로토콜(CSI u)은 tmux 마다 extended-keys 설정이 필요해 채택하지 않았다, 2026-09-10)
     if (e.code === 'Enter' || e.code === 'NumpadEnter') {
+      // WHY: IME 조합 중 Enter 는 keydown(keyCode 229, 조합 문자) → compositionend → keydown(13) 순서로 두 번 온다
+      //      (Windows 한글 IME, 2026-09-12 보고 '\n\n글'). 229 는 xterm 의 조합 처리에 맡겨 무시시키고, 뒤따르는
+      //      진짜 Enter 에서 xterm 이 일반 Enter 에 하듯 지연 전송 대기 중인 조합을 먼저 흘려보낸 뒤 LF 를 넣는다
+      if (e.keyCode === 229) return true;
+      core._compositionHelper?.keydown(e);
       term.input('\n');
       e.preventDefault();
       return false;
@@ -271,7 +295,6 @@ function open(inst: TerminalInstance, b: Binding): void {
   //      조합 시작은 키 입력과 같이 맨 아래로 스크롤한다 (xterm scrollOnUserInput 은 keydown 에만 적용) — 뷰포트가
   //      한두 줄 위로 밀린 채면 커서가 뷰포트 밖이라 xterm 이 조합 상자·textarea 위치를 갱신하지 않아, 조합
   //      글자가 입력줄과 다른 행에 그려진다 (2026-09-10 Windows 실기: tmux 안 claude 에서 한두 줄 위)
-  const core = (term as unknown as { _core: { _syncTextArea?: () => void; _charSizeService: { measure(): void } } })._core;
   const syncTextArea = (): void => core._syncTextArea?.();
   // 동봉 글꼴 로드 뒤 셀 크기 재측정 (위 bundledFont) — xterm 은 fontFamily/fontSize 가 바뀔 때만 재는데 같은 값 대입은
   // 무동작이라 측정 서비스를 직접 부른다. 크기가 달라졌으면 xterm 이 렌더러 치수·아틀라스를 갱신하고 fit 이 열 수를 고친다
@@ -280,11 +303,39 @@ function open(inst: TerminalInstance, b: Binding): void {
     core._charSizeService.measure();
     fitTerminal(inst.id);
   });
+  // 임시 진단 (ticket term-ime-window-topright) — 조합 시작 직전·직후와 첫 갱신 뒤의 textarea·조합 상자 위치,
+  //      활성 요소, 버퍼 상태, 포커스·출력 이후 경과 시간을 model.imeDiag 에 남긴다. 원인 확정 뒤 지운다
+  let focusAt = -1;
+  let writeAt = -1;
+  const openAt = performance.now();
+  term.onWriteParsed(() => (writeAt = performance.now()));
+  const since = (t: number): number => (t < 0 ? -1 : Math.round(performance.now() - t));
+  const r = (el: Element | null | undefined): string => {
+    if (!el) return 'none';
+    const q = el.getBoundingClientRect();
+    return `${Math.round(q.left)},${Math.round(q.top)} ${Math.round(q.width)}x${Math.round(q.height)}`;
+  };
+  const diag = (tag: string): void => {
+    const buf = term.buffer.active;
+    const ae = document.activeElement;
+    const aeDesc = ae === term.textarea ? 'ta' : ae ? `${ae.tagName}.${ae.className}` : 'null';
+    pushImeDiag(
+      `${new Date().toISOString().slice(11, 23)} t${inst.id} ${tag} ae=${aeDesc} focus=${since(focusAt)}ms write=${since(writeAt)}ms open=${since(openAt)}ms` +
+        ` ta=[${r(term.textarea)}] cv=[${r(b.el.querySelector('.composition-view'))}] el=[${r(b.el)}] win=${window.innerWidth}x${window.innerHeight}` +
+        ` dpr=${window.devicePixelRatio} zoom=${terminalView.zoom} buf=${buf.type} x=${buf.cursorX} y=${buf.cursorY} base=${buf.baseY} vp=${buf.viewportY}` +
+        ` rows=${term.rows} cols=${term.cols} docFocus=${document.hasFocus()} taVal=${JSON.stringify(term.textarea?.value ?? '')}`,
+    );
+  };
+  term.textarea?.addEventListener('focus', () => (focusAt = performance.now()), true);
+  term.textarea?.addEventListener('compositionupdate', () => setTimeout(() => diag('update+0'), 0));
+  term.textarea?.addEventListener('compositionend', () => diag('end'));
   term.textarea?.addEventListener(
     'compositionstart',
     () => {
+      diag('start-pre');
       term.scrollToBottom();
       syncTextArea();
+      diag('start-post');
     },
     true,
   );

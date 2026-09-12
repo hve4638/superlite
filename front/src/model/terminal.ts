@@ -343,3 +343,13 @@ export const requestKillTerminal = (id: number): void => ctx().terminals.request
 export const killListedTerminal = (tmuxId: string): Promise<void> => ctx().terminals.killListed(tmuxId);
 export const renameListedTerminal = (tmuxId: string, name: string): Promise<void> =>
   ctx().terminals.renameListed(tmuxId, name);
+
+// ---- IME 진단 (ticket term-ime-window-topright, 임시) — Windows 실기에서 한글 조합 창이 우측 상단에 뜨는 원인을
+//      가르기 위해 terminalHost 가 조합 시작·갱신 시점의 활성 요소·textarea 위치·버퍼 상태를 한 줄씩 남긴다.
+//      팔레트 'Developer: Copy IME Diagnostics' 가 클립보드로 복사한다. 원인이 확정되면 지운다
+export const imeDiag: string[] = [];
+export function pushImeDiag(line: string): void {
+  imeDiag.push(line);
+  if (imeDiag.length > 60) imeDiag.shift();
+  console.log('[ime]', line);
+}

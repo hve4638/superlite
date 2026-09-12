@@ -56,3 +56,8 @@ export fn renameListedTerminal(tmuxId, name) {
 export fn disposeTerminal(id) {
   role: 세션 정리 + 목록 제거 + 탭 닫기 (탭 ×·셸 종료·세션 회수 공통 경로 — 탭 × 는 훅 경유라 탭이 이미 없어 closeTerminalTabs 가 no-op)
 }
+
+export val imeDiag
+export fn pushImeDiag(line) {
+  role: 임시 IME 진단 (ticket term-ime-window-topright) — terminalHost 가 조합 시작·갱신·종료 시점의 활성 요소·textarea/조합 상자 위치·버퍼 상태·포커스 이후 경과를 한 줄씩 넣는다 (상한 60, console 에도 남김). 팔레트 'Developer: Copy IME Diagnostics' 가 클립보드로 복사한다. 원인이 확정되면 지운다
+}

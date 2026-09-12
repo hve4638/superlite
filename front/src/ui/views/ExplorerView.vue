@@ -247,7 +247,20 @@ function onRowDragStart(e: DragEvent, node: TreeNode): void {
     e.dataTransfer?.setData(DND_FILE, JSON.stringify({ window: windowLabel, root: sessionRoot(sessions.activeId), path: node.path, kind, paths }));
   }
   if (e.dataTransfer) e.dataTransfer.effectAllowed = 'copyMove'; // Ctrl 드롭 = 복사
+  setDragBadge(e, paths.length === 1 ? baseName(paths[0]) : `${paths.length} items`);
   startFileDrag(node.path, kind, paths);
+}
+
+/** 커서 옆 파일명 배지 (VS Code monaco-drag-image) — 임시 요소를 body 에 붙여 setDragImage 하고 다음 프레임에 뗀다.
+ *  WHY: setDragImage 는 호출 시점에 렌더된 요소만 받는다 — scoped 스타일이 안 닿아 아래 전역 style 블록에 둔다 */
+function setDragBadge(e: DragEvent, label: string): void {
+  if (!e.dataTransfer) return;
+  const el = document.createElement('div');
+  el.className = 'explorer-drag-badge';
+  el.textContent = label;
+  document.body.appendChild(el);
+  e.dataTransfer.setDragImage(el, -10, -10);
+  requestAnimationFrame(() => el.remove());
 }
 
 function onRowContextMenu(node: TreeNode, e: MouseEvent): void {
@@ -269,6 +282,10 @@ const askReplace = async (message: string, detail: string): Promise<boolean> =>
   (await confirm({ message, detail, confirmLabel: 'Replace' })) === 'confirm';
 
 const dirOf = (node: TreeNode): string => (node.kind === 'directory' ? node.path : parentOf(node.path));
+
+/** 대상 폴더의 영역 — 폴더 행 + 펼쳐져 보이는 서브트리 행 전부 (VS Code list.dropBackground). 접힌 폴더면 그 행만, 루트('')는 트리 outline 이 대신한다 */
+const inDropRegion = (node: TreeNode): boolean =>
+  !!dropDir.value && (node.path === dropDir.value || node.path.startsWith(`${dropDir.value}/`));
 
 // ---- 트리 안 드래그 이동·복사 (explorer-multiselect-dnd) — 이 트리의 행 드래그(editorDrag.paths)만.
 // 자기 자신·자기 하위·이미 있는 부모로는 드롭 불가 (VS Code). Ctrl 을 누르고 놓으면 복사
@@ -466,11 +483,16 @@ function onPaste(e: ClipboardEvent): void {
   void pasteImage(blob);
 }
 
-async function pasteImage(blob: Blob): Promise<void> {
-  // 대상 디렉토리는 새 파일 생성과 같은 규칙 — 선택이 폴더면 그 안, 파일이면 부모, 없으면 루트
-  const sel = files.selectedPath !== null
+/** 포커스 행(selectedPath)의 TreeNode — 보이는 행에 없으면 null (다중 선택이어도 포커스 하나만) */
+function selectedNode(): TreeNode | null {
+  return files.selectedPath !== null
     ? visibleNodes().find((n) => n.path === files.selectedPath) ?? null
     : null;
+}
+
+async function pasteImage(blob: Blob): Promise<void> {
+  // 대상 디렉토리는 새 파일 생성과 같은 규칙 — 선택이 폴더면 그 안, 파일이면 부모, 없으면 루트
+  const sel = selectedNode();
   const dir = sel === null ? '' : sel.kind === 'directory' ? sel.path : parentOf(sel.path);
   const saved = await saveClipboardImage(dir, blob); // 실패는 model 이 notify 한다
   if (saved !== null) select(saved);
@@ -485,10 +507,11 @@ function decoColor(node: TreeNode): string | undefined {
 }
 
 // 폴더 pane 헤더는 사이드바 제목에 병합됐다 (VS Code merged-header — 제목이 워크스페이스명) —
-// 새 파일·새 폴더는 인라인 입력 상태가 여기 살아 SideBar 의 제목 액션이 이 둘을 부른다
+// 새 파일·새 폴더는 인라인 입력 상태가 여기 살아 SideBar 의 제목 액션이 이 둘을 부른다.
+// 위치는 VS Code 규칙 — 선택(포커스)이 폴더면 그 안, 파일이면 부모, 없으면 루트
 defineExpose({
-  newFile: () => void startCreate('createFile', null),
-  newFolder: () => void startCreate('createDir', null),
+  newFile: () => void startCreate('createFile', selectedNode()),
+  newFolder: () => void startCreate('createDir', selectedNode()),
 });
 </script>
 
@@ -560,11 +583,12 @@ defineExpose({
               selected: files.selected.has(row.node.path),
               focused: files.selectedPath === row.node.path,
               'drop-target': row.node.kind === 'directory' && dropDir === row.node.path,
+              'drop-region': inDropRegion(row.node),
             }"
             :style="{ paddingLeft: `${row.node.depth * 8}px` }"
             draggable="true"
             @dragstart="onRowDragStart($event, row.node)"
-            @dragend="endEditorDrag()"
+            @dragend="endEditorDrag(); dropDir = null"
             @dragover="onDragOver($event, dirOf(row.node))"
             @drop="onDrop($event, dirOf(row.node))"
             @click="onRowClick(row.node, $event)"
@@ -752,9 +776,14 @@ defineExpose({
   outline: 1px solid var(--vscode-list-focusOutline);
   outline-offset: -1px;
 }
-/* OS 드롭 업로드 대상 강조 — 폴더 행은 배경, 루트(행 밖·루트 파일 위)는 트리 테두리 (VS Code 동일 감각) */
-.row.drop-target {
+/* 드롭 대상 강조 (이동·업로드 공통, VS Code 동일 감각) — 대상 폴더 행 + 펼쳐진 서브트리 행은 배경(drop-region),
+   폴더 행 자체는 focusBorder 테두리(drop-target), 루트(행 밖·루트 파일 위)는 트리 테두리 */
+.row.drop-region {
   background: var(--vscode-list-dropBackground);
+}
+.row.drop-target {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
 }
 .tree.drop-root {
   outline: 1px solid var(--vscode-focusBorder);
@@ -804,5 +833,22 @@ defineExpose({
   opacity: 0.4;
   margin-right: 14px;
   padding-left: 5px;
+}
+</style>
+
+<style>
+/* 드래그 배지 (VS Code .monaco-drag-image) — body 에 잠깐 붙는 요소라 scoped 밖. 화면 밖에 두되 렌더는 되어야 setDragImage 가 받는다 */
+.explorer-drag-badge {
+  position: absolute;
+  top: -1000px;
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  color: var(--vscode-list-activeSelectionForeground);
+  background: var(--vscode-list-activeSelectionBackground);
+  border: 1px solid var(--vscode-focusBorder);
 }
 </style>
