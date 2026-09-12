@@ -11,6 +11,7 @@ import type { TerminalInstance } from '../../model/terminal';
 import { allTerminals } from '../../model/sessions';
 import { isShellSkippingChord } from '../../model/commands';
 import { openUrl } from '../../model/window';
+import { registerPathLinks } from './terminalPathLinks';
 import { TERMINAL_FONT_FAMILY, TERMINAL_FONT_SIZE, TERMINAL_LINE_HEIGHT } from '../../theme/fonts';
 
 // xterm 바인딩 — 터미널 인스턴스 id(페이지 전역 유일) 키의 모듈 맵. TerminalView 가 마운트될 때
@@ -29,10 +30,11 @@ interface Binding {
 
 const bindings = new Map<number, Binding>();
 
-// 지금 호버 중인 URL 링크 (페이지에 하나) — Ctrl 을 누르고 떼는 동안 포인터 커서를 따라 바꾼다 (open 참조)
+// 지금 호버 중인 링크 (페이지에 하나) — Ctrl 을 누르고 떼는 동안 밑줄을 따라 켜고 끈다 (open 참조).
+// 밑줄은 Ctrl 을 누른 동안만, 커서 모양은 바꾸지 않는다 (사용자 결정 2026-09-12, terminal-path-links — URL 링크도 같다)
 let hoveredLink: ILink | null = null;
 const onCtrlChange = (e: KeyboardEvent): void => {
-  if (hoveredLink && (e.key === 'Control' || e.key === 'Meta')) hoveredLink.decorations!.pointerCursor = e.type === 'keydown';
+  if (hoveredLink && (e.key === 'Control' || e.key === 'Meta')) hoveredLink.decorations!.underline = e.type === 'keydown';
 };
 window.addEventListener('keydown', onCtrlChange, true);
 window.addEventListener('keyup', onCtrlChange, true);
@@ -243,10 +245,11 @@ function open(inst: TerminalInstance, b: Binding): void {
     }
     return true;
   });
-  // URL 링크 (ticket terminal-links): 호버하면 밑줄, Ctrl(맥 Cmd)을 누른 동안만 포인터 커서, 열기는 Ctrl+클릭일
-  // 때만 — 툴팁은 없다 (사용자 결정 2026-09-11). addon 은 Ctrl 을 판정하지 않고(어떤 클릭이든 activate, 호버마다
-  // 밑줄+포인터) 장식을 바꿀 길도 없어, 제공자 등록을 가로채 링크마다 pointerCursor 를 Ctrl 상태에 묶는다.
-  // Ctrl 없는 클릭은 handler 가 무시해 종전 터미널 클릭(마우스 모드 보고·선택)만 남는다
+  // URL 링크 (ticket terminal-links): Ctrl(맥 Cmd)을 누른 동안만 밑줄, 커서 모양 불변, 열기는 Ctrl+클릭일 때만 —
+  // 툴팁은 없다 (사용자 결정 2026-09-11, 밑줄·커서는 2026-09-12 terminal-path-links 에서 개정). addon 은 Ctrl 을
+  // 판정하지 않고(어떤 클릭이든 activate, 호버마다 밑줄+포인터) 장식을 바꿀 길도 없어, 제공자 등록을 가로채
+  // 링크마다 underline 을 Ctrl 상태에 묶는다. Ctrl 없는 클릭은 handler 가 무시해 종전 터미널 클릭(마우스 모드
+  // 보고·선택)만 남는다
   const linkTerm = Object.create(term) as Terminal;
   linkTerm.registerLinkProvider = (provider) =>
     term.registerLinkProvider({
@@ -258,10 +261,16 @@ function open(inst: TerminalInstance, b: Binding): void {
               //      감싼 객체(l)에 써야 렌더에 닿는다
               const l: ILink = {
                 ...link,
-                decorations: { underline: true, pointerCursor: false },
+                decorations: { underline: false, pointerCursor: false },
                 hover: (e) => {
                   hoveredLink = l;
-                  l.decorations!.pointerCursor = e.ctrlKey || e.metaKey;
+                  // WHY: 마이크로태스크로 미룬다 — xterm 6 은 새 링크의 hover 를 부른 *뒤에* decorations 를
+                  //      getter/setter 객체로 바꿔치기하므로 여기서 바로 쓰면 유실된다 (Ctrl 을 먼저 누른 채
+                  //      링크에 올리면 장식이 안 뜨던 원인, 2026-09-12 terminal-path-links 스모크 실측)
+                  const ctrl = e.ctrlKey || e.metaKey;
+                  queueMicrotask(() => {
+                    if (hoveredLink === l) l.decorations!.underline = ctrl;
+                  });
                 },
                 leave: () => {
                   if (hoveredLink === l) hoveredLink = null;
@@ -275,6 +284,9 @@ function open(inst: TerminalInstance, b: Binding): void {
   new WebLinksAddon((e, uri) => {
     if (e.ctrlKey || e.metaKey) openUrl(uri);
   }).activate(linkTerm);
+  // 경로 링크 (ticket terminal-path-links) — 같은 래퍼를 타므로 조작이 URL 링크와 같다. URL 제공자가 먼저
+  // 등록돼 같은 자리에 둘 다 걸리면 xterm 은 먼저 등록된 쪽을 쓴다
+  registerPathLinks(linkTerm, term, inst);
   term.open(b.el);
   // 렌더러는 WebGL (VS Code 기본과 같다). 기본 DOM 렌더러는 글자마다 letter-spacing 으로 칸을 맞추고 브라우저 텍스트
   // AA(Windows 는 서브픽셀)를 타서 Windows Terminal(셀 격자 + 회색 AA 글리프 아틀라스)과 글꼴이 다르게 보인다 — WebGL 은

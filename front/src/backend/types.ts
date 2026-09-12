@@ -97,6 +97,16 @@ export interface FileStat {
   etag: string;
   /** 바이트 크기 (와이어 v11) — hex 뷰어가 범위 읽기 전에 전체 길이를 안다 */
   size: number;
+  /** 파일·디렉토리 구분 (와이어 v21) — stat 에 dir:true 를 줬을 때만 디렉토리가 온다. 구 데몬은 생략 */
+  kind?: 'file' | 'directory';
+}
+
+/** 터미널의 현재 작업 디렉토리 (와이어 v21 termCwd) — 터미널 경로 링크의 상대 경로·`~` 기준 */
+export interface TermCwd {
+  /** tmux 면 활성 pane 의 pane_current_path, plain 은 워크스페이스 root */
+  cwd: string;
+  /** 데몬 머신의 홈 */
+  home: string;
 }
 
 /** conflict 면 쓰지 않았다 — etag 시점 이후 디스크가 바뀌었고 내용도 다르다. */
@@ -172,8 +182,9 @@ export interface ThinBackend {
    *  만큼, EOF 를 넘으면 짧게 온다 (hex 뷰어 청크). path 는 루트 상대 외에 절대 경로도 받는다
    *  (폴더 탭의 밖 탐색 — 데몬은 '..' 만 거부). */
   readFile(path: string, opts?: { maxBytes?: number; encoding?: 'base64'; offset?: number }): Promise<FileContent>;
-  /** 내용 없이 실존·변경만 확인하는 경량 검사 — 정규 파일 전용(디렉토리는 reject). orphan 재검증용. 절대 경로 허용 */
-  stat(path: string): Promise<FileStat>;
+  /** 내용 없이 실존·변경만 확인하는 경량 검사 — 정규 파일 전용(디렉토리는 reject). orphan 재검증용. 절대 경로 허용.
+   *  dir:true(와이어 v21)면 디렉토리도 받아 kind 로 구분 — 터미널 경로 링크의 실존 필터 */
+  stat(path: string, opts?: { dir?: boolean }): Promise<FileStat>;
   /**
    * etag 를 주면 낙관적 충돌 검사 — 불일치(+내용 상이) 시 쓰지 않고 conflict. 생략 시 무조건 쓴다.
    * encoding: 'base64' 면 content 를 이진으로 디코드해 쓴다 (클립보드 이미지 저장 등) —
@@ -250,6 +261,8 @@ export interface ThinBackend {
   renameTerminal?(id: string, name: string): Promise<void>;
   /** 클라이언트 tmux.conf 를 이 데몬에 적용 — 반환은 tmux 가 낸 경고·오류 문자열 (없으면 '') */
   applyTmuxConf?(content: string): Promise<string>;
+  /** 터미널의 현재 작업 디렉토리 (와이어 v21, 옵셔널 — WsBackend 만). tmux 는 활성 pane 의 cwd, plain 은 root */
+  termCwd?(term: number): Promise<TermCwd>;
   /** 데몬의 터미널 방식 구독 — attach 응답마다 (재접속 포함). error 는 plain 의 사유 */
   onTerminalMode?(cb: (mode: TerminalMode, error: string | null) => void): void;
   /**

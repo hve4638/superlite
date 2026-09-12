@@ -233,6 +233,17 @@ pub(crate) fn session_of_pane(bin: &Path, tty: &str) -> Option<String> {
     })
 }
 
+/// 세션 활성 pane 의 현재 디렉토리 (와이어 v21 termCwd) — `#{pane_current_path}` 는 셸 통합 없이 전경
+/// 프로세스의 cwd 를 준다 (조사 terminal-path-links-research 실측 약 1.5ms). 분할 pane 이면 활성 pane
+pub(crate) async fn pane_cwd(bin: &Path, id: &str) -> Result<String, String> {
+    let o = async_command(bin)?
+        .args(["display-message", "-p", "-t", id, "#{pane_current_path}"])
+        .output()
+        .await
+        .map_err(err)?;
+    out_text(o).map(|t| t.trim_end().to_string())
+}
+
 /// 세션 이름 조회 (attach 시 프론트 탭 제목) — 실패면 id 그대로
 pub(crate) fn name_of(bin: &Path, id: &str) -> String {
     command(bin)

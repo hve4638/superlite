@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { files, parentOf, rangeSelect, revealPath, select, selectAll, selectedNodes, toAbsPath, toggleSelect, visibleNodes, toggleDir, type TreeNode } from '../../model/files';
 import { activeTab, baseName, editors, openFile } from '../../model/editors';
 import { openFolder, retryActiveConnection } from '../../model/host';
@@ -500,6 +500,17 @@ async function pasteImage(blob: Blob): Promise<void> {
 
 onMounted(() => window.addEventListener('paste', onPaste));
 onBeforeUnmount(() => window.removeEventListener('paste', onPaste));
+
+// 트리 포커스 요청 (ticket terminal-path-links — 디렉토리 링크가 reveal 뒤 사이드바를 포커스한다).
+// nextTick: showViewlet 직후면 사이드바가 아직 그려지기 전이라 즉시 focus 가 무시된다
+watch(
+  () => files.pendingFocus,
+  (v) => {
+    if (!v) return;
+    files.pendingFocus = false;
+    void nextTick(() => treeEl.value?.focus());
+  },
+);
 
 function decoColor(node: TreeNode): string | undefined {
   const deco = decorationFor(node.path, node.kind === 'directory');

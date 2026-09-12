@@ -71,6 +71,11 @@ fn pts_name(fd: std::os::unix::io::RawFd) -> Option<String> {
 
 pub(crate) type Terms = Arc<Mutex<HashMap<u64, Term>>>;
 
+/// 터미널 id 로 붙어 있는 tmux 세션 id (와이어 v21 termCwd) — plain 이거나 없는 터미널이면 None
+pub(crate) fn tmux_id_of(terms: &Terms, id: u64) -> Option<String> {
+    terms.lock().unwrap().get(&id).and_then(|t| t.tmux_id.clone())
+}
+
 /// 터미널 이벤트가 나가는 곳 — (이 세션 안의 term id, 세션 sink, 소속 terms 맵).
 /// WHY: 스레드가 id·sink 를 값으로 잡으면 터미널을 다른 세션으로 옮길 수 없다 (와이어 v10
 ///      adoptTerminal — 에디터·터미널 탭을 다른 창의 세션으로 끌어 옮기는 데 필요).

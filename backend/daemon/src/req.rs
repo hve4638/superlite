@@ -221,12 +221,16 @@ pub(crate) async fn handle_req(method: &str, p: &Value, root: &Path) -> Result<V
             // WHY: readFile 과 같은 락 — orphan 재검증의 응답 순서가 쓰기와의 직렬화에 기댄다
             let _g = FS_LOCK.lock().await;
             let meta = std::fs::metadata(&path).map_err(err)?;
+            // dir=true(와이어 v21, 터미널 경로 링크의 실존 필터)면 디렉토리도 받아 kind 로 구분한다
+            if p["dir"].as_bool() == Some(true) && meta.is_dir() {
+                return Ok(json!({"etag": file_etag(&meta), "size": 0, "kind": "directory"}));
+            }
             // 정규 파일 전용 — 같은 경로의 디렉토리에 성공하면 재검증이 "파일 실존" 으로 오판한다
             if !meta.is_file() {
                 return Err("정규 파일이 아니다".into());
             }
             // size(와이어 v11) — hex 뷰어가 범위 읽기 전에 전체 길이를 안다
-            Ok(json!({"etag": file_etag(&meta), "size": meta.len()}))
+            Ok(json!({"etag": file_etag(&meta), "size": meta.len(), "kind": "file"}))
         }
         "writeFile" => {
             // WHY: content 누락을 "" 로 해석하면 깨진 요청이 파일을 비운다 — 명시적 에러

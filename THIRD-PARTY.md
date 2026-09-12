@@ -19,3 +19,13 @@ Superlite bundles a statically linked tmux binary as its terminal server
 The permission notices above apply to the bundled binary. Superlite itself
 does not modify tmux; user configuration is layered through a separate
 tmux.conf.
+
+## VS Code terminal link parsing (`front/src/ui/editor/terminalLinkParsing.ts`)
+
+The terminal path link regexes (line/column suffixes and unix/Windows path
+clauses) are ported from
+`src/vs/workbench/contrib/terminalContrib/links/browser/terminalLinkParsing.ts`
+of https://github.com/microsoft/vscode.
+
+- Copyright (c) Microsoft Corporation. All rights reserved. Licensed under the
+  MIT License. https://github.com/microsoft/vscode/blob/main/LICENSE.txt

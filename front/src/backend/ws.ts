@@ -12,7 +12,7 @@
  * 끊기는 순간 진행 중이던 요청만 실패한다 (실행 여부 불명 — 네트워크 실패의 본질).
  */
 import type {
-  ConnectStage, DirEntry, FileContent, FileSearchResult, FileStat, FsChange, GitCommitFile, GitLogItem, GitStatus, QuickOpenResult, TerminalInfo, TerminalMode, TerminalSession, ThinBackend, WorkspaceInfo, WriteResult,
+  ConnectStage, DirEntry, FileContent, FileSearchResult, FileStat, FsChange, GitCommitFile, GitLogItem, GitStatus, QuickOpenResult, TerminalInfo, TermCwd, TerminalMode, TerminalSession, ThinBackend, WorkspaceInfo, WriteResult,
 } from './types';
 
 interface Pending {
@@ -386,8 +386,8 @@ export class WsBackend implements ThinBackend {
   readFile(path: string, opts?: { maxBytes?: number; encoding?: 'base64'; offset?: number }): Promise<FileContent> {
     return this.call('readFile', { path, maxBytes: opts?.maxBytes, encoding: opts?.encoding, offset: opts?.offset });
   }
-  stat(path: string): Promise<FileStat> {
-    return this.call('stat', { path });
+  stat(path: string, opts?: { dir?: boolean }): Promise<FileStat> {
+    return this.call('stat', { path, dir: opts?.dir });
   }
   writeFile(path: string, content: string, etag?: string, encoding?: 'base64', append?: boolean): Promise<WriteResult> {
     // etag/encoding 이 undefined 면 JSON.stringify 가 키를 떨군다 — 데몬은 부재로 본다
@@ -495,6 +495,9 @@ export class WsBackend implements ThinBackend {
 
   listTerminals(all?: boolean): Promise<TerminalInfo[]> {
     return this.call('listTerminals', { all });
+  }
+  termCwd(term: number): Promise<TermCwd> {
+    return this.call('termCwd', { term });
   }
   killTerminal(id: string): Promise<void> {
     return this.call('killTerminal', { id });

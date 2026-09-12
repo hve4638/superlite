@@ -1,4 +1,4 @@
-role: ThinBackend 계약 — 와이어 프로토콜(백엔드 /ws JSON-RPC, v6 부터 대형 readFile 응답은 바이너리 payload 프레임 — 계약 표면(content=string)은 불변, 복원은 ws.ts 몫. v10 adoptTerminal — 세션 간 터미널 이동. v11 readFile 범위 읽기 offset + stat size — hex 뷰어 청크. v12 listFiles → quickOpen: 빠른 열기 목록을 나르지 않고 데몬 캐시에서 검색. v14 writeFile append — 청크 업로드. v16 readDir 절대 경로 + 항목 mtime·size — 폴더 탭의 워크스페이스 밖 탐색·자세히 보기 (v15 는 폐기된 termd 분리 빌드가 소켓 충돌 방지로 건너뛴 번호). v17 내장 tmux — createTerminal attach·listTerminals·killTerminal·renameTerminal·applyTmuxConf·onTerminalMode·TerminalSession.onTmux. v19 copy — 탐색기 드래그 복사. v20 gitCommitFiles + gitOriginalContent rev — SCM 커밋 상세(ticket scm-commit-detail))의 TS 사영. 와이어 쪽 대응은 daemon/src 참조
+role: ThinBackend 계약 — 와이어 프로토콜(백엔드 /ws JSON-RPC, v6 부터 대형 readFile 응답은 바이너리 payload 프레임 — 계약 표면(content=string)은 불변, 복원은 ws.ts 몫. v10 adoptTerminal — 세션 간 터미널 이동. v11 readFile 범위 읽기 offset + stat size — hex 뷰어 청크. v12 listFiles → quickOpen: 빠른 열기 목록을 나르지 않고 데몬 캐시에서 검색. v14 writeFile append — 청크 업로드. v16 readDir 절대 경로 + 항목 mtime·size — 폴더 탭의 워크스페이스 밖 탐색·자세히 보기 (v15 는 폐기된 termd 분리 빌드가 소켓 충돌 방지로 건너뛴 번호). v17 내장 tmux — createTerminal attach·listTerminals·killTerminal·renameTerminal·applyTmuxConf·onTerminalMode·TerminalSession.onTmux. v19 copy — 탐색기 드래그 복사. v20 gitCommitFiles + gitOriginalContent rev — SCM 커밋 상세(ticket scm-commit-detail). v21 termCwd + stat dir — 터미널 경로 링크(ticket terminal-path-links): 상대 경로의 기준 cwd 와 디렉토리 실존 확인)의 TS 사영. 와이어 쪽 대응은 daemon/src 참조
 
 export class TerminalMode {
   role: 데몬의 터미널 방식 (attach 응답, 와이어 v17) — 'tmux'(내장 tmux 서버) | 'plain'(unix 인데 tmux 를 못 써 PTY 직접 — 경고 배지) | 'unsupported'(Windows — 아이콘 없음)
@@ -23,8 +23,8 @@ port ThinBackend {
   fn readFile(path, maxBytes?, encoding?, offset?) -> FileContent {
     role: 파일 내용 + 그 시점 디스크 etag. 크기 초과(maxBytes 또는 데몬 기본 상한 50MB)·이진/비 UTF-8 은 에러가 아니라 unopenable(사유 kind·실측 size)로 반환 — 탭은 열리고 편집기 자리에 안내 화면이 뜬다 (etag 는 이때도 온다 — orphan 재검증·재로드용). 실존하지 않는 경로 등 실제 실패만 에러. maxBytes 는 undo 캡처 등 호출측 상한 (초과 파일을 읽어 나르지 않는다). encoding='base64' 면 UTF-8 검증 없이 바이트를 base64 content 로 나른다 (이미지 뷰어 등 — writeFile 이진 통로와 대칭, binary unopenable 은 안 생기고 크기 상한만 남는다). offset 이 있으면(base64 전용, 와이어 v11) 범위 읽기 — 크기 상한 없이 offset 부터 maxBytes 만큼, EOF 넘어가면 짧게 (hex 뷰어 청크). 루트 상대 외에 절대 경로도 허용 — 워크스페이스 밖 파일 열기 (OS 드롭, VS Code 파리티)
   }
-  fn stat(path) -> FileStat {
-    role: 내용 없이 실존·변경만 확인하는 경량 etag 스냅샷 + 바이트 크기 size(와이어 v11, hex 뷰어의 범위 읽기 기준) — 정규 파일 전용(디렉토리는 에러). orphan 재검증용. readFile 과 같이 절대 경로 허용
+  fn stat(path, dir?) -> FileStat {
+    role: 내용 없이 실존·변경만 확인하는 경량 etag 스냅샷 + 바이트 크기 size(와이어 v11, hex 뷰어의 범위 읽기 기준) — 정규 파일 전용(디렉토리는 에러). orphan 재검증용. readFile 과 같이 절대 경로 허용. dir=true(와이어 v21)면 디렉토리도 받아 kind('file'|'directory')를 함께 돌려준다 — 터미널 경로 링크의 실존 필터 (파일·디렉토리 구분이 열기 동작을 가른다). 기존 호출자(orphan 재검증·드롭 판정)는 dir 없이 종전 의미 그대로
   }
   fn writeFile(path, content, etag?, encoding?, append?) -> WriteResult {
     role: 저장. etag 제시 시 낙관적 충돌 검사 — stale 이면 미기록으로 conflict 반환, 생략 시 무조건 쓰기. readFile 과 같이 절대 경로 허용. encoding='base64' 면 content 를 이진으로 디코드해 쓴다 (클립보드 이미지 저장 등 — 텍스트 전제 와이어의 이진 통로). append=true(와이어 v14)면 etag 검사 없이 기존 파일 끝에 덧붙인다 — 청크 업로드(transfer)의 후속 조각, 첫 조각은 append 없이 써 파일을 새로 만든다
@@ -110,6 +110,9 @@ port ThinBackend {
   fn applyTmuxConf(content) -> message {
     role: 클라이언트 tmux.conf 를 이 데몬에 적용 — 반환은 tmux 의 경고·오류 문자열 ('' 이면 정상)
   }
+  fn termCwd(term) -> TermCwd {
+    role: 터미널의 현재 작업 디렉토리 (와이어 v21, 옵셔널 — WsBackend 만). tmux 면 그 세션 활성 pane 의 pane_current_path(전경 프로세스 cwd, 셸 통합 불필요 — 조사 terminal-path-links-research), plain 은 워크스페이스 root. home 은 데몬 머신의 홈 — 링크의 `~` 해석. 터미널 경로 링크가 상대 경로를 풀 때 호버한 줄마다 한 번 묻는다 (분할 pane 은 활성 pane 기준 — 좌표 매핑은 후속)
+  }
   fn onTerminalMode(cb) {
     role: 데몬의 터미널 방식 구독 — attach 응답마다 (mode, error)
   }
@@ -157,5 +160,6 @@ export type QuickOpenResult
 export type FileContent
 export type Unopenable
 export type FileStat
+export type TermCwd
 export type WriteResult
 export type TerminalSession

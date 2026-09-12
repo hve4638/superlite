@@ -92,6 +92,9 @@ export function createFiles(backend: ThinBackend) {
      *  로드 중, error 는 나열 실패(사라진 디렉토리 등). acquireDir/releaseDir 참조 계수로 살고
      *  refreshDir 가 트리의 로드된 디렉토리와 같은 규칙으로 갱신한다 (explorer-folder-tab) */
     listing: new Map<string, { entries: DirEntry[] | null; error?: string }>(),
+    /** 트리에 키보드 포커스를 달라는 요청 (ticket terminal-path-links — 디렉토리 링크가 reveal 뒤
+     *  사이드바를 포커스한다). ExplorerView 가 소비하고 false 로 되돌린다 */
+    pendingFocus: false,
   });
 
   /** 디렉토리 나열 결과 구독 — SCM 이 repo 표식(와이어 v13)으로 하위 저장소를 즉시 등록한다 */

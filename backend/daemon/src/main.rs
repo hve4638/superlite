@@ -89,8 +89,23 @@ fn reap_sessions(sessions: &Sessions, grace: Duration) {
 }
 
 /// tmux 관리 메서드 (와이어 v17) — listTerminals{all?}·killTerminal{id}·renameTerminal{id,name}·
-/// tmuxConf{content}. attach 전(root 없음)의 listTerminals 는 all 로만 동작한다
-async fn tmux_request(method: &str, p: &Value, root: Option<&Path>) -> Result<Value, String> {
+/// tmuxConf{content}. attach 전(root 없음)의 listTerminals 는 all 로만 동작한다.
+/// termCwd{term}(와이어 v21)은 tmux_id(호출자가 terms 락에서 꺼낸 그 터미널의 tmux 세션 id)로
+/// 활성 pane 의 cwd — plain·unsupported 는 root 를 cwd 로 돌려준다 (에러 아님, 터미널 경로 링크의
+/// 상대 경로 기준). home 은 이 머신의 홈 — 링크의 `~` 해석
+async fn tmux_request(method: &str, p: &Value, root: Option<&Path>, tmux_id: Option<&str>) -> Result<Value, String> {
+    if method == "termCwd" {
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(|h| h.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let fallback = root.map(|r| r.to_string_lossy().into_owned()).ok_or("attach 전 요청")?;
+        let cwd = match (tmux::mode(), tmux_id) {
+            (tmux::Mode::Tmux { bin }, Some(id)) => tmux::pane_cwd(bin, id).await.unwrap_or(fallback),
+            _ => fallback,
+        };
+        return Ok(json!({"cwd": cwd, "home": home}));
+    }
     let bin = match tmux::mode() {
         tmux::Mode::Tmux { bin } => bin,
         _ if method == "listTerminals" => return Ok(json!([])),
@@ -829,12 +844,18 @@ async fn handle_conn(
             // 내장 tmux 세션 관리 (와이어 v17) — 목록·종료·이름·클라이언트 conf 적용. tmux 명령은
             // 서브프로세스라 태스크로. tmuxConf 는 relay 가 attach 직후 id 없이 밀어 넣는 것도 받는다
             // (응답은 id 가 있을 때만). plain·unsupported 면 목록은 비고 나머지는 에러
-            "listTerminals" | "killTerminal" | "renameTerminal" | "tmuxConf" => {
+            "listTerminals" | "killTerminal" | "renameTerminal" | "tmuxConf" | "termCwd" => {
                 let (id, params) = (req["id"].clone(), req["params"].clone());
                 let root = cleanup.session.as_ref().map(|s| s.root.clone());
+                // termCwd (와이어 v21): 터미널 → tmux 세션 id 는 read 루프에서 terms 락으로 바로 (짧다)
+                let tmux_id = cleanup
+                    .session
+                    .as_ref()
+                    .zip(params["term"].as_u64())
+                    .and_then(|(s, term)| term::tmux_id_of(&s.terms, term));
                 let tx = tx.clone();
                 tokio::spawn(async move {
-                    let out = tmux_request(&method, &params, root.as_deref()).await;
+                    let out = tmux_request(&method, &params, root.as_deref(), tmux_id.as_deref()).await;
                     if id.is_null() {
                         return;
                     }
