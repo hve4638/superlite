@@ -1,7 +1,7 @@
 import { reactive } from '@vue/reactivity';
 import { openQuickInput, showViewlet, toggleSideBar } from './workbench';
 import { openFolderDialog } from './host';
-import { closeTab, reopenClosedEditor, saveActive, splitGroup, toggleGroupLock, activeGroup, activeTab, openHex, toggleHtmlPreview, isHtml, openUrl, openSettings, toggleWordWrap, stepEditorZoom, setEditorZoom, setActiveTab } from './editors';
+import { closeTab, reopenClosedEditor, saveActive, splitGroup, toggleGroupLock, activeGroup, activeTab, openHex, toggleHtmlPreview, isHtml, openUrl, openSettings, toggleWordWrap, stepEditorZoom, setEditorZoom, setActiveTab, urlDiag } from './editors';
 import { createTerminal, imeDiag, toggleTerminal } from './terminal';
 import { openSettingsJson, openSshConfig, openTmuxConf } from './configfiles';
 import { showAllDownloads } from './downloads';
@@ -221,6 +221,12 @@ export function setupCommands(): void {
     id: 'developer.copyImeDiagnostics',
     title: 'Developer: Copy IME Diagnostics',
     run: () => void navigator.clipboard?.writeText(imeDiag.join('\n') || '(no entries)'),
+  });
+  // 임시 (ticket url-tab-slow-first-load) — editors.urlDiag 를 클립보드로
+  register({
+    id: 'developer.copyUrlDiagnostics',
+    title: 'Developer: Copy URL Tab Diagnostics',
+    run: () => void navigator.clipboard?.writeText(urlDiag.join('\n') || '(no entries)'),
   });
 
   register({

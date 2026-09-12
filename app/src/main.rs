@@ -609,7 +609,37 @@ fn build_window(
     attach_os_drop(app, &window);
     #[cfg(windows)]
     win_icon::apply(&window);
+    #[cfg(windows)]
+    disable_browser_accelerator_keys(&window);
     Ok(window)
+}
+
+/// 브라우저 가속키 끄기 (Windows 전용, ticket url-tab-slow-first-load 곁가지). WebView2 는 Ctrl+P·Ctrl+Shift+P(인쇄)·
+/// F5·Ctrl+F 같은 브라우저 기능 키를 기본으로 처리한다. 앱 셸에서는 front 가 keydown 을 잡아 preventDefault 하지만,
+/// URL 탭의 iframe 이 포커스를 가지면 키가 cross-origin 프레임으로 가서 앱이 볼 수 없고 Ctrl+Shift+P 가 팔레트 대신
+/// 인쇄 대화상자를 띄운다 (웹 데모 실측 2026-09-12). 잃는 것은 F5 새로고침(팔레트 'Developer: Reload Window' 가
+/// 있다)·F12 정도 (릴리스 빌드는 devtools 없음). 이동·편집 키(Ctrl+C/V/Z, Home/End 등)는 영향 없다.
+/// WHY: wry 의 with_browser_accelerator_keys 를 tauri 2.11 빌더가 노출하지 않아 생성 뒤 Settings3 로 끈다.
+///      실패는 로그만 — 92.0.902.0 이전 런타임은 인터페이스가 없어 종전 동작이 남는다
+#[cfg(windows)]
+fn disable_browser_accelerator_keys(window: &tauri::WebviewWindow) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
+    use windows_core::Interface;
+
+    let _ = window.with_webview(|webview| {
+        let Ok(core) = (unsafe { webview.controller().CoreWebView2() }) else {
+            return;
+        };
+        let Ok(settings) = (unsafe { core.Settings() }) else {
+            return;
+        };
+        let Ok(settings3) = settings.cast::<ICoreWebView2Settings3>() else {
+            return;
+        };
+        if let Err(e) = unsafe { settings3.SetAreBrowserAcceleratorKeysEnabled(false) } {
+            eprintln!("superlite: 브라우저 가속키 해제 실패: {e}");
+        }
+    });
 }
 
 /// 창 아이콘 (Windows 전용, ticket app-icon-quality). tao 는 창 아이콘을 ICO 첫 항목(16px)의 RGBA 로
@@ -1555,8 +1585,12 @@ fn reload_window(app: tauri::AppHandle, window: tauri::WebviewWindow) -> Result<
 }
 
 /// 워크스페이스 상태 읽기 — 세션 초기 로드 뒤 front 가 한 번 부른다. 없음·주인 아님은 null.
-/// 응답은 {state, subs: [{x,y,w,h, ...스냅샷}]} — subs 는 넘기면서 비운다 (서브 창은 되살아나며 새 label
-/// 로 다시 저장하므로, 남겨 두면 다음 열기에 중복 창이 생긴다). 주인 아님은 서브 창 자신의 부팅 포함.
+/// 응답은 {state, subs: [{label,x,y,w,h,zoom, ...스냅샷}]} — subs 는 넘기면서 비운다 (서브 창은 되살아나며
+/// 다시 저장하므로, 남겨 두면 다음 열기에 중복 창이 생긴다). 주인 아님은 서브 창 자신의 부팅 포함.
+/// 예외는 창 묶음 새로고침(reload_window) — 그 label 의 서브 창이 살아 있고 이 세션의 미러를 아직 갖고 있으면
+/// 그 몫은 그 창이 get_workspace_sub_state 로 되살리므로 넘기지도 비우지도 않는다. 종전엔 살아 있는 서브 창이
+/// 하나라도 있으면 전부 남겼는데, 다른 세션의 탭만 가진 서브 창이 떠 있는 채 세션을 다시 열면 보조창이
+/// 끝내 돌아오지 않았다 (ticket sub-window-restore-broken, 2026-09-13)
 /// async: 디스크 쓰기(set)와 같은 이유로 메인 스레드를 피한다 (get 은 짧지만 짝을 맞춘다)
 #[tauri::command]
 async fn get_workspace_state(
@@ -1568,16 +1602,19 @@ async fn get_workspace_state(
     let Ok(root) = primary_root(&state, &id, window.label()) else {
         return Ok(None);
     };
-    // 살아 있는 서브 창이 있으면(메인 창 새로고침) 서브 몫은 그 창들의 것 — 넘기지도 비우지도 않는다
-    let live_subs = {
+    // 이 세션의 미러를 가진 살아 있는 서브 창(새로고침 중) — 그 label 의 몫은 그 창의 것
+    let reloading: Vec<String> = {
+        let windows = state.windows.lock().unwrap();
         let groups = state.groups.lock().unwrap();
-        !groups.subs_of(groups.main_of(window.label())).is_empty()
+        groups.subs_of(groups.main_of(window.label())).into_iter().filter(|l| groups.mirror_in(&windows, l, &id).is_some()).collect()
     };
     let mut p = state.persisted.lock().unwrap();
     let Some(w) = p.workspaces.iter_mut().find(|w| w.root == root) else {
         return Ok(None);
     };
-    let taken = if live_subs { Vec::new() } else { std::mem::take(&mut w.subs) };
+    let (kept, taken): (Vec<SubWorkspaceEntry>, Vec<SubWorkspaceEntry>) =
+        std::mem::take(&mut w.subs).into_iter().partition(|s| reloading.contains(&s.label));
+    w.subs = kept;
     // 비운 것이 있을 때만 파일에 반영한다
     let changed = !taken.is_empty();
     let subs: Vec<serde_json::Value> = taken
@@ -1585,6 +1622,7 @@ async fn get_workspace_state(
         .map(|s| {
             let mut v = s.state;
             if let Some(o) = v.as_object_mut() {
+                o.insert("label".into(), s.label.into());
                 o.insert("x".into(), s.x.into());
                 o.insert("y".into(), s.y.into());
                 o.insert("w".into(), s.w.into());

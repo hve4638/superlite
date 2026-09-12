@@ -31,7 +31,10 @@ class Flow {
   role: 터미널별 ack 기반 배압 (VS Code 상수: high 100k / low 5k) — 미ack 이 high 를 넘으면 리더 스레드가 condvar 대기, ack 로 low 이하가 되면 재개. 재접속 시 리셋, kill 시 해제
 }
 fn handle_term() {
-  role: 터미널 계열 메서드 디스패치 — createTerminal 의 attach(와이어 v17, tmux session id)를 spawn_term 에 넘긴다. 같은 id 재생성 무시 (PTY 누수 방지), termAck 는 Flow 카운터 차감. termWrite 는 입력 예산 확보 후 적재 — 실패 시 폐기하되 그 터미널 화면에 안내를 출력하고 폐기분도 termInputAck 로 창을 돌려준다 (큐를 점유하지 않으므로 — 안 돌려주면 프론트 창이 영구 축소). sink 전송은 terms 락 밖 — terms→sink 락 중첩을 만들지 않는다
+  role: 터미널 계열 메서드 디스패치 — createTerminal 의 attach(와이어 v17, tmux session id)를 spawn_term 에 넘긴다. 같은 id 재생성은 거부 — 그 터미널 화면에 사유를 내고 code 없는 termExit 로 드러낸다 (PTY 누수 방지; 종전의 조용한 무시는 새 핸들을 옛 PTY 에 묶어 다른 tmux 세션으로 입력이 샜다, ticket multi-client-terminal-crosstalk), termAck 는 Flow 카운터 차감. termWrite 는 입력 예산 확보 후 적재 — 실패 시 폐기하되 그 터미널 화면에 안내를 출력하고 폐기분도 termInputAck 로 창을 돌려준다 (큐를 점유하지 않으므로 — 안 돌려주면 프론트 창이 영구 축소). sink 전송은 terms 락 밖 — terms→sink 락 중첩을 만들지 않는다
+}
+fn ids() -> u64[] {
+  role: 세션에 살아 있는 터미널 id 목록 (와이어 v22 attach 응답 terms) — 오름차순
 }
 fn reset_flow() {
   role: 세션 전 터미널의 미ack 카운터 리셋 — 재접속 시 프론트 카운터와 함께 0 에서 재시작 (유실 프레임 몫의 영구 누적 방지)

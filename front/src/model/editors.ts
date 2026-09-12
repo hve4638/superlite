@@ -1,11 +1,11 @@
-import { markRaw, reactive } from '@vue/reactivity';
+import { markRaw, reactive, watch } from '@vue/reactivity';
 import type { FileContent, ThinBackend, Unopenable, WriteResult } from '../backend/types';
 import { ctx, viewOf } from './ctx';
 import { errText, notify } from './notifications';
 import { configLabel, configReadOnly, isConfigPath, readConfig, writeConfig } from './configfiles';
 import { confirm } from './dialog';
 import { languageOf } from './languages';
-import { wordWrapDefault } from './settings';
+import { settings, wordWrapDefault } from './settings';
 
 export interface FileTab extends WithCards {
   kind: 'file';
@@ -211,7 +211,14 @@ export interface EditorGroup extends TabHolder {
    *  자신이 비면 종전대로 접히고 잠금도 사라진다 — 잠금은 탭이 있는 그룹에만 존재한다.
    *  스냅샷(창 이동·워크스페이스 복원)에 그대로 실린다 */
   locked?: boolean;
+  /** 열기 우선순위 (ticket editor-group-open-priority) — 그룹을 지정하지 않는 열기(탐색기·퀵오픈·터미널 링크·검색·
+   *  SCM·URL·Hex 등)는 openTarget() 이 고른 그룹으로 간다: high 그룹이 있으면 그중, 없으면 보통(undefined) 그중,
+   *  low 만 남으면 low 그중 — 같은 순위끼리는 최근 포커스한 그룹(editors.groupMru) 순. 새 그룹·분할은 보통.
+   *  스냅샷(창 이동·워크스페이스 복원)에 그대로 실린다 */
+  openPriority?: OpenPriority;
 }
+
+export type OpenPriority = 'high' | 'low';
 
 /** 화면 배치 트리 — 리프는 그룹 id, 분기는 행(row: 좌우)/열(column: 상하) 컨테이너.
  *  그룹 순회는 flat 한 editors.groups 로 하고, 이 트리는 배치·분할 위치만 담당한다. */
@@ -417,6 +424,9 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     groups: [{ id: 0, tabs: [], activeTabId: null }] as EditorGroup[],
     layout: 0 as LayoutNode,
     activeGroupId: 0,
+    /** 그룹 간 최근 포커스 순서 (앞이 최근) — activeGroupId 가 바뀔 때마다 앞으로 올린다. 열기 대상 선택(openTarget)의
+     *  동순위 결정용. 스냅샷에는 싣지 않는다 — 복원 뒤엔 활성 그룹부터 다시 쌓인다 */
+    groupMru: [0] as number[],
     /** path → 문서 내용. 그룹/탭과 분리 — 같은 파일을 여러 탭이 공유한다. */
     docs: new Map<string, Doc>(),
     /** 커서 위치 (statusbar 표시용, 1-based) */
@@ -630,6 +640,27 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     return editors.groups.find((g) => g.id === editors.activeGroupId) ?? editors.groups[0];
   }
 
+  watch(() => editors.activeGroupId, (id) => {
+    const i = editors.groupMru.indexOf(id);
+    if (i !== -1) editors.groupMru.splice(i, 1);
+    editors.groupMru.unshift(id);
+  }); // @vue/reactivity 의 watch 는 스케줄러가 없어 동기 — 대입 직후 openTarget 이 새 순서를 본다
+
+  /** 그룹을 지정하지 않은 열기의 대상 그룹 (ticket editor-group-open-priority) — 순위(high > 보통 > low)가 가장
+   *  높은 그룹들 중 최근 포커스한 것. 순위가 전부 같으면 활성 그룹이라 종전 동작과 같다 */
+  function openTarget(): EditorGroup {
+    const rank = (g: EditorGroup) => (g.openPriority === 'high' ? 0 : g.openPriority === 'low' ? 2 : 1);
+    const best = Math.min(...editors.groups.map(rank));
+    const candidates = editors.groups.filter((g) => rank(g) === best);
+    const act = activeGroup();
+    if (candidates.includes(act)) return act;
+    for (const id of editors.groupMru) {
+      const g = candidates.find((g) => g.id === id);
+      if (g) return g;
+    }
+    return candidates[0];
+  }
+
   function activeTab(): Tab | null {
     const g = activeGroup();
     return g.tabs.find((t) => t.id === g.activeTabId) ?? null;
@@ -701,13 +732,18 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
   /** @returns 열기 성공 여부 — 읽기 실패는 탭을 걷고 notify 후 false (호출측 후속 동작 가드용) */
   async function openFile(
     path: string,
-    opts?: { preview?: boolean; groupId?: number; focus?: boolean },
+    opts?: { preview?: boolean; groupId?: number; focus?: boolean; source?: boolean },
   ): Promise<boolean> {
     const group = opts?.groupId !== undefined
-      ? editors.groups.find((g) => g.id === opts.groupId) ?? activeGroup()
-      : activeGroup();
+      ? editors.groups.find((g) => g.id === opts.groupId) ?? openTarget()
+      : openTarget();
 
-    const existing = group.tabs.find((t) => t.id === path);
+    // HTML 은 설정(htmlOpen, 기본 preview)에 따라 프리뷰 탭으로 (ticket html-open-as-preview). 같은 path 의 편집기
+    // 탭이 이 그룹에 이미 있으면 그것을 활성화 — 중복 열기 방지 규칙이 우선. source 는 줄 이동이 붙은 진입점(openFileAt)
+    const kind = !opts?.source && isHtml(path) && settings.htmlOpen === 'preview' && !group.tabs.some((t) => t.id === path)
+      ? 'preview' : 'file';
+    const id = tabIdOf(kind, path);
+    const existing = group.tabs.find((t) => t.id === id);
     if (existing) {
       if (!opts?.preview) existing.preview = false;
       activate(group, existing.id);
@@ -717,11 +753,11 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     }
 
     const doc = editors.docs.get(path);
-    const tab: FileTab = {
-      kind: 'file', id: path, path, name: tabNameOf('file', path),
+    const tab: FileTab | PreviewTab = {
+      kind, id, path, name: tabNameOf(kind, path),
       // WHY: dirty 인 채 닫힌 문서를 다시 열 수 있다 — 버퍼가 살아 있으므로 doc 상태에서 파생해야
-      //      "clean 탭 아래 미저장 내용" 이 생기지 않는다. 아직 안 읽은 문서는 clean
-      dirty: doc !== undefined && doc.content !== doc.savedContent,
+      //      "clean 탭 아래 미저장 내용" 이 생기지 않는다. 아직 안 읽은 문서는 clean. 프리뷰 탭은 편집이 없어 늘 clean
+      dirty: kind === 'file' && doc !== undefined && doc.content !== doc.savedContent,
       preview: opts?.preview ?? false,
     };
     const previewIdx = group.tabs.findIndex((t) => t.preview);
@@ -751,7 +787,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
   /** 파일을 열고 지정 라인으로 이동 (검색 결과 클릭). line 은 1-based. */
   async function openFileAt(path: string, line: number): Promise<void> {
     // 열기 실패 시 reveal 을 남기면 다음 성공적 열기 때 엉뚱한 스크롤이 튄다
-    if (!(await openFile(path, { preview: true }))) return;
+    if (!(await openFile(path, { preview: true, source: true }))) return;
     editors.pendingReveal = { path, line };
   }
 
@@ -770,7 +806,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
         return;
       }
     }
-    const group = activeGroup();
+    const group = openTarget();
     const id = opts?.commit ? `diff:${opts.commit}:${path}` : `diff:${path}`;
     if (!group.tabs.some((t) => t.id === id)) {
       const suffix = opts?.commit ? opts.commit.slice(0, 7) : opts?.deleted ? 'Deleted' : 'Working Tree';
@@ -780,6 +816,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
       });
     }
     activate(group, id);
+    editors.activeGroupId = group.id;
     editors.pendingFocus = true;
   }
 
@@ -788,11 +825,14 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
   /** URL 탭 열기 — 활성 그룹의 활성 탭 오른쪽에 새 탭. url 이 없으면 빈 탭(주소칸에 포커스, UrlView 몫). 같은 URL 의 탭이
    *  있어도 새로 연다 (주소칸으로 URL 이 바뀌므로 중복 판정에 의미가 없다) */
   function openUrl(url = ''): void {
-    const group = activeGroup();
+    const group = openTarget();
     const id = `url:${Math.random().toString(36).slice(2, 10)}`;
+    markUrlTabOpen(id);
+    pushUrlDiag(id, `open ${url || '(empty)'}`);
     const tab: UrlTab = { kind: 'url', id, path: '', name: urlTabName(url), dirty: false, preview: false, url };
     group.tabs.splice(openIndex(group), 0, tab);
     activate(group, id);
+    editors.activeGroupId = group.id;
     editors.pendingFocus = true;
   }
 
@@ -814,9 +854,10 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     for (const g of editors.groups) {
       if (g.tabs.some((t) => t.id === id)) return setActiveTab(g.id, id);
     }
-    const group = activeGroup();
+    const group = openTarget();
     group.tabs.splice(openIndex(group), 0, { kind: 'settings', id, path: '', name: 'Settings', dirty: false, preview: false });
     activate(group, id);
+    editors.activeGroupId = group.id;
     editors.pendingFocus = true;
   }
 
@@ -826,19 +867,21 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     for (const g of editors.groups) {
       if (g.tabs.some((t) => t.id === id)) return setActiveTab(g.id, id);
     }
-    const group = activeGroup();
+    const group = openTarget();
     group.tabs.splice(openIndex(group), 0, { kind: 'downloads', id, path: '', name: 'Downloads', dirty: false, preview: false });
     activate(group, id);
+    editors.activeGroupId = group.id;
     editors.pendingFocus = true;
   }
 
   function openHex(path: string): void {
-    const group = activeGroup();
+    const group = openTarget();
     const id = tabIdOf('hex', path);
     if (!group.tabs.some((t) => t.id === id)) {
       group.tabs.splice(openIndex(group), 0, { kind: 'hex', id, path, name: tabNameOf('hex', path), dirty: false, preview: false });
     }
     activate(group, id);
+    editors.activeGroupId = group.id;
   }
 
   /** 폴더 탭 열기 — 탐색기 폴더 드래그 드롭(중앙)·탭바 폴더 버튼(루트). 같은 폴더 탭이 그 그룹에
@@ -847,7 +890,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     const id = tabIdOf('folder', path);
     // 그룹 지정이 없으면(메뉴·타이틀바 클릭) 어느 그룹에든 이미 열린 같은 폴더 탭으로 포커스만 옮긴다
     const existing = opts.groupId === undefined ? editors.groups.find((g) => g.tabs.some((t) => t.id === id)) : undefined;
-    const group = existing ?? (opts.groupId !== undefined ? editors.groups.find((g) => g.id === opts.groupId) : undefined) ?? activeGroup();
+    const group = existing ?? (opts.groupId !== undefined ? editors.groups.find((g) => g.id === opts.groupId) : undefined) ?? openTarget();
     if (!group.tabs.some((t) => t.id === id)) {
       const tab: FolderTab = {
         kind: 'folder', id, path, name: tabNameOf('folder', path), dirty: false, preview: false,
@@ -971,9 +1014,10 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
         return;
       }
     }
-    const group = activeGroup();
+    const group = openTarget();
     group.tabs.splice(openIndex(group), 0, { kind: 'preview', id, path, name: tabNameOf('preview', path), dirty: false, preview: false });
     activate(group, id);
+    editors.activeGroupId = group.id;
     if (editors.docs.has(path)) return;
     try {
       await trackLoad(id, ensureDoc(path));
@@ -984,8 +1028,8 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
   }
 
   /** HTML 편집기 ↔ 프리뷰 제자리 전환 (Ctrl+Shift+V) — 탭을 같은 자리에서 다른 종류로 바꾼다.
-   *  문서는 공유되므로 dirty 버퍼가 유지되고, 프리뷰 상태에서 탐색기로 같은 파일을 열면 편집기 탭이
-   *  따로 열린다 (id 가 다르다). 바꿀 종류의 탭이 이 그룹에 이미 있으면 현재 탭을 접고 그쪽을 활성화 */
+   *  문서는 공유되므로 dirty 버퍼가 유지되고, 편집기 상태에서 탐색기로 같은 파일을 열면 (설정이 preview 라도)
+   *  그 편집기 탭이 활성화된다 (openFile 의 중복 열기 규칙). 바꿀 종류의 탭이 이 그룹에 이미 있으면 현재 탭을 접고 그쪽을 활성화 */
   function toggleHtmlPreview(groupId: number, tabId: string): void {
     const group = editors.groups.find((g) => g.id === groupId);
     const idx = group?.tabs.findIndex((t) => t.id === tabId) ?? -1;
@@ -1141,6 +1185,14 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     if (!group || group.tabs.length === 0) return;
     if (group.locked) delete group.locked;
     else group.locked = true;
+  }
+
+  /** 그룹 열기 우선순위 설정 (탭바 아이콘 순환·탭바 빈 영역 우클릭 메뉴) — undefined 가 보통 */
+  function setGroupOpenPriority(groupId: number, priority: OpenPriority | undefined): void {
+    const group = editors.groups.find((g) => g.id === groupId);
+    if (!group) return;
+    if (priority === undefined) delete group.openPriority;
+    else group.openPriority = priority;
   }
 
   /** force: 확인 대화상자를 거치지 않는 닫기 — confirm 처리부·삭제(closePathTabs)가 쓴다 */
@@ -1691,11 +1743,11 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
   }
 
   return {
-    editors, activeGroup, activeTab, openFile, openFileAt, openDiff, openHex, openUrl, navigateUrlTab, openSettings, openDownloads, ensureHex, loadHexChunk, openHtmlPreview, toggleHtmlPreview, setActiveTab, pinTab,
+    editors, activeGroup, openTarget, activeTab, openFile, openFileAt, openDiff, openHex, openUrl, navigateUrlTab, openSettings, openDownloads, ensureHex, loadHexChunk, openHtmlPreview, toggleHtmlPreview, setActiveTab, pinTab,
     openFolderTab, openFolderTabSplit, navigateFolderTab, addGroupBeside, setFolderStyle, setFolderSort,
     openFileSplit, closeTab,
     reopenClosedEditor, moveTabToGroup, moveTabSplit,
-    splitGroup, closeEmptyGroup, toggleGroupLock, updateContent, setOrphaned, remapPaths, closePathTabs,
+    splitGroup, closeEmptyGroup, toggleGroupLock, setGroupOpenPriority, updateContent, setOrphaned, remapPaths, closePathTabs,
     reloadDocFromDisk, hasDirtyDocs, saveActive, overwriteConflict, revertConflict, indentOf,
     snapshot, restore, hydrate, takeTabForHandoff, acceptTab,
     openTerminalTab, closeTerminalTabs, setTerminalCloser, renameTerminalTab, focusTerminalTab,
@@ -1723,6 +1775,7 @@ export function resizeSplit(
 
 export const editors = viewOf(() => ctx().editors.editors);
 export const activeGroup = (): EditorGroup => ctx().editors.activeGroup();
+export const openTarget = (): EditorGroup => ctx().editors.openTarget();
 export const activeTab = (): Tab | null => ctx().editors.activeTab();
 export const openFile = (
   path: string, opts?: { preview?: boolean; groupId?: number; focus?: boolean },
@@ -1733,6 +1786,23 @@ export const openDiff = (path: string, opts?: { deleted?: boolean }): Promise<vo
   ctx().editors.openDiff(path, opts);
 export const openHex = (path: string): void => ctx().editors.openHex(path);
 export const openUrl = (url?: string): void => ctx().editors.openUrl(url);
+
+// ---- URL 탭 로딩 진단 (ticket url-tab-slow-first-load, 임시) — 탭 열기→마운트→항해→프레임 load 의 경과와 같은 URL 의
+//      fetch 왕복을 한 줄씩 남긴다 (프레임 밖 fetch 가 빠르면 프레임 생성 비용, 같이 느리면 네트워크·프록시 쪽).
+//      팔레트 'Developer: Copy URL Tab Diagnostics' 가 클립보드로 복사한다. 원인이 확정되면 지운다
+export const urlDiag: string[] = [];
+const urlOpenedAt = new Map<string, number>();
+export function markUrlTabOpen(tabId: string): void {
+  urlOpenedAt.set(tabId, performance.now());
+}
+export function pushUrlDiag(tabId: string, line: string): void {
+  const t0 = urlOpenedAt.get(tabId);
+  const rel = t0 === undefined ? '?' : `+${Math.round(performance.now() - t0)}ms`;
+  const s = `${new Date().toISOString().slice(11, 23)} ${tabId} ${rel} ${line}`;
+  urlDiag.push(s);
+  if (urlDiag.length > 100) urlDiag.shift();
+  console.log('[url]', s);
+}
 export const openSettings = (): void => ctx().editors.openSettings();
 export const openDownloads = (): void => ctx().editors.openDownloads();
 export const navigateUrlTab = (tabId: string, url: string): void => ctx().editors.navigateUrlTab(tabId, url);
@@ -1773,6 +1843,7 @@ export const closeCard = (groupId: number, hostTabId: string, cardId: string, fo
 export const activeLeaf = (): Tab | null => ctx().editors.activeLeaf();
 export const closeEmptyGroup = (groupId: number): void => ctx().editors.closeEmptyGroup(groupId);
 export const toggleGroupLock = (groupId: number): void => ctx().editors.toggleGroupLock(groupId);
+export const setGroupOpenPriority = (groupId: number, priority: OpenPriority | undefined): void => ctx().editors.setGroupOpenPriority(groupId, priority);
 export const updateContent = (path: string, content: string): void =>
   ctx().editors.updateContent(path, content);
 export const setOrphaned = (path: string, on: boolean): void => ctx().editors.setOrphaned(path, on);

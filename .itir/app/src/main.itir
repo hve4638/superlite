@@ -148,7 +148,7 @@ fn forget_recent() {
   role: Tauri command — 최근 폴더에서 root 하나 제거 후 저장 (시작 페이지 ×). 고정 그룹은 그대로
 }
 fn get_workspace_state() {
-  role: Tauri command — 세션 id 의 root 에 저장된 워크스페이스 상태를 {state, subs} 로 돌려준다 (front 스냅샷 JSON, 내용은 해석하지 않음; subs 는 보조창 몫에 x·y·w·h 를 얹은 목록이고 넘기면서 비운다 — 되살아난 서브 창이 새 label 로 다시 저장하므로 남기면 중복 창이 생긴다. 살아 있는 서브 창이 있으면(메인 창 새로고침) subs 는 빈 목록이고 비우지도 않는다) (ticket workspace-state-restore). primary_root 규칙: 호출 창 소유이고 그 root 의 첫(가장 오래된) 세션일 때만 — 탭 분리로 생긴 두 번째 세션은 null
+  role: Tauri command — 세션 id 의 root 에 저장된 워크스페이스 상태를 {state, subs} 로 돌려준다 (front 스냅샷 JSON, 내용은 해석하지 않음; subs 는 보조창 몫에 label·x·y·w·h·zoom 을 얹은 목록이고 넘기면서 비운다 — 되살아난 서브 창이 다시 저장하므로 남기면 중복 창이 생긴다. 그 label 의 서브 창이 살아 있고 이 세션의 미러를 갖고 있으면(메인 창 새로고침) 그 항목만 남기고 넘기지 않는다 — 다른 세션의 탭만 가진 서브 창이 떠 있는 채 세션을 다시 열어도 넘어간다, ticket sub-window-restore-broken) (ticket workspace-state-restore). primary_root 규칙: 호출 창 소유이고 그 root 의 첫(가장 오래된) 세션일 때만 — 탭 분리로 생긴 두 번째 세션은 null
 }
 fn set_workspace_state() {
   role: Tauri command — 워크스페이스 상태 저장 (front 가 변경 디바운스·닫기 시점에 통째로). primary_root 규칙으로 거절 가능. persisted.workspaces 는 최근 저장 순 최대 64, 즉시 save_state. 그 root 의 subs(보조창 몫)는 건드리지 않는다
@@ -236,6 +236,9 @@ fn infos_for() {
 }
 fn emit_sessions() {
   role: 먼저 sync_open (레지스트리 변경 지점이 전부 이 방송을 지난다). 레지스트리 변경을 창마다 자기 몫의 목록으로 sessions-changed 방송(emit_to) — 각 창의 front 세션 관리자가 reconcile 한다. 세션 0 개인 창(닫히는 중)은 건너뛴다 — 빈 목록을 보내면 front 가 활성 없는 상태를 잠깐 그린다.
+}
+fn disable_browser_accelerator_keys() {
+  role: (Windows 전용, ticket url-tab-slow-first-load 곁가지) 창 생성 뒤 WebView2 Settings3 로 브라우저 가속키(Ctrl+P·Ctrl+Shift+P 인쇄·F5·Ctrl+F·F12)를 끈다 — URL 탭 iframe 이 포커스를 가지면 키가 cross-origin 프레임으로 가 front 가 preventDefault 할 수 없고 Ctrl+Shift+P 가 인쇄 대화상자를 띄운다. wry 의 with_browser_accelerator_keys 를 tauri 2.11 이 노출하지 않아 사후 설정. 실패는 로그만
 }
 fn attach_os_drop() {
   role: (Windows 전용) OS 파일/폴더 드롭 수신 — WebView2 WebMessageReceived 에 핸들러 추가 등록 (멀티캐스트라 wry IPC 와 공존, 부속 객체 유무로 우리 메시지를 구분). 창마다 등록한다 (build_window). front 가 postMessageWithAdditionalObjects 로 넘긴 File 객체에서 절대 경로를 읽고 (FileSystemHandle 은 런타임이 null 로 넣어 못 쓴다 — 실측), 종류는 경로를 직접 stat 해 판별한다. 디렉토리면 그 창에 open_workspace 로 새 세션 탭 (폴더 열기 계열과 의미 통일), 파일이면 절대 경로 목록을 PostWebMessageAsJson 으로 DOM 에 반환 (루트 상대화·열기 판단은 front 몫). 경로는 드롭 객체에서 나온다 — front 의 문자열 경로 지목은 open_folder_path 통로로만 (web-folder-open.md 개정)

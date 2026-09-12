@@ -21,8 +21,9 @@ import { fontZoom, type FontZoom } from './terminal';
  * 보조창(서브 창, 에디터·터미널 탭 분리로 생긴 창 — window-detach-polish)도 보존한다 (2026-09-08 사용자
  * 결정): 서브 창은 자기 미러 세션의 같은 형식 스냅샷을 set_workspace_sub_state 로 보내고 native 가 창
  * 위치·크기를 붙여 그 root 아래 subs 로 모은다. 메인이 복원할 때 native 가 subs 를 넘겨주며 비우고, 메인은
- * detach_tabs 경로로 서브 창을 그 자리에 다시 만들어 'restore' 핸드오프로 채운다. 세션 닫기(회수)는 서브
- * 상태를 남기고, 서브 창 X·마지막 탭 이탈은 그 서브를 잊는다(null 저장).
+ * detach_tabs 경로로 서브 창을 그 자리에 다시 만들어 'restore' 핸드오프로 채운다 — 같은 label 의 서브 창이
+ * 아직 살아 있으면(다른 세션의 탭을 가진 채 남은 창) 새 창 대신 그 창에 핸드오프를 보낸다. 세션 닫기(회수)는
+ * 서브 상태를 남기고, 서브 창 X·마지막 탭 이탈은 그 서브를 잊는다(null 저장).
  */
 
 /** 저장 형식 — editors.snapshot 의 구조 부분(docs 제외) + 펼침 + 뷰 상태 + 터미널 자리.
@@ -54,8 +55,8 @@ export type StoreKind = 'app' | 'web' | 'mock';
  *  없다 — 메인의 배율은 창 저장소(editors.loadWindowZoom)가 기억한다 */
 type SubSnapshot = WorkspaceState & { fontZoom?: FontZoom };
 
-/** 보조창 하나의 저장 — 스냅샷 + 창 위치·크기(논리 px)·웹뷰 줌 레벨(zoom, native 가 저장 시점에 읽는다) */
-export type SubWorkspaceState = SubSnapshot & { x: number; y: number; w: number; h: number; zoom?: number };
+/** 보조창 하나의 저장 — 스냅샷 + 저장한 창의 label + 창 위치·크기(논리 px)·웹뷰 줌 레벨(zoom, native 가 저장 시점에 읽는다) */
+export type SubWorkspaceState = SubSnapshot & { label: string; x: number; y: number; w: number; h: number; zoom?: number };
 
 function serialize(ctx: SessionCtx, sub: boolean): SubSnapshot {
   const s = ctx.editors.snapshot();
@@ -168,13 +169,16 @@ export async function restoreWorkspace(kind: StoreKind, id: string, root: string
   const tasks: Promise<unknown>[] = [];
   if (s && s.groups.length > 0) tasks.push(applyWorkspaceState(ctx, s));
   // 보조창 — 저장된 자리·크기에 서브 창을 만들고 'restore' 핸드오프로 채운다 (sessions.applyHandoff).
-  // fromSession 은 이 세션(원본) — native 가 미러 세션을 만들고 toSession 을 채운다
+  // fromSession 은 이 세션(원본) — native 가 미러 세션을 만들고 toSession 을 채운다. 저장한 label 의 서브 창이
+  // 아직 살아 있으면(다른 세션의 탭을 가진 채 남은 창, ticket sub-window-restore-broken) 새 창을 겹쳐 만들지
+  // 않고 그 창에 핸드오프를 보낸다 — 자리·배율은 그 창의 것을 따른다 (미러는 서브가 ensure_mirror 로 만든다)
+  const live = loaded.subs.length > 0 ? ((await tauri?.core.invoke('list_subs').catch(() => [])) as string[] | undefined) ?? [] : [];
   for (const sub of loaded.subs) {
-    const { x, y, w, h, zoom, fontZoom: fz, ...state } = sub;
-    tasks.push(
-      tauri?.core.invoke('detach_tabs', { root, x, y, size: [w, h], zoom, handoff: { kind: 'restore', fromSession: id, state, fontZoom: fz } })
-        .catch((e: unknown) => notify('warning', `Could not restore a detached window: ${String(e)}`)) ?? Promise.resolve(),
-    );
+    const { label, x, y, w, h, zoom, fontZoom: fz, ...state } = sub;
+    const call = live.includes(label)
+      ? tauri?.core.invoke('forward', { toWindow: label, event: 'tabs-handoff', payload: { kind: 'restore', fromSession: id, toSession: id, state } })
+      : tauri?.core.invoke('detach_tabs', { root, x, y, size: [w, h], zoom, handoff: { kind: 'restore', fromSession: id, state, fontZoom: fz } });
+    tasks.push(call?.catch((e: unknown) => notify('warning', `Could not restore a detached window: ${String(e)}`)) ?? Promise.resolve());
   }
   await Promise.allSettled(tasks);
 }

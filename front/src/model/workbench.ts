@@ -21,6 +21,8 @@ export interface ContextMenuItem {
   key?: string;
   separator?: boolean;
   enabled?: boolean;
+  /** 체크 표시 — true 면 체크 아이콘, false 면 같은 폭의 빈 자리(같은 메뉴 안 정렬), undefined 면 자리 없음 */
+  checked?: boolean;
   run?: () => void;
 }
 

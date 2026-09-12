@@ -3,7 +3,7 @@
 // 즉시 저장 (VS Code 설정 UI 와 같이 저장 버튼 없음). 원문 편집은 "Open Settings (JSON)" 탭.
 import { computed } from 'vue';
 import { LANGUAGES } from '../../model/languages';
-import { saveSettings, settings, settingsEnabled, type RestoreWindows } from '../../model/settings';
+import { saveSettings, settings, settingsEnabled, type HtmlOpen, type RestoreWindows } from '../../model/settings';
 import { openSettingsJson } from '../../model/configfiles';
 import { inApp } from '../../model/window';
 
@@ -11,6 +11,11 @@ const enabled = settingsEnabled();
 
 function setRestore(e: Event): void {
   settings.restoreWindows = (e.target as HTMLSelectElement).value as RestoreWindows;
+  void saveSettings();
+}
+
+function setHtmlOpen(e: Event): void {
+  settings.htmlOpen = (e.target as HTMLSelectElement).value as HtmlOpen;
   void saveSettings();
 }
 
@@ -71,6 +76,18 @@ function setWrap(id: string, e: Event): void {
         <option value="none">none — always start with an empty session</option>
         <option value="one">one — the last focused window</option>
         <option value="all">all — every window</option>
+      </select>
+    </section>
+
+    <section>
+      <h2>Editor: HTML Open</h2>
+      <p class="desc">
+        What opens when you open an .html file: a preview tab or the source editor. Ctrl+Shift+V switches the tab
+        in place either way. Search results and terminal links with a line number always open the source.
+      </p>
+      <select class="select" :value="settings.htmlOpen" @change="setHtmlOpen($event)">
+        <option value="preview">preview — rendered HTML</option>
+        <option value="source">source — editor</option>
       </select>
     </section>
 

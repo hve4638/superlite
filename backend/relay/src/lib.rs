@@ -113,10 +113,27 @@ pub async fn serve(listener: TcpListener, roots: SessionRoots, token: Option<Str
         .route("/nvim", get(nvim::nvim_handler));
     if let Some(dist) = &dist {
         // 정적 dist 만 authed 를 거치지 않는다 — 번들에 비밀이 없고, 토큰은 앱이 URL 로 주입한다
-        app = app.fallback_service(ServeDir::new(dist));
+        app = app.fallback_service(
+            Router::new().fallback_service(ServeDir::new(dist)).layer(axum::middleware::from_fn(dist_cache_control)),
+        );
     }
     let app = app.with_state(App { roots, token, spares: Arc::default() });
     axum::serve(listener, app).await.unwrap();
+}
+
+/// dist 정적 응답의 캐시 정책 (ticket url-tab-stale-content). ServeDir 는 Cache-Control 을 붙이지 않아
+/// 브라우저가 Last-Modified 기준 휴리스틱 캐시를 쓰고, iframe(앱 URL 탭) 안 재로드는 최상위 새로고침과 달리
+/// 재검증 없이 그 캐시를 그대로 쓴다 — dist 를 재빌드해도 옛 index.html 이 옛 해시 자산을 가리킨 채 남는다.
+/// vite 산출물은 /assets/ 아래만 내용 해시 이름이라 영구 캐시(immutable)해도 되고, 그 밖(index.html·아이콘)은
+/// 이름이 고정이라 매번 재검증(no-cache — 캐시는 하되 If-Modified-Since 로 확인, 안 바뀌면 304)한다
+async fn dist_cache_control(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let immutable = req.uri().path().starts_with("/assets/");
+    let mut res = next.run(req).await;
+    if res.status().is_success() || res.status() == StatusCode::NOT_MODIFIED {
+        let v = if immutable { "public, max-age=31536000, immutable" } else { "no-cache" };
+        res.headers_mut().insert(axum::http::header::CACHE_CONTROL, axum::http::HeaderValue::from_static(v));
+    }
+    res
 }
 
 // ---------------------------------------------------------------- daemon

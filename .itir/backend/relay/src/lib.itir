@@ -12,7 +12,10 @@ class Target {
   role: 접속 대상 — Local(데몬 IPC 소켓) 또는 Remote{host, path}(ssh exec 채널). root 문자열의 ssh:// 스킴 여부로 to_target 이 가른다
 }
 fn serve() {
-  role: 서버 기동 단일 진입점 — control_loop spawn + 모듈 role 의 라우트 전부(+옵션 dist ServeDir — 이것만 authed 밖, 번들에 비밀 없음) axum serve. bin 과 Tauri 앱이 공유한다. root 대신 SessionRoots 를 받는다. App 상태에 ssh::Spares(호스트별 예비 파이프)를 함께 둔다 — relay 들이 공유
+  role: 서버 기동 단일 진입점 — control_loop spawn + 모듈 role 의 라우트 전부(+옵션 dist ServeDir — 이것만 authed 밖, 번들에 비밀 없음, dist_cache_control 층으로 감싼다) axum serve. bin 과 Tauri 앱이 공유한다. root 대신 SessionRoots 를 받는다. App 상태에 ssh::Spares(호스트별 예비 파이프)를 함께 둔다 — relay 들이 공유
+}
+fn dist_cache_control() {
+  role: dist 정적 응답의 Cache-Control (ticket url-tab-stale-content) — /assets/(내용 해시 이름)는 public·1년·immutable, 그 밖(index.html·아이콘)은 no-cache 로 매번 재검증(If-Modified-Since → 304). ServeDir 는 Cache-Control 을 안 붙여 브라우저 휴리스틱 캐시가 걸리고, 앱 URL 탭(iframe) 재로드는 재검증 없이 그 캐시를 써서 dist 재빌드가 반영되지 않았다. 앱 in-process serve(dist 없음)는 무관
 }
 fn authed() {
   role: /ws 와 /ssh/* 공유 인증 — SUPERLITE_TOKEN 설정 시 ?tkn= 일치(일치가 곧 인증 — Origin 검증 생략, tauri:// 오리진 수용), 미설정 시 Origin=Host 검증(브라우저 CSRF), Origin 부재(비브라우저)는 통과

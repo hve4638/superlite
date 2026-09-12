@@ -222,6 +222,14 @@ export class WsBackend implements ThinBackend {
         // terminal (와이어 v17) — 데몬의 터미널 방식. 구버전 데몬은 필드가 없다 (unsupported 취급 않음)
         const t = msg.result?.terminal;
         if (t && typeof t.mode === 'string') this.terminalModeHandler?.(t.mode, typeof t.error === 'string' ? t.error : null);
+        // terms (와이어 v22): 데몬 세션에 이미 살아 있는 터미널 id. 같은 session id 로 새 페이지가 붙으면(창
+        // 새로고침·세션 탭 창 분리) 이 인스턴스의 카운터는 1 부터라 옛 PTY 번호와 겹친다 — 데몬은 같은 번호의
+        // createTerminal 을 받지 않으므로 새 탭이 옛 PTY(다른 tmux 세션)에 묶여 입력이 엉뚱한 셸로 들어갔다
+        // (ticket multi-client-terminal-crosstalk). 카운터를 그 위로 올린다. 구버전 데몬은 필드가 없다
+        const live = msg.result?.terms;
+        if (Array.isArray(live)) {
+          for (const id of live) if (typeof id === 'number' && id >= this.nextTerm) this.nextTerm = id + 1;
+        }
         if (this.isReconnect && msg.result?.resumed !== true) {
           const dead = [...this.termEpoch]
             .filter(([, epoch]) => epoch < this.connEpoch)

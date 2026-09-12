@@ -781,10 +781,16 @@ async fn handle_conn(
                             },
                             None => (Arc::new(new_session(None, r.clone(), &tx)), false),
                         };
+                        // terms (와이어 v22): 이 세션에 살아 있는 터미널 id — 같은 session id 로 새 프론트가
+                        // 붙는 경우(창 새로고침·세션 탭 창 분리)에 프론트가 term id 카운터를 그 위로 올려,
+                        // 새 createTerminal 이 옛 PTY 번호와 겹쳐 다른 tmux 세션에 입력이 들어가는 사고를
+                        // 막는다 (ticket multi-client-terminal-crosstalk). resumed 가 아니면 빈 목록
+                        let mut live_terms = Vec::new();
                         if resumed {
                             // 배압 카운터 리셋 — 프론트도 재연결 시 0 에서 다시 센다
                             // (유실 프레임 몫 정리). sessions 맵 락 밖이라 안전하다
                             term::reset_flow(&s.terms);
+                            live_terms = term::ids(&s.terms);
                         }
                         let path = r.to_string_lossy().into_owned();
                         // 감시 실패(inotify 한도 등)는 치명적이지 않다 — 감시 없이 동작.
@@ -797,7 +803,7 @@ async fn handle_conn(
                         cleanup.session = Some(s);
                         // terminal (와이어 v17): 이 데몬의 터미널 방식 — 프론트가 사이드바 아이콘·경고를 정한다
                         let _ = tx.send(
-                            json!({"id": req["id"], "result": {"rootPath": path, "resumed": resumed, "terminal": tmux::mode_json()}})
+                            json!({"id": req["id"], "result": {"rootPath": path, "resumed": resumed, "terminal": tmux::mode_json(), "terms": live_terms}})
                                 .to_string(),
                         );
                     }

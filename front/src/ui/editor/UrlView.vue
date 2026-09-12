@@ -13,7 +13,7 @@
 // (VS Code Simple Browser 와 같은 제약, 실제 추적은 browser-tab-full 의 자식 웹뷰). 새로고침·외부 열기도
 // 입력한 URL 기준. 뒤로/앞으로는 부모 history 를 움직이되 urlNav 장부로 앱 페이지를 떠나지 않게 한다.
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { editors, navigateUrlTab } from '../../model/editors';
+import { editors, navigateUrlTab, pushUrlDiag } from '../../model/editors';
 import { openExternal } from '../../model/window';
 import { canGoBack, canGoForward, goBack, goForward, onFrameGone, onFrameLoad } from './urlNav';
 
@@ -29,6 +29,22 @@ const frameKey = ref(0);
 const error = ref('');
 /** 마지막으로 load 를 받은 프레임 요소 — 요소가 바뀌었으면 그 프레임의 첫 로드 (urlNav 가 세지 않는다) */
 let loadedEl: HTMLIFrameElement | null = null;
+
+// 진단 (ticket url-tab-slow-first-load, 임시) — 창 안에서 몇 번째 프레임 항해인지(첫 프레임 비용 분리)와 항해 시각.
+// 같은 URL 을 프레임 밖에서 no-cors fetch 해 네트워크 왕복만 따로 잰다 (응답은 안 읽는다)
+let navSeq = 0;
+let navAt = 0;
+let navNo = 0;
+function diagNav(u: string): void {
+  navNo = ++navSeq;
+  navAt = performance.now();
+  pushUrlDiag(props.tabId, `nav#${navNo} ${u}`);
+  const t = performance.now();
+  fetch(u, { mode: 'no-cors', cache: 'no-store', credentials: 'omit' }).then(
+    () => pushUrlDiag(props.tabId, `fetch#${navNo} ok ${Math.round(performance.now() - t)}ms`),
+    (e: unknown) => pushUrlDiag(props.tabId, `fetch#${navNo} fail ${Math.round(performance.now() - t)}ms ${String(e)}`),
+  );
+}
 
 /** 입력 → URL. 스킴이 없으면 http://. http(s) 외·앱 origin 은 거부 (사유는 error 에) */
 function normalize(raw: string): string | null {
@@ -71,10 +87,12 @@ function reload(): void {
   if (src.value === '') return;
   onFrameGone(props.tabId);
   frameKey.value++;
+  diagNav(src.value);
 }
 function onLoad(): void {
   const el = frame.value;
   const first = el !== loadedEl;
+  pushUrlDiag(props.tabId, `load#${navNo} ${Math.round(performance.now() - navAt)}ms since nav (first=${first})`);
   loadedEl = el;
   const w = el?.contentWindow;
   // cross-origin 이면 location 접근이 던진다 — 성공하면 앱 origin 문서가 프레임에 들어온 것 (about:blank 제외)
@@ -97,6 +115,7 @@ watch(() => props.url, (u) => {
   input.value = u;
   error.value = '';
   src.value = u;
+  if (u !== '') diagNav(u);
 });
 
 // 포커스 요청 소비 — 빈 탭은 주소칸으로. 페이지가 있으면 프레임에 주지 않는다 (프레임이 포커스를 가지면
@@ -119,6 +138,8 @@ function onWindowBlur(): void {
 }
 onMounted(() => {
   window.addEventListener('blur', onWindowBlur);
+  pushUrlDiag(props.tabId, 'mount');
+  if (src.value !== '') diagNav(src.value);
   if (editors.pendingFocus && isActiveTab()) consumeFocus();
 });
 onBeforeUnmount(() => {

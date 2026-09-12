@@ -71,6 +71,13 @@ fn pts_name(fd: std::os::unix::io::RawFd) -> Option<String> {
 
 pub(crate) type Terms = Arc<Mutex<HashMap<u64, Term>>>;
 
+/// 세션에 살아 있는 터미널 id 목록 (와이어 v22 attach 응답 terms) — 오름차순
+pub(crate) fn ids(terms: &Terms) -> Vec<u64> {
+    let mut v: Vec<u64> = terms.lock().unwrap().keys().copied().collect();
+    v.sort_unstable();
+    v
+}
+
 /// 터미널 id 로 붙어 있는 tmux 세션 id (와이어 v21 termCwd) — plain 이거나 없는 터미널이면 None
 pub(crate) fn tmux_id_of(terms: &Terms, id: u64) -> Option<String> {
     terms.lock().unwrap().get(&id).and_then(|t| t.tmux_id.clone())
@@ -314,8 +321,14 @@ pub(crate) fn handle_term(
     let id = p["term"].as_u64().unwrap_or(0);
     match method {
         "createTerminal" => {
-            // 같은 id 재생성은 무시 — 수락하면 기존 PTY 가 회수 없이 샌다
+            // 같은 id 재생성은 거부 — 수락하면 기존 PTY 가 회수 없이 샌다. 종전엔 조용히 무시해
+            // 프론트의 새 핸들이 옛 PTY(다른 tmux 세션)에 그대로 묶였다 (ticket
+            // multi-client-terminal-crosstalk) — 그 터미널 화면에 사유를 내고 비정상 종료로 드러낸다
             if terms.lock().unwrap().contains_key(&id) {
+                let msg = json!({"event": "termData", "term": id,
+                    "data": "[superlite: 터미널 id 충돌 — 이 세션에 같은 번호의 터미널이 이미 있다]\r\n"});
+                sink_send(sink, msg.to_string(), true);
+                sink_send(sink, json!({"event": "termExit", "term": id}).to_string(), false);
                 return;
             }
             let cols = p["cols"].as_u64().unwrap_or(80) as u16;

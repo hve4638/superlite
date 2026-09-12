@@ -17,13 +17,18 @@ export interface Settings {
    *  none 없음 / one 마지막 포커스 창(세션 탭 전부) / all 모든 창. 정상 종료(창 X) 뒤에는 늘 빈 세션. 앱 전용 —
    *  native 가 시작 때 settings.json 에서 이 키를 직접 읽는다 (app/src/main restore_mode) */
   restoreWindows: RestoreWindows;
+  /** HTML 파일을 열 때 기본 탭 종류 (ticket html-open-as-preview) — preview 미리보기 탭 / source 편집기 탭.
+   *  Ctrl+Shift+V 제자리 전환은 어느 쪽이든 그대로 */
+  htmlOpen: HtmlOpen;
 }
 export type RestoreWindows = 'none' | 'one' | 'all';
+export type HtmlOpen = 'preview' | 'source';
 
 export const DEFAULTS: Settings = {
   urlOpen: { internal: ['localhost', '[IP]'], external: [] },
   wordWrap: { markdown: true },
   restoreWindows: 'one',
+  htmlOpen: 'preview',
 };
 
 function cloneDefaults(): Settings {
@@ -57,6 +62,8 @@ export function applySettingsText(text: string): void {
     : d.wordWrap;
   const r = raw.restoreWindows;
   settings.restoreWindows = r === 'none' || r === 'one' || r === 'all' ? r : d.restoreWindows;
+  const h = raw.htmlOpen;
+  settings.htmlOpen = h === 'preview' || h === 'source' ? h : d.htmlOpen;
 }
 
 /** 기본값과 다른 항목만 담은 JSON 원문 — 저장 형태 */

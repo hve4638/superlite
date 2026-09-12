@@ -68,6 +68,7 @@ onBeforeUnmount(() => {
           :class="{ disabled: item.enabled === false }"
           @click="runItem(item)"
         >
+          <span v-if="item.checked !== undefined" class="codicon ctx-check" :class="{ 'codicon-check': item.checked }" />
           <span class="ctx-label">{{ item.label }}</span>
           <span v-if="item.keybinding" class="ctx-kb">{{ item.keybinding }}</span>
         </div>
@@ -106,6 +107,11 @@ onBeforeUnmount(() => {
 .ctx-item:not(.disabled):hover {
   background: var(--vscode-menu-selectionBackground);
   color: var(--vscode-menu-selectionForeground);
+}
+.ctx-check {
+  width: 16px;
+  margin-left: 4px;
+  font-size: 14px;
 }
 .ctx-item.disabled {
   opacity: 0.4;

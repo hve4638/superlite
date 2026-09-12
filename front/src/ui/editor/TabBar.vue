@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
-import type { EditorGroup, Tab } from '../../model/editors';
-import { closeEmptyGroup, closeTab, editors, isHtml, moveTabToGroup, openFile, openFolderTab, pinTab, reloadPreview, toggleGroupLock, toggleHtmlPreview, setActiveTab } from '../../model/editors';
+import type { EditorGroup, OpenPriority, Tab } from '../../model/editors';
+import { closeEmptyGroup, closeTab, editors, isHtml, moveTabToGroup, openFile, openFolderTab, pinTab, reloadPreview, setGroupOpenPriority, toggleGroupLock, toggleHtmlPreview, setActiveTab } from '../../model/editors';
+import { openContextMenu, type ContextMenuItem } from '../../model/workbench';
 import { createTerminal, requestKillTerminal, terminals } from '../../model/terminal';
 import { DND_EDITOR, detachEditorTab, multiWindow, requestTabsMove, sessionRoot, sessions } from '../../model/sessions';
 import { windowLabel } from '../../model/window';
@@ -13,6 +14,31 @@ import ProgressBar from '../widgets/ProgressBar.vue';
 import StripScroll from '../widgets/StripScroll.vue';
 
 const props = defineProps<{ group: EditorGroup }>();
+
+// 열기 우선순위 (ticket editor-group-open-priority) — 아이콘 클릭은 보통 → high → low → 보통 순환, 빈 영역 우클릭 메뉴는 직접 선택
+const PRIORITY_ICON: Record<'high' | 'low' | 'normal', string> = { high: 'codicon-arrow-up', low: 'codicon-arrow-down', normal: 'codicon-remove' };
+const PRIORITY_TITLE: Record<'high' | 'low' | 'normal', string> = {
+  high: 'Open Priority: High (files open here first)', low: 'Open Priority: Low (files open here last)', normal: 'Open Priority: Normal',
+};
+const priority = computed(() => props.group.openPriority ?? 'normal');
+function cyclePriority(): void {
+  const next: Record<'high' | 'low' | 'normal', OpenPriority | undefined> = { normal: 'high', high: 'low', low: undefined };
+  setGroupOpenPriority(props.group.id, next[priority.value]);
+}
+function onBarContextMenu(e: MouseEvent): void {
+  // 탭·액션 아이콘 위는 제외 — 빈 영역(스트립 바깥·탭 사이 여백) 우클릭만 그룹 메뉴
+  if ((e.target as HTMLElement).closest('.tab, .group-action')) return;
+  e.preventDefault();
+  const item = (label: string, p: OpenPriority | undefined): ContextMenuItem =>
+    ({ label, checked: (props.group.openPriority ?? undefined) === p, run: () => setGroupOpenPriority(props.group.id, p) });
+  openContextMenu(e.clientX, e.clientY, [
+    item('Open Priority: High', 'high'),
+    item('Open Priority: Normal', undefined),
+    item('Open Priority: Low', 'low'),
+    { separator: true },
+    { label: 'Lock Group', checked: !!props.group.locked, enabled: props.group.tabs.length > 0, run: () => toggleGroupLock(props.group.id) },
+  ]);
+}
 
 // 활성 탭이 HTML 편집기면 그룹 액션에 프리뷰 전환 아이콘, 프리뷰면 소스 복귀·수동 갱신 아이콘
 const activeOf = () => props.group.tabs.find((t) => t.id === props.group.activeTabId);
@@ -192,7 +218,7 @@ function onForeignDrop(e: DragEvent) {
 </script>
 
 <template>
-  <div class="tabbar" @mouseenter="hovering = true" @mouseleave="hovering = false">
+  <div class="tabbar" @mouseenter="hovering = true" @mouseleave="hovering = false" @contextmenu="onBarContextMenu">
     <!-- 탭 목록만 스크롤 영역 — 그룹 액션은 밖에 고정. 빈 영역 드롭(끝에 삽입)은 스트립 루트가 받는다 -->
     <StripScroll ref="strip" class="tabs" @dragover="onTabsDragOver" @dragleave="onTabsDragLeave($event)" @drop="onTabsDrop">
       <div
@@ -251,6 +277,15 @@ function onForeignDrop(e: DragEvent) {
           <span class="codicon codicon-code" />
         </span>
       </template>
+      <!-- 열기 우선순위 (editor-group-open-priority): high/low 는 화살표가 항상, 보통은 hover 시에만. 클릭은 순환, 설정은 빈 영역 우클릭 메뉴로도 -->
+      <span
+        class="group-action priority"
+        :class="{ set: priority !== 'normal' }"
+        :title="PRIORITY_TITLE[priority] + ' — click to cycle'"
+        @click="cyclePriority"
+      >
+        <span class="codicon" :class="PRIORITY_ICON[priority]" />
+      </span>
       <!-- 그룹 잠금 (editor-group-empty-lock): 잠기면 채워진 자물쇠가 항상, 아니면 hover 시에만 열린 자물쇠. 빈 그룹은 잠글 수 없다 -->
       <span
         v-if="group.tabs.length"
@@ -432,11 +467,13 @@ function onForeignDrop(e: DragEvent) {
 .group-action:hover {
   background: var(--vscode-toolbar-hoverBackground);
 }
-/* 잠금 아이콘: 안 잠긴 그룹은 탭바 hover 중에만 보인다 */
-.lock:not(.locked) {
+/* 잠금·우선순위 아이콘: 안 잠긴·보통 그룹은 탭바 hover 중에만 보인다 */
+.lock:not(.locked),
+.priority:not(.set) {
   visibility: hidden;
 }
-.tabbar:hover .lock {
+.tabbar:hover .lock,
+.tabbar:hover .priority {
   visibility: visible;
 }
 </style>

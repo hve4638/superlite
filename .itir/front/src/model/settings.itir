@@ -2,10 +2,11 @@ import { backendApiUrl } from './host'
 import { errText, notify } from './notifications'
 import { urlTarget, UrlTarget } from './urlRules'
 
-role: 사용자 설정 (ticket user-settings) — 클라이언트 머신의 `config_dir()/settings.json` 하나를 relay HTTP /settings 로 읽고 쓴다 (configfiles 의 tmux·ssh 와 같은 경로, 데몬 와이어 밖). 앱·웹이 같은 relay 를 타므로 같은 파일을 본다. 스키마(Settings)와 항목별 기본값(DEFAULTS)은 코드에 두고 JSON 에는 기본값과 다른 항목만 적는다 (VS Code settings.json 방식). 세션 무관 모듈 싱글턴(settings reactive) — main 이 부팅 때 loadSettings 한 번, 도착 전까지는 기본값. 1차 항목: urlOpen(내부·외부 host 목록 — 기본 내부 localhost·[IP], 외부 빈 목록)·wordWrap(언어 id → 줄바꿈 기본값, 기본 markdown 만 켬)·restoreWindows(비정상 종료 뒤 창 복원 범위 none·one·all, 기본 one — VS Code window.restoreWindows; 앱 전용으로 native 가 시작 때 settings.json 에서 이 키를 직접 읽는다, app/src/main restore_mode — 사용자 요청 2026-09-12). 편집기 원문 탭(superlite:/settings.json, configfiles)이 저장하면 applySettingsText 로 같은 원장을, 폼(SettingsView)이 saveSettings 하면 setSettingsSaved 훅으로 열린 원문 탭을 맞춘다. 흩어진 옛 값(줌·뷰어 자동 갱신·nvim)의 이관은 후속 ticket
+role: 사용자 설정 (ticket user-settings) — 클라이언트 머신의 `config_dir()/settings.json` 하나를 relay HTTP /settings 로 읽고 쓴다 (configfiles 의 tmux·ssh 와 같은 경로, 데몬 와이어 밖). 앱·웹이 같은 relay 를 타므로 같은 파일을 본다. 스키마(Settings)와 항목별 기본값(DEFAULTS)은 코드에 두고 JSON 에는 기본값과 다른 항목만 적는다 (VS Code settings.json 방식). 세션 무관 모듈 싱글턴(settings reactive) — main 이 부팅 때 loadSettings 한 번, 도착 전까지는 기본값. 1차 항목: urlOpen(내부·외부 host 목록 — 기본 내부 localhost·[IP], 외부 빈 목록)·wordWrap(언어 id → 줄바꿈 기본값, 기본 markdown 만 켬)·restoreWindows(비정상 종료 뒤 창 복원 범위 none·one·all, 기본 one — VS Code window.restoreWindows; 앱 전용으로 native 가 시작 때 settings.json 에서 이 키를 직접 읽는다, app/src/main restore_mode — 사용자 요청 2026-09-12)·htmlOpen(HTML 파일을 열 때 기본 탭 종류 preview·source, 기본 preview — editors.openFile 이 읽는다, ticket html-open-as-preview). 편집기 원문 탭(superlite:/settings.json, configfiles)이 저장하면 applySettingsText 로 같은 원장을, 폼(SettingsView)이 saveSettings 하면 setSettingsSaved 훅으로 열린 원문 탭을 맞춘다. 흩어진 옛 값(줌·뷰어 자동 갱신·nvim)의 이관은 후속 ticket
 
 export type Settings
 export type RestoreWindows
+export type HtmlOpen
 export val DEFAULTS
 export val settings
 export fn applySettingsText(text) {
