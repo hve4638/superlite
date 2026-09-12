@@ -103,8 +103,14 @@ cargo build --release --target x86_64-pc-windows-gnu -p superlite-daemon -p supe
 cargo build --release --target x86_64-unknown-linux-musl -p superlite-daemon -p superlite-cli
 # 셸 심 (ticket cli-control-discussion): 로컬 Windows 는 daemon/cli/{superlite,sl}.exe (심볼릭 링크 대신
 # 복사 — Windows 링크는 권한이 필요하다), 원격용 musl 은 daemon/cli-linux-x86_64 (relay 가 cli/superlite
-# + sl 링크로 올린다). 데몬이 자기 옆 cli/ 를 PTY PATH 앞에 넣는다
-cp target/x86_64-pc-windows-gnu/release/superlite.exe target/x86_64-pc-windows-gnu/release/sl.exe
+# + sl 링크로 올린다). 데몬이 자기 옆 cli/ 를 PTY PATH 앞에 넣는다.
+# crate 의 bin 이름은 superlite-cli — 앱 stable bin `superlite` 와 같은 target/…/release/ 에 나오므로
+# 이름이 같으면 서로 덮어쓴다 (ticket cli-bin-name-collision, 0.4.0 번들에 앱 본체 35MB 가 심 자리에
+# 들어감). 설치본 이름은 여기서 target/cli/ 로 복사하며 붙이고, 번들 리소스는 그 사본을 가리킨다
+mkdir -p target/cli
+cp target/x86_64-pc-windows-gnu/release/superlite-cli.exe target/cli/superlite.exe
+cp target/x86_64-pc-windows-gnu/release/superlite-cli.exe target/cli/sl.exe
+cp target/x86_64-unknown-linux-musl/release/superlite-cli target/cli/cli-linux-x86_64
 # 앱은 tauri-cli 로 — 같은 --release --target 이라 target/ 산출물은 위와 같은 자리에 나오고,
 # 이어서 NSIS 설치 파일을 묶는다. 번들 설정은 tauri.bundle.conf.json 에만 두고 --config 로
 # 얹는다: 데몬 바이너리를 리소스로 동봉하는데(설치본에서도 앱 옆 daemon/<os>-<arch> 규칙 유지)

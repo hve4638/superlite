@@ -3,8 +3,10 @@ name = "superlite-cli"
 version.workspace = true
 edition = "2021"
 
+# bin 이름은 앱 crate 의 stable bin `superlite` 와 겹치면 안 된다 — 같은 target/…/release/ 에서
+# 서로 덮어쓴다 (ticket cli-bin-name-collision). 설치본 안 이름(cli/superlite·sl)은 build.sh 가 복사·개명
 [[bin]]
-name = "superlite"
+name = "superlite-cli"
 path = "src/main.rs"
 
 [dependencies]
