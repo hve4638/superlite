@@ -611,6 +611,8 @@ fn build_window(
     win_icon::apply(&window);
     #[cfg(windows)]
     disable_browser_accelerator_keys(&window);
+    #[cfg(windows)]
+    win_ime::detach_host_windows(&window);
     Ok(window)
 }
 
@@ -721,6 +723,20 @@ fn set_ime(window: tauri::WebviewWindow, enabled: bool) {
     let _ = (window, enabled);
 }
 
+/// IME 진단 (ticket term-ime-toggle-stuck, 임시) — 터미널에서 한/영 키를 누른 순간의 native 상태 한 줄 (전경 창·
+/// 키보드 포커스 HWND·기본 IME 창들의 열림 상태). front terminalHost 가 한/영 keydown 때 부른다. 원인 확정 뒤 지운다.
+/// Windows 만 — 다른 OS 는 "n/a"
+#[tauri::command]
+fn ime_probe(window: tauri::WebviewWindow) -> String {
+    #[cfg(windows)]
+    return win_ime::probe(&window);
+    #[cfg(not(windows))]
+    {
+        let _ = window;
+        "n/a".to_string()
+    }
+}
+
 /// Windows 전용 IME 열림 상태 제어 — IMM32 의 WM_IME_CONTROL(IMC_GET/SETOPENSTATUS) 을 기본 IME 창에 보낸다.
 /// 한국어 IME 는 한/영 토글이 열림 상태다(열림 = 한글, 닫힘 = 영문). 대상은 이 창의 HWND 와 자손 창 전부의
 /// 기본 IME 창(중복 제거) — WebView2 의 입력 창(Chrome_WidgetWin_*)은 다른 프로세스 스레드라 우리 스레드의
@@ -734,7 +750,10 @@ mod win_ime {
     use windows::core::BOOL;
     use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
     use windows::Win32::UI::Input::Ime::ImmGetDefaultIMEWnd;
-    use windows::Win32::UI::WindowsAndMessaging::{EnumChildWindows, SendMessageTimeoutW, SMTO_ABORTIFHUNG, WM_IME_CONTROL};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumChildWindows, GetClassNameW, GetForegroundWindow, GetGUIThreadInfo, IsChild, SendMessageTimeoutW, GUITHREADINFO,
+        SMTO_ABORTIFHUNG, WM_IME_CONTROL,
+    };
 
     const IMC_GETOPENSTATUS: usize = 0x0005;
     const IMC_SETOPENSTATUS: usize = 0x0006;
@@ -763,7 +782,28 @@ mod win_ime {
         }
     }
 
-    fn ime_windows(root: HWND) -> Vec<HWND> {
+    /// 앱 프로세스 소속 창(tao 최상위 창·wry 의 WebView2 컨테이너 창)에서 IME 를 뗀다 (ticket term-ime-window-topright).
+    /// 이 창들은 IME 메시지를 DefWindowProc 로 넘겨 키보드 포커스가 잠시 여기 머문 채 한글이 들어오면 Windows 가
+    /// 구식 기본 조합 창을 클라이언트 (0,0) — 자체 제목 표시줄 위 — 에 그린다 (2026-09-13 캡처). 실제 입력 대상인
+    /// WebView2 의 입력 창은 다른 프로세스라 ImmAssociateContext 가 닿지 않고 스스로 기본 창을 억제하므로 영향이 없다.
+    /// winit 이 창 생성 때 기본으로 하는 것과 같다 (tao 는 하지 않는다). 창 생성 직후 한 번 — 컨테이너 창은 build 에서
+    /// 동기로 만들어져 그 시점에 있다
+    pub fn detach_host_windows(window: &tauri::WebviewWindow) {
+        use windows::Win32::UI::Input::Ime::ImmAssociateContext;
+        use windows::Win32::UI::Input::Ime::HIMC;
+        use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+        let Ok(hwnd) = window.hwnd() else { return };
+        let me = std::process::id();
+        for h in all_windows(hwnd) {
+            let mut pid = 0u32;
+            unsafe { GetWindowThreadProcessId(h, Some(&mut pid)) };
+            if pid == me {
+                unsafe { ImmAssociateContext(h, HIMC::default()) };
+            }
+        }
+    }
+
+    fn all_windows(root: HWND) -> Vec<HWND> {
         let mut hwnds = vec![root];
         unsafe extern "system" fn collect(h: HWND, lp: LPARAM) -> BOOL {
             unsafe { (*(lp.0 as *mut Vec<HWND>)).push(h) };
@@ -772,6 +812,11 @@ mod win_ime {
         unsafe {
             let _ = EnumChildWindows(Some(root), Some(collect), LPARAM(&mut hwnds as *mut Vec<HWND> as isize));
         }
+        hwnds
+    }
+
+    fn ime_windows(root: HWND) -> Vec<HWND> {
+        let hwnds = all_windows(root);
         let mut out: Vec<HWND> = Vec::new();
         for h in hwnds {
             let ime = unsafe { ImmGetDefaultIMEWnd(h) };
@@ -802,6 +847,39 @@ mod win_ime {
         for &h in targets {
             ime_control(h, IMC_SETOPENSTATUS, open as isize);
         }
+    }
+
+    /// 진단 (ticket term-ime-toggle-stuck, 임시): 전경 창이 이 창인지, 전경 스레드의 키보드 포커스 HWND 의 클래스명과
+    /// 이 창의 자손인지(GetGUIThreadInfo(0) 은 프로세스 경계를 넘어 전경 스레드의 포커스를 준다), 이 창·자손의 기본
+    /// IME 창별 열림 상태. 한/영 키가 IME 에 닿지 않는 순간 포커스가 어디 있고 열림 상태가 바뀌는지를 가른다
+    pub fn probe(window: &tauri::WebviewWindow) -> String {
+        let Ok(hwnd) = window.hwnd() else { return "no hwnd".to_string() };
+        let mut gti: GUITHREADINFO = unsafe { std::mem::zeroed() };
+        gti.cbSize = std::mem::size_of::<GUITHREADINFO>() as u32;
+        let (focus, fg) = unsafe {
+            let _ = GetGUIThreadInfo(0, &mut gti);
+            (gti.hwndFocus, GetForegroundWindow())
+        };
+        let class = |h: HWND| -> String {
+            if h.0.is_null() {
+                return "null".to_string();
+            }
+            let mut buf = [0u16; 64];
+            let n = unsafe { GetClassNameW(h, &mut buf) }.max(0) as usize;
+            String::from_utf16_lossy(&buf[..n])
+        };
+        let inside = !focus.0.is_null() && (focus == hwnd || unsafe { IsChild(hwnd, focus) }.as_bool());
+        let opens: Vec<String> = ime_windows(hwnd)
+            .iter()
+            .map(|&h| ime_control(h, IMC_GETOPENSTATUS, 0).map_or("?".to_string(), |r| (r != 0).to_string()))
+            .collect();
+        format!(
+            "fg={} focus={}{} ime=[{}]",
+            fg == hwnd,
+            class(focus),
+            if inside { "(inside)" } else { "(OUTSIDE)" },
+            opens.join(",")
+        )
     }
 }
 
@@ -1468,13 +1546,17 @@ fn list_subs(state: tauri::State<AppState>, window: tauri::WebviewWindow) -> Vec
 /// 창 간 메시지 중계 — 대상 창의 드롭이 출처 창에 이동을 요청하거나(…-move-request), 출처
 /// 창이 살아 있는 대상 창에 에디터·터미널 탭 핸드오프를 보낼 때(tabs-handoff), 메인 창이 서브
 /// 창에 세션의 탭 회수를 요청하고(session-recall) 서브가 응답할 때(session-recalled) 쓴다.
+/// 열기 우선순위(ticket editor-group-open-priority)는 high 그룹 보유를 묶음의 창들에 알리고(open-priority,
+/// 늦게 뜬 창의 open-priority-query) high 그룹이 있는 창으로 파일 열기를 넘긴다(open-file-request).
 /// native 는 payload 내용을 모른다
 #[tauri::command]
 fn forward(app: tauri::AppHandle, to_window: String, event: String, payload: serde_json::Value) -> Result<(), String> {
     // 창 간 중계 전용 이벤트만 — 웹뷰가 native 전용 이벤트(sessions-changed 등)를 위조해 다른
     // 창에 보내는 통로가 되지 않게
-    const ALLOWED: [&str; 5] =
-        ["session-move-request", "tabs-move-request", "tabs-handoff", "session-recall", "session-recalled"];
+    const ALLOWED: [&str; 8] = [
+        "session-move-request", "tabs-move-request", "tabs-handoff", "session-recall", "session-recalled",
+        "open-priority", "open-priority-query", "open-file-request",
+    ];
     if !ALLOWED.contains(&event.as_str()) {
         return Err("허용되지 않은 이벤트".into());
     }
@@ -2191,6 +2273,7 @@ fn main() {
             open_groups,
             set_zoom,
             set_ime,
+            ime_probe,
             get_workspace_state,
             set_workspace_state,
             set_workspace_sub_state,
@@ -2259,6 +2342,14 @@ fn main() {
                     None
                 }
             };
+            // 기동 때 한 번 state.json.bak 으로 사본 — 워크스페이스 복원 문제를 조사할 때 "지난 실행이 남긴
+            // 저장본" 이 이번 실행의 첫 저장에 덮이지 않게 (ticket term-restore-observe: 재실행 뒤 받은
+            // state.json 은 이미 갱신된 뒤라 증거가 되지 못했다). 실패는 무시 — 진단용
+            if let Some(p) = &state_file {
+                if p.exists() {
+                    let _ = std::fs::copy(p, p.with_extension("json.bak"));
+                }
+            }
             let persisted = load_state(state_file.as_deref());
             // 비정상 종료 복원 — 지난 실행의 열린 창 목록이 남아 있으면 설정대로. argv 폴더가 있으면 그것만 연다
             let restore = if cli_root.is_some() { Vec::new() } else { restorable(&persisted.open, &restore_mode()) };

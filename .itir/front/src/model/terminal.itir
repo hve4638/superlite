@@ -27,7 +27,7 @@ export fn applyFontZoom(z) {
 }
 
 export fn createTerminals(backend, editorsM) {
-  role: 세션별 터미널 모듈 생성 — 목록·배압 상태·이벤트 구독이 세션에 묶이고, 탭 열기·닫기는 같은 세션의 editors 인스턴스로 간다. 터미널 id 카운터만 페이지 전역 — TerminalPane 의 xterm 바인딩 맵(id 키, 세션 전환에도 생존)이 세션 간 충돌하지 않게. 창 이동(앱): snapshot(데몬 term id·제목·xterm 버퍼·tmux {id,name} — 직렬화는 setTerminalSerializer 로 UI 가 등록. tmux 는 termTmux 가 spawn 때 한 번만 오고 adopt 는 다시 보내지 않아 스냅샷이 실어야 받는 창의 인스턴스가 잃지 않는다 — 잃으면 workspaceState 저장이 그 탭을 기록 없이 걷어내 재실행 때 빈 자리만 남는다, ticket term-restore-missing-again), releaseTerminal(목록에서만 빼고 데몬 터미널은 살림 — 받는 창이 이어받는다), adoptTerminals(from 없으면 같은 세션의 기존 터미널 로컬 핸들 재구성, 있으면 백엔드 adoptTerminal 로 다른 세션 것을 옮겨 받음 — at 으로 탭을 열 그룹·index 지정, 스냅샷의 자리(host 탭 id 또는 hostTerm 데몬 term id — snapshot 이 editors 에서 찾아 싣고, 터미널 탭의 터미널 아닌 카드는 cards 로)가 있으면 두 번 돌아 탭을 먼저 열고 카드를 그 탭에 붙인다 — 탭이 없으면 at 대로 탭으로). 지정). 팩토리 전용 listTerminalsFor(): 워크스페이스 복원(workspaceState.applyWorkspaceState)용 목록 조회 — 조회가 실패(예외)하면 500ms 뒤 한 번만 재시도한다 (ssh 재접속 등 일시적 실패 대비). 성공한 결과는 비어 있어도 그대로 반환한다 — 재부팅처럼 세션이 진짜 없어진 경우를 지연 없이 즉시 접기 위함. 재시도도 실패하면 throw 해 복원이 실패를 빈 목록으로 오인하지 않게 하고, 받은 목록은 state.list 에도 반영한다 (ticket term-layout-restore-flaky)
+  role: 세션별 터미널 모듈 생성 — 목록·배압 상태·이벤트 구독이 세션에 묶이고, 탭 열기·닫기는 같은 세션의 editors 인스턴스로 간다. 터미널 id 카운터만 페이지 전역 — TerminalPane 의 xterm 바인딩 맵(id 키, 세션 전환에도 생존)이 세션 간 충돌하지 않게. 창 이동(앱): snapshot(데몬 term id·제목·xterm 버퍼·tmux {id,name} — 직렬화는 setTerminalSerializer 로 UI 가 등록. tmux 는 termTmux 가 spawn 때 한 번만 오고 adopt 는 다시 보내지 않아 스냅샷이 실어야 받는 창의 인스턴스가 잃지 않는다 — 잃으면 workspaceState 저장이 그 탭을 기록 없이 걷어내 재실행 때 빈 자리만 남는다, ticket term-restore-missing-again), releaseTerminal(목록에서만 빼고 데몬 터미널은 살림 — 받는 창이 이어받는다), adoptTerminals(from 없으면 같은 세션의 기존 터미널 로컬 핸들 재구성, 있으면 백엔드 adoptTerminal 로 다른 세션 것을 옮겨 받음 — at 으로 탭을 열 그룹·index 지정, 스냅샷의 자리(host 탭 id 또는 hostTerm 데몬 term id — snapshot 이 editors 에서 찾아 싣고, 터미널 탭의 터미널 아닌 카드는 cards 로)가 있으면 두 번 돌아 탭을 먼저 열고 카드를 그 탭에 붙인다 — 탭이 없으면 at 대로 탭으로). 지정). 팩토리 전용 listTerminalsFor(): 워크스페이스 복원(workspaceState.applyWorkspaceState)용 목록 조회 — 조회가 실패(예외)하면 500ms·1s·2s·4s 백오프로 재시도한다 (약 8초 — ssh 순간 끊김의 재접속 1초+ 보다 먼저 포기하지 않게, ticket term-restore-observe. 종전 500ms 1회). 성공한 결과는 비어 있어도 그대로 반환한다 — 재부팅처럼 세션이 진짜 없어진 경우를 지연 없이 즉시 접기 위함. 끝내 실패하면 throw 해 복원이 실패를 빈 목록으로 오인하지 않게 하고, 받은 목록은 state.list 에도 반영한다 (ticket term-layout-restore-flaky)
 }
 export fn setTerminalSerializer(fn) {
   role: xterm 버퍼 직렬화 seam 등록 (TerminalPane) — model 은 xterm 을 모른다. 세션 공용 슬롯 (능력이지 세션 상태가 아니다)
@@ -50,14 +50,13 @@ export fn requestKillTerminal(id) {
 export fn killListedTerminal(tmuxId) {
   role: tmux 세션 종료 + 이 창의 해당 탭 닫기 + 목록 갱신
 }
+export val imeDiag
+export fn pushImeDiag(line) {
+  role: 임시 IME 진단 (ticket term-ime-toggle-stuck) — terminalHost 가 한/영 keydown 때 활성 요소·textarea/조합 상자 위치·버퍼 상태·포커스 이후 경과와 native ime_probe 결과를 한 줄씩 넣는다 (상한 60, console 에도 남김). 팔레트 'Developer: Copy IME Diagnostics' 가 클립보드로 복사한다. 원인이 확정되면 지운다
+}
 export fn renameListedTerminal(tmuxId, name) {
   role: 세션 이름 변경 + 열린 탭 제목 갱신
 }
 export fn disposeTerminal(id) {
   role: 세션 정리 + 목록 제거 + 탭 닫기 (탭 ×·셸 종료·세션 회수 공통 경로 — 탭 × 는 훅 경유라 탭이 이미 없어 closeTerminalTabs 가 no-op)
-}
-
-export val imeDiag
-export fn pushImeDiag(line) {
-  role: 임시 IME 진단 (ticket term-ime-window-topright) — terminalHost 가 조합 시작·갱신·종료 시점의 활성 요소·textarea/조합 상자 위치·버퍼 상태·포커스 이후 경과를 한 줄씩 넣는다 (상한 60, console 에도 남김). 팔레트 'Developer: Copy IME Diagnostics' 가 클립보드로 복사한다. 원인이 확정되면 지운다
 }

@@ -10,7 +10,7 @@ import { pushImeDiag, setTerminalSerializer, setTerminalZoom, stepTerminalZoom, 
 import type { TerminalInstance } from '../../model/terminal';
 import { allTerminals } from '../../model/sessions';
 import { isShellSkippingChord } from '../../model/commands';
-import { openUrl } from '../../model/window';
+import { imeProbe, openUrl } from '../../model/window';
 import { registerPathLinks } from './terminalPathLinks';
 import { TERMINAL_FONT_FAMILY, TERMINAL_FONT_SIZE, TERMINAL_LINE_HEIGHT } from '../../theme/fonts';
 
@@ -33,6 +33,21 @@ const NAN_MOUSE_REPORT = /^\x1b\[<?[\d;]*NaN[\d;NaN]*[mM]$/;
 
 const bindings = new Map<number, Binding>();
 
+// 창 포커스 복귀 때 IME 재연결 (ticket term-ime-toggle-stuck). WHY: Alt+Tab 복귀·앱 시작 직후 간헐적으로 터미널에서
+//      한/영 키가 먹지 않는다 (2026-09-13 사용자 보고, vim 모드 아님·물리 키·로컬). 영문은 쳐지므로 포커스는 WebView2
+//      안인데 작업 표시줄 IME 표시도 안 바뀐다 — 키가 IME 에 닿지 않는 상태로, Chromium 이 포커스된 textarea 를
+//      입력 불가로 보고 IME 컨텍스트를 끊어 둔 형태(crbug 341846848 계열 — 포커스를 다시 옮기면 회복, Windows Terminal
+//      #18691 도 같은 증상군)로 본다. 활성 요소가 xterm textarea 면 blur→focus 로 입력 상태 전이(NONE→TEXTAREA)를
+//      강제해 IME 를 다시 붙인다 (Electron #25078 의 blur/focus 워크어라운드와 같다). 확정 진단은 아래 한/영 keydown 의
+//      ime_probe — 재발하면 그 기록으로 가른다
+window.addEventListener('focus', () => {
+  const ae = document.activeElement;
+  if (ae instanceof HTMLTextAreaElement && ae.classList.contains('xterm-helper-textarea')) {
+    ae.blur();
+    ae.focus();
+  }
+});
+
 // 지금 호버 중인 링크 (페이지에 하나) — Ctrl 을 누르고 떼는 동안 밑줄을 따라 켜고 끈다 (open 참조).
 // 밑줄은 Ctrl 을 누른 동안만, 커서 모양은 바꾸지 않는다 (사용자 결정 2026-09-12, terminal-path-links — URL 링크도 같다)
 let hoveredLink: ILink | null = null;
@@ -41,16 +56,6 @@ const onCtrlChange = (e: KeyboardEvent): void => {
 };
 window.addEventListener('keydown', onCtrlChange, true);
 window.addEventListener('keyup', onCtrlChange, true);
-// 임시 진단 (ticket term-ime-window-topright) — xterm textarea 밖에서 시작된 조합(포커스가 다른 곳에 있을 때)도 남긴다
-document.addEventListener(
-  'compositionstart',
-  (e) => {
-    const t = e.target as Element | null;
-    if (t?.classList.contains('xterm-helper-textarea')) return;
-    pushImeDiag(`${new Date().toISOString().slice(11, 23)} outside target=${t ? `${t.tagName}.${t.className}` : 'null'} docFocus=${document.hasFocus()}`);
-  },
-  true,
-);
 
 // 창 이동 핸드오프의 버퍼 몫 — model 이 xterm 을 모르므로 여기서 등록한다.
 // 아직 열리지 않은(탭을 한 번도 안 본) 터미널은 pending 청크를 이어 붙여 넘긴다
@@ -327,8 +332,8 @@ function open(inst: TerminalInstance, b: Binding): void {
     core._charSizeService.measure();
     fitTerminal(inst.id);
   });
-  // 임시 진단 (ticket term-ime-window-topright) — 조합 시작 직전·직후와 첫 갱신 뒤의 textarea·조합 상자 위치,
-  //      활성 요소, 버퍼 상태, 포커스·출력 이후 경과 시간을 model.imeDiag 에 남긴다. 원인 확정 뒤 지운다
+  // 임시 진단 (ticket term-ime-toggle-stuck) — 아래 한/영 keydown 때 textarea 위치·활성 요소·버퍼 상태·포커스와 출력
+  //      이후 경과를 model.imeDiag 에 한 줄 남긴다. 원인 확정 뒤 지운다
   let focusAt = -1;
   let writeAt = -1;
   const openAt = performance.now();
@@ -351,19 +356,27 @@ function open(inst: TerminalInstance, b: Binding): void {
     );
   };
   term.textarea?.addEventListener('focus', () => (focusAt = performance.now()), true);
-  term.textarea?.addEventListener('compositionupdate', () => setTimeout(() => diag('update+0'), 0));
-  term.textarea?.addEventListener('compositionend', () => diag('end'));
   term.textarea?.addEventListener(
     'compositionstart',
     () => {
-      diag('start-pre');
       term.scrollToBottom();
       syncTextArea();
-      diag('start-post');
     },
     true,
   );
   term.textarea?.addEventListener('focus', syncTextArea, true);
+  // 임시 진단 (ticket term-ime-toggle-stuck) — 한/영 키 keydown 때 위 diag 한 줄 + native 의 전경 창·포커스 HWND·IME
+  //      열림 상태(ime_probe). 키가 IME 에 닿았다면 keydown 이 올 때는 이미 열림 상태가 바뀌어 있다 (IME 가 먼저 먹는다).
+  //      원인 확정 뒤 위 진단과 함께 지운다
+  term.textarea?.addEventListener(
+    'keydown',
+    (e) => {
+      if (e.key !== 'HangulMode' && e.code !== 'Lang1' && e.keyCode !== 21) return;
+      diag('hangul');
+      void imeProbe().then((p) => p !== null && pushImeDiag(`  native ${p}`));
+    },
+    true,
+  );
   // 드래그 선택은 Windows Terminal 규칙 (사용자 방향 2026-09-07):
   //  - 마우스 모드가 아닐 때 Shift+클릭은 확장 선택이 아니다 — xterm 의 "직전 앵커부터 일괄 선택"
   //    을 끄는 옵션이 없어, capture 단계에서 Shift 를 뗀 이벤트로 바꿔 넘긴다 (보통 클릭·드래그).

@@ -16,6 +16,8 @@ export interface Notification {
   severity: Severity;
   message: string;
   action?: NotifyAction;
+  /** 자동 소멸 없음 — X·Escape 로만 닫힌다 (복원 실패 경고처럼 놓치면 안 되는 것, ticket term-restore-observe) */
+  sticky?: boolean;
 }
 
 // VS Code notificationsToasts.ts 실측값 — 심각도별 자동 숨김(ms), 동시 표시 상한 3
@@ -32,12 +34,13 @@ export function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-export function notify(severity: Severity, message: string, action?: NotifyAction): void {
+export function notify(severity: Severity, message: string, action?: NotifyAction, opts?: { sticky?: boolean }): void {
   const id = nextId++;
-  notifications.list.push({ id, severity, message, action });
+  notifications.list.push({ id, severity, message, action, ...(opts?.sticky ? { sticky: true } : {}) });
   // 상한 초과분은 오래된 것부터 밀어낸다 — VS Code 는 큐에 대기시키지만 알림 센터가 없어
   // 대기시킬 곳이 없다 (ponytail). hover 로 정지된 토스트(timers 에 없음)는 읽는 중이므로
-  // 건너뛴다 — 전부 정지 상태면 상한을 잠시 넘긴다 (VS Code 의 hover 중 purge 유예와 동일)
+  // 건너뛴다 — 전부 정지 상태면 상한을 잠시 넘긴다 (VS Code 의 hover 중 purge 유예와 동일). sticky 는
+  // 타이머가 없어 hover 중 알림과 같이 밀려나지 않는다
   while (notifications.list.length > MAX_VISIBLE) {
     const oldest = notifications.list.find((n) => timers.has(n.id));
     if (!oldest) break;
@@ -71,7 +74,7 @@ export function pauseNotification(id: number): void {
 /** hover 해제 시 전체 시간으로 재시작 — VS Code hideAfterTimeout 동일 */
 export function resumeNotification(id: number): void {
   const n = notifications.list.find((x) => x.id === id);
-  if (!n) return;
+  if (!n || n.sticky) return;
   pauseNotification(id);
   timers.set(id, setTimeout(() => dismissNotification(id), PURGE_TIMEOUT[n.severity]));
 }

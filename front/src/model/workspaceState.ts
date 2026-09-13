@@ -256,14 +256,15 @@ export async function applyWorkspaceState(ctx: SessionCtx, s: WorkspaceState): P
       if (missing.length > 0) {
         const mode = ctx.terminals.state.mode;
         const alive = list.map((i) => i.id).join(', ') || 'none';
-        notify('warning', `Could not restore ${missing.length} terminal tab(s): tmux session ${missing.join(', ')} not found (alive: ${alive}${mode === 'tmux' ? '' : `; terminal mode ${mode}`})`);
+        // sticky — 12초 자동 소멸이면 자리를 비운 사이 사라져 증거가 남지 않는다 (ticket term-restore-observe)
+        notify('warning', `Could not restore ${missing.length} terminal tab(s): tmux session ${missing.join(', ')} not found (alive: ${alive}${mode === 'tmux' ? '' : `; terminal mode ${mode}`})`, undefined, { sticky: true });
       }
       // 터미널이 죽어(kill·재부팅) 끝내 비어 있는 pane 은 접는다 — 저장 시점부터 비어 있던 그룹은 그대로
       for (const gid of termGroups) ctx.editors.closeEmptyGroup(gid);
     }, (e: unknown) => {
       // 조회 자체가 끝내 실패 — 죽은 것으로 단정하지 않는다: 빈 pane 은 남겨 두고(사이드바에서 다시 붙일 수
       // 있다) 사유를 알린다. 종전엔 실패가 빈 목록으로 삼켜져 조용히 접혔고 다음 저장이 터미널 자리를 잃었다
-      notify('warning', `Could not list terminals, ${s.terminals.length} saved terminal tab(s) not restored: ${String(e)}`);
+      notify('warning', `Could not list terminals, ${s.terminals.length} saved terminal tab(s) not restored: ${String(e)}`, undefined, { sticky: true });
     }));
   }
   tasks.push(ctx.editors.hydrate().then((failed) => {

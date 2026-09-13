@@ -216,7 +216,7 @@ export function setupCommands(): void {
     title: 'Developer: Reload Window',
     run: reloadWindow,
   });
-  // 임시 (ticket term-ime-window-topright) — terminal.imeDiag 를 클립보드로
+  // 임시 (ticket term-ime-toggle-stuck) — terminal.imeDiag 를 클립보드로
   register({
     id: 'developer.copyImeDiagnostics',
     title: 'Developer: Copy IME Diagnostics',

@@ -1,4 +1,4 @@
-import { effect, reactive } from '@vue/reactivity';
+import { effect, reactive, watch } from '@vue/reactivity';
 import type { ThinBackend } from '../backend/types';
 import { activeCtx } from './ctx';
 import type { SplitSide, TabHandoff } from './editors';
@@ -174,6 +174,7 @@ function addLocal(tab: SessionTab, backend?: ThinBackend): SessionCtx {
   const ctx = createSessionCtx(backend ?? env.backendFor(tab), isRemoteEmpty(tab.root) ? 'browse' : subWindow ? 'lazy' : 'full');
   ctxs.set(tab.id, ctx);
   sessions.list.push({ ...tab });
+  bindOpenPriority(tab, ctx);
   // 요청자 요청은 그 세션의 연결로 오므로 컨텍스트에 묶어 처리기로 넘긴다 (탭은 id 로 재조회 —
   // 이름·root 는 이후 바뀐다)
   ctx.backend.onRequest?.((method, params) => {
@@ -253,6 +254,7 @@ function removeLocal(id: string): void {
   loading.delete(id);
   initFailed.delete(id);
   untrackWorkspace(id);
+  broadcastPriority(id, null); // 다른 창이 옛 순위를 믿고 이 창으로 열기를 넘기지 않게
   if (idx !== -1) sessions.list.splice(idx, 1);
   ctx.backend.dispose?.();
 }
@@ -486,6 +488,7 @@ function replaceLocal(tab: SessionTab): void {
   if (idx !== -1) sessions.list.splice(idx, 1);
   ctxs.delete(tab.id);
   old?.backend.dispose?.();
+  if (!tab.mirror) broadcastPriority(tab.id, null); // 미러가 사라져 자리표시로 — 열 수 없으니 순위 기록을 거둔다
   const ctx = addLocal(tab);
   // addLocal 은 끝에 push — 자리는 곧 native 순서로 덮인다 (reconcile 의 목록 재구성)
   if (sessions.activeId === tab.id) activeCtx.value = ctx;
@@ -525,6 +528,24 @@ export function initSessions(): void {
   listenHere('session-recalled', (e) => {
     const { token } = e.payload as { token: string };
     recallWaiters.get(token)?.();
+  });
+  // 창 간 열기 우선순위 (ticket editor-group-open-priority)
+  listenHere('open-priority', (e) => {
+    const p = e.payload as PriorityNotice;
+    const key = `${p.window}\n${p.session}`;
+    if (p.rank === null) remoteRank.delete(key);
+    else remoteRank.set(key, { rank: p.rank, ts: p.ts });
+  });
+  listenHere('open-priority-query', () => {
+    for (const t of sessions.list) {
+      const c = ctxs.get(t.id);
+      if (c) broadcastPriority(t.id, bestRank(c));
+    }
+  });
+  listenHere('open-file-request', (e) => onOpenFileRequest(e.payload as OpenFileRequest));
+  // 늦게 뜬 창(서브·재시작)은 묶음의 현재 순위를 모른다 — 물어서 채운다
+  void groupWindows().then((ws) => {
+    for (const w of ws) void tauri!.core.invoke('forward', { toWindow: w, event: 'open-priority-query', payload: {} }).catch(() => {});
   });
   if (subWindow) initSubWindow();
 }
@@ -860,6 +881,95 @@ function applyHandoff(h: Handoff): void {
     ctx.terminals.adoptTerminals(h.terminals, h.fromSession, { groupId, index: h.toIndex });
   }
   activateSession(sid);
+}
+
+// ---- 창 간 열기 우선순위 (ticket editor-group-open-priority, 2026-09-13). 그룹 우선순위는 세션 컨텍스트(창) 안의 것이라
+// 다른 창의 그룹은 openTarget 이 볼 수 없다. 각 창이 세션마다 "이 창의 최고 순위(그룹 순위의 최솟값 — high 0·보통 1·low 2)" 를
+// 같은 묶음(메인 + 서브)의 창들에 알리고, 열기(openFile·openFileAt — 탐색기·퀵오픈·터미널 링크·검색)는 이 창보다 순위가 엄격히
+// 높은 창이 있으면 그중 가장 높은 창(같으면 가장 최근에 알린 창)으로 넘긴다. 순위가 같으면 이 창에서 연다. 세션은 세션 키
+// (tab.id — 서브 창도 원본 id 를 키로 쓴다; daemonSession 의 미러 id 는 창마다 달라 대조에 쓸 수 없다)로 맞춘다.
+// URL·Hex·diff 등 다른 열기는 창을 넘지 않는다
+
+/** rank null = 이 창에서 그 세션이 빠졌다 (기록 삭제) */
+type PriorityNotice = { window: string; session: string; rank: number | null; ts: number };
+type OpenFileRequest = { session: string; path: string; preview?: boolean; line?: number };
+
+/** 다른 창이 알린 최고 순위 — 키 "창\n세션키", 값은 순위와 알린 시각 */
+const remoteRank = new Map<string, { rank: number; ts: number }>();
+
+/** 이 창에서 그 세션의 최고 순위 — 0 high, 1 보통, 2 low (openTarget 의 rank 와 같은 척도) */
+function bestRank(ctx: SessionCtx): number {
+  return Math.min(...ctx.editors.editors.groups.map((g) => (g.openPriority === 'high' ? 0 : g.openPriority === 'low' ? 2 : 1)));
+}
+
+/** 같은 묶음의 다른 창들 — 메인(서브면 소속 메인) + 그 서브들, 자기 자신 제외 */
+async function groupWindows(): Promise<string[]> {
+  const main = ownerWindow ?? windowLabel;
+  if (!multiWindow() || main === null) return [];
+  const subs = (await tauri!.core.invoke('list_subs')) as string[];
+  return [main, ...subs].filter((w) => w !== windowLabel);
+}
+
+function broadcastPriority(id: string, rank: number | null): void {
+  if (!multiWindow()) return;
+  const payload: PriorityNotice = { window: windowLabel!, session: id, rank, ts: Date.now() };
+  void groupWindows().then((ws) => {
+    for (const w of ws) void tauri!.core.invoke('forward', { toWindow: w, event: 'open-priority', payload }).catch(() => {});
+  });
+}
+
+/** 다른 창에서 넘어온 열기를 처리하는 중 — 받은 창이 (늦게 도착한 알림 탓에) 다시 넘겨 핑퐁이 되지 않게 */
+let receivingOpen = false;
+
+/** 세션 컨텍스트마다 — 최고 순위 변화를 알리고(복원·분할·핸드오프·그룹 닫기로 생긴 변화도 반응형으로 잡힌다), 열기 넘김 훅을 건다 */
+function bindOpenPriority(tab: SessionTab, ctx: SessionCtx): void {
+  // 서브 창의 자리표시 세션(미러 없음)은 연결이 없어 열 수 없다 — 알리지 않는다. 미러가 생기면 replaceLocal 이 다시 부른다
+  if (!multiWindow() || (subWindow && !tab.mirror)) return;
+  const id = tab.id;
+  // immediate — 보통(1)도 알려야 low 창이 보통 창으로 넘길 수 있다 (알림이 없는 창은 비교 대상이 아니다)
+  watch(() => bestRank(ctx), (rank) => {
+    if (ctxs.get(id) === ctx) broadcastPriority(id, rank);
+  }, { immediate: true });
+  ctx.editors.setRemoteOpener((path, o) => !receivingOpen && openInOtherWindow(id, ctx, path, o));
+}
+
+/** 이 창보다 순위가 높은 다른 창이 있으면 거기로 열기를 보낸다 — 보냈으면 true. 창이 사라져 실패하면 잊고 이 창에서 연다 */
+function openInOtherWindow(id: string, ctx: SessionCtx, path: string, o: { preview?: boolean; line?: number }): boolean {
+  const mine = bestRank(ctx);
+  let best: { window: string; rank: number; ts: number } | null = null;
+  for (const [key, r] of remoteRank) {
+    const [w, s] = key.split('\n');
+    if (s !== id || w === windowLabel || r.rank >= mine) continue;
+    if (best === null || r.rank < best.rank || (r.rank === best.rank && r.ts > best.ts)) best = { window: w, ...r };
+  }
+  if (best === null) return false;
+  const toWindow = best.window;
+  const payload: OpenFileRequest = { session: id, path, ...o };
+  void tauri!.core.invoke('forward', { toWindow, event: 'open-file-request', payload }).catch(() => {
+    remoteRank.delete(`${toWindow}\n${id}`);
+    void openHere(ctx, path, o);
+  });
+  return true;
+}
+
+/** 넘기지 않고 이 창 컨텍스트에서 연다 — openElsewhere 판정은 openFile·openFileAt 시작의 동기 구간이라 플래그로 막힌다 */
+function openHere(ctx: SessionCtx, path: string, o: { preview?: boolean; line?: number }): Promise<unknown> {
+  receivingOpen = true;
+  try {
+    return o.line !== undefined ? ctx.editors.openFileAt(path, o.line) : ctx.editors.openFile(path, { preview: o.preview });
+  } finally {
+    receivingOpen = false;
+  }
+}
+
+/** 다른 창이 넘긴 열기 — 같은 세션 키의 이 창 컨텍스트(서브면 미러 컨텍스트)에서 열고 창을 앞으로 */
+function onOpenFileRequest(p: OpenFileRequest): void {
+  const tab = sessions.list.find((t) => t.id === p.session);
+  const ctx = tab && ctxs.get(tab.id);
+  if (!tab || !ctx) return;
+  void openHere(ctx, p.path, p);
+  activateSession(tab.id);
+  void tauri?.window.getCurrentWindow().setFocus();
 }
 
 /** 모든 세션의 미저장 문서 여부 — beforeunload 안전망 (배경 탭의 dirty 도 지켜야 한다) */

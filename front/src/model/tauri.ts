@@ -17,6 +17,7 @@ type TauriWindow = {
   onCloseRequested(handler: (e: { preventDefault(): void }) => void): Promise<() => void>;
   isMaximized(): Promise<boolean>;
   onResized(handler: () => void): Promise<() => void>;
+  setFocus(): Promise<void>;
 };
 
 export type Tauri = {

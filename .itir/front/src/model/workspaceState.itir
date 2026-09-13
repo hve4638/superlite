@@ -17,7 +17,7 @@ export fn restoreSubWorkspace(kind, mirror, ctx) {
   role: 서브 창 자신의 몫 복원(서브 창 새로고침) — get_workspace_sub_state 로 같은 label 의 저장이 있으면 applyWorkspaceState. 새로 만든 서브 창은 없음이라 무동작이고 핸드오프가 채운다
 }
 export fn applyWorkspaceState(ctx, s) {
-  role: 스냅샷 하나를 세션에 적용 — editors.restore 로 껍데기 탭·배치를 먼저 세우고 펼침·터미널(terminals.listTerminalsFor(조회 실패 시에만 500ms 뒤 1회 재시도, 성공한 빈 목록은 즉시 수용)로 받은 목록에서 살아 있는 tmux 만 저장된 자리에 attach, 죽은 터미널의 빈 pane 은 closeEmptyGroup — 못 찾은 id·살아 있는 id·데몬 방식을 warning 알림으로. 조회 자체가 끝내 실패면 죽은 것으로 단정하지 않고 빈 pane 을 남긴 채 사유를 알린다, ticket term-layout-restore-flaky)·문서(hydrate)를 채운다. 메인(restoreWorkspace)과 서브 창('restore' 핸드오프)이 공유한다
+  role: 스냅샷 하나를 세션에 적용 — editors.restore 로 껍데기 탭·배치를 먼저 세우고 펼침·터미널(terminals.listTerminalsFor(조회 실패 시에만 500ms·1s·2s·4s 백오프 재시도, 성공한 빈 목록은 즉시 수용)로 받은 목록에서 살아 있는 tmux 만 저장된 자리에 attach, 죽은 터미널의 빈 pane 은 closeEmptyGroup — 못 찾은 id·살아 있는 id·데몬 방식을 warning 알림으로. 조회 자체가 끝내 실패면 죽은 것으로 단정하지 않고 빈 pane 을 남긴 채 사유를 알린다, ticket term-layout-restore-flaky. 두 경고는 sticky — 자리를 비운 사이 12초에 사라지면 증거가 없다, ticket term-restore-observe)·문서(hydrate)를 채운다. 메인(restoreWorkspace)과 서브 창('restore' 핸드오프)이 공유한다
 }
 export fn trackWorkspace(kind, id, root, ctx, sub?) {
   role: 복원이 끝난 세션의 변경을 따라가며 저장 — effect 가 직렬화 중 읽은 반응형 값(그룹·탭·배치·펼침·터미널 목록 — snapshot 이 docs 도 복사하므로 문서 content 변경에도 재실행되지만 구조 JSON 비교로 걸러진다)을 추적하고, 구조 JSON 이 마지막 저장과 다르면 1초 디바운스 뒤 persist. 첫 실행은 저장하지 않는다(복원 직후). viewStates 는 markRaw 라 추적되지 않는다. sub(미러 세션 id)가 있으면 서브 창 몫으로 set_workspace_sub_state 에 보내고 첫 실행부터 저장하며(추적 시작 시점에 넘어온 탭이 이미 있고 저장된 적이 없다), 탭이 하나도 없으면 null(잊기) 서브 창(sub)의 스냅샷엔 fontZoom(창 배율)이 함께 실리고 배율 변경도 저장 트리거다 — 메인 몫(root 별)엔 없다, 메인 배율은 창 저장소(editors.loadWindowZoom)가 기억한다 (ticket zoom-per-window)

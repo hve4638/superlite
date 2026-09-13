@@ -531,6 +531,9 @@ fn spawn_term(
     if let Some((tid, name)) = &tmux {
         sink_send(&sink, json!({"event": "termTmux", "term": id, "id": tid, "name": name}).to_string(), false);
     } else if let Some(e) = fallback {
+        // daemon.log 에도 — 프론트 토스트 한 번뿐이면 재실행 뒤 "왜 plain 이었나" 를 되짚을 수 없다
+        // (plain 터미널은 workspaceState 저장에 실리지 않아 재실행 때 자리만 남는다, ticket term-restore-observe)
+        crate::log_line(&format!("superlite-daemon: 터미널 {id} tmux 대체(plain) — {e} (root={}, attach={attach:?})", root.display()));
         sink_send(&sink, json!({"event": "termTmux", "term": id, "error": e}).to_string(), false);
     }
     let mut writer = pty.master.take_writer().map_err(err)?;

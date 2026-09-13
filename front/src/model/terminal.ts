@@ -255,20 +255,23 @@ export function createTerminals(backend: ThinBackend, editorsM: ReturnType<typeo
     });
   }
 
-  /** 복원용 목록 조회 (workspaceState) — 조회가 실패(예외)하면 500ms 뒤 한 번만 재시도한다 (ssh 재접속 등
-   *  일시적 실패 대비). 성공한 결과는 비어 있어도 그대로 반환한다 — 재부팅처럼 세션이 진짜 없어진 경우를
-   *  지연 없이 즉시 접기 위함. 재시도도 실패하면 throw — 복원이 실패를 빈 목록으로 오인해 저장된 자리를
-   *  접지 않게. 받은 목록은 state.list 에도 반영한다 (ticket term-layout-restore-flaky) */
+  /** 복원용 목록 조회 (workspaceState) — 조회가 실패(예외)하면 500ms·1s·2s·4s 백오프로 재시도한다 (약 8초 —
+   *  ssh 순간 끊김은 진행 중 요청이 즉시 거절되고 재접속이 1초 이상 걸려, 종전 500ms 1회로는 재접속보다
+   *  먼저 포기했다, ticket term-restore-observe). 성공한 결과는 비어 있어도 그대로 반환한다 — 재부팅처럼
+   *  세션이 진짜 없어진 경우를 지연 없이 즉시 접기 위함. 끝내 실패하면 throw — 복원이 실패를 빈 목록으로
+   *  오인해 저장된 자리를 접지 않게. 받은 목록은 state.list 에도 반영한다 (ticket term-layout-restore-flaky) */
   async function listTerminalsFor(): Promise<TerminalInfo[]> {
     if (!backend.listTerminals) return [];
-    try {
-      state.list = await backend.listTerminals();
-      return state.list;
-    } catch (e) {
-      console.warn(`listTerminals 실패, 500ms 뒤 재시도: ${errText(e)}`);
-      await new Promise((r) => setTimeout(r, 500));
-      state.list = await backend.listTerminals();
-      return state.list;
+    const backoff = [500, 1000, 2000, 4000];
+    for (let i = 0; ; i++) {
+      try {
+        state.list = await backend.listTerminals();
+        return state.list;
+      } catch (e) {
+        if (i >= backoff.length) throw e;
+        console.warn(`listTerminals 실패, ${backoff[i]}ms 뒤 재시도: ${errText(e)}`);
+        await new Promise((r) => setTimeout(r, backoff[i]));
+      }
     }
   }
 
@@ -395,8 +398,8 @@ export const killListedTerminal = (tmuxId: string): Promise<void> => ctx().termi
 export const renameListedTerminal = (tmuxId: string, name: string): Promise<void> =>
   ctx().terminals.renameListed(tmuxId, name);
 
-// ---- IME 진단 (ticket term-ime-window-topright, 임시) — Windows 실기에서 한글 조합 창이 우측 상단에 뜨는 원인을
-//      가르기 위해 terminalHost 가 조합 시작·갱신 시점의 활성 요소·textarea 위치·버퍼 상태를 한 줄씩 남긴다.
+// ---- IME 진단 (ticket term-ime-toggle-stuck, 임시) — Windows 실기에서 터미널 한/영 키가 먹지 않는 원인을 가르기 위해
+//      terminalHost 가 한/영 keydown 때 활성 요소·textarea 위치·버퍼 상태와 native 포커스·IME 열림 상태를 한 줄씩 남긴다.
 //      팔레트 'Developer: Copy IME Diagnostics' 가 클립보드로 복사한다. 원인이 확정되면 지운다
 export const imeDiag: string[] = [];
 export function pushImeDiag(line: string): void {

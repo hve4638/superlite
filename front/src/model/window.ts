@@ -96,6 +96,15 @@ export function setIme(enabled: boolean): void {
   void tauri?.core.invoke('set_ime', { enabled });
 }
 
+/**
+ * IME 진단 (ticket term-ime-toggle-stuck, 임시) — native 의 전경 창·키보드 포커스 HWND·IME 열림 상태 한 줄
+ * (app/src/main ime_probe). 터미널이 한/영 keydown 때 imeDiag 에 남긴다. 웹·다른 OS 는 null. 원인 확정 뒤 지운다
+ */
+export async function imeProbe(): Promise<string | null> {
+  if (!tauri) return null;
+  return (await tauri.core.invoke('ime_probe')) as string;
+}
+
 /** 이 창의 웹뷰 줌 — 레벨·저장·적용은 native (set_zoom) 몫, 부른 창에만 적용된다 (ticket zoom-per-window). 웹은 브라우저 줌이 있어 무동작 */
 /** URL 열기의 단일 진입점 (터미널 링크 Ctrl+클릭, 앞으로 생길 링크) — 사용자 설정의 분기 규칙(settings.urlTargetOf,
  *  ticket user-settings)으로 내부 URL 탭(editors.openUrl)과 외부 브라우저(openExternal)를 가른다 */

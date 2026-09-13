@@ -646,6 +646,17 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     editors.groupMru.unshift(id);
   }); // @vue/reactivity 의 watch 는 스케줄러가 없어 동기 — 대입 직후 openTarget 이 새 순서를 본다
 
+  /** 다른 창으로 열기 넘김 (ticket editor-group-open-priority, 다중 창) — sessions 가 등록한 훅이 이 창의 최고 순위보다
+   *  높은 그룹을 가진 같은 묶음의 다른 창으로 열기를 보낸다. true 면 넘겼으니 여기서는 열지 않는다.
+   *  editors 가 창·세션을 모르기 위한 seam (setTerminalCloser 와 같은 꼴) */
+  let remoteOpener: ((path: string, opts: { preview?: boolean; line?: number }) => boolean) | null = null;
+  function setRemoteOpener(fn: (path: string, opts: { preview?: boolean; line?: number }) => boolean): void {
+    remoteOpener = fn;
+  }
+  function openElsewhere(path: string, opts: { preview?: boolean; line?: number }): boolean {
+    return remoteOpener?.(path, opts) ?? false;
+  }
+
   /** 그룹을 지정하지 않은 열기의 대상 그룹 (ticket editor-group-open-priority) — 순위(high > 보통 > low)가 가장
    *  높은 그룹들 중 최근 포커스한 것. 순위가 전부 같으면 활성 그룹이라 종전 동작과 같다 */
   function openTarget(): EditorGroup {
@@ -734,6 +745,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     path: string,
     opts?: { preview?: boolean; groupId?: number; focus?: boolean; source?: boolean },
   ): Promise<boolean> {
+    if (opts?.groupId === undefined && openElsewhere(path, { preview: opts?.preview })) return true;
     const group = opts?.groupId !== undefined
       ? editors.groups.find((g) => g.id === opts.groupId) ?? openTarget()
       : openTarget();
@@ -786,6 +798,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
 
   /** 파일을 열고 지정 라인으로 이동 (검색 결과 클릭). line 은 1-based. */
   async function openFileAt(path: string, line: number): Promise<void> {
+    if (openElsewhere(path, { preview: true, line })) return;
     // 열기 실패 시 reveal 을 남기면 다음 성공적 열기 때 엉뚱한 스크롤이 튄다
     if (!(await openFile(path, { preview: true, source: true }))) return;
     editors.pendingReveal = { path, line };
@@ -1750,7 +1763,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     splitGroup, closeEmptyGroup, toggleGroupLock, setGroupOpenPriority, updateContent, setOrphaned, remapPaths, closePathTabs,
     reloadDocFromDisk, hasDirtyDocs, saveActive, overwriteConflict, revertConflict, indentOf,
     snapshot, restore, hydrate, takeTabForHandoff, acceptTab,
-    openTerminalTab, closeTerminalTabs, setTerminalCloser, renameTerminalTab, focusTerminalTab,
+    openTerminalTab, closeTerminalTabs, setTerminalCloser, renameTerminalTab, focusTerminalTab, setRemoteOpener,
     addCard, attachCards, setActiveCard, closeCard, activeLeaf,
   };
 }

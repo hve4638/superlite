@@ -1,12 +1,12 @@
-role: 알림 토스트 상태 — VS Code notifications 근사. 우하단 스택, 심각도별 자동 숨김(Error 15s·Warning 12s·Info 10s), hover 로 타이머 정지. 알림 센터(벨) 없음
+role: 알림 토스트 상태 — VS Code notifications 근사. 우하단 스택, 심각도별 자동 숨김(Error 15s·Warning 12s·Info 10s), hover 로 타이머 정지. sticky 알림(자동 숨김 없음, X·Escape 로만 닫힘 — 타이머가 없어 상한 3 초과 밀어내기 대상도 아니다, hover 중 알림과 같다)은 놓치면 안 되는 복원 실패 경고용 (ticket term-restore-observe). 알림 센터(벨) 없음
 
 export val notifications
 export type Severity
 export type Notification
 export type NotifyAction
 
-export fn notify(severity, message, action?) {
-  role: 알림 추가 — 에러 표면화의 단일 진입점. model 계층의 backend 실패 catch 가 호출한다. action({label, run}) 은 토스트에 버튼 하나로 그려지는 선택 액션 (ticket download-conveniences — 다운로드 완료의 "Open Folder". 다른 알림도 쓸 수 있는 공통 표면)
+export fn notify(severity, message, action?, opts?) {
+  role: 알림 추가 — 에러 표면화의 단일 진입점. model 계층의 backend 실패 catch 가 호출한다. action({label, run}) 은 토스트에 버튼 하나로 그려지는 선택 액션 (ticket download-conveniences — 다운로드 완료의 "Open Folder". 다른 알림도 쓸 수 있는 공통 표면). opts.sticky 는 자동 소멸 없음 (workspaceState 의 터미널 복원 실패 경고 두 곳)
 }
 export fn runNotificationAction(id) {
   role: 액션 버튼 — 토스트를 닫고 action.run 실행 (VS Code notification action 동일)
@@ -21,5 +21,5 @@ export fn pauseNotification(id) {
   role: hover 시 자동 숨김 타이머 정지
 }
 export fn resumeNotification(id) {
-  role: hover 해제 시 타이머 재시작 (전체 시간으로 다시 — VS Code 동일)
+  role: hover 해제 시 타이머 재시작 (전체 시간으로 다시 — VS Code 동일). sticky 는 무동작
 }
