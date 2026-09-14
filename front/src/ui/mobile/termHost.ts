@@ -5,6 +5,7 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
 import type { TerminalInstance } from '../../model/terminal';
 import { allSessionCtxs, allTerminals } from '../../model/sessions';
+import { nav } from './nav';
 import { TERMINAL_FONT_FAMILY, TERMINAL_LINE_HEIGHT } from '../../theme/fonts';
 
 /**
@@ -156,6 +157,7 @@ function open(inst: TerminalInstance, b: Binding): void {
   term.onResize(({ cols, rows }) => inst.session.resize(cols, rows));
   b.term = term;
   b.fit = fit;
+  armKeyboardGuard(inst.id);
 }
 
 /** 인스턴스의 xterm 을 host 에 붙인다 (처음이면 연다) */
@@ -177,9 +179,31 @@ export function fitTerminal(id: number): void {
   }
 }
 
-export function focusTerminal(id: number): void {
-  bindings.get(id)?.term?.focus();
+/** 키보드 가드 (사용자 요청 2026-09-15: 스크롤 뒤 손을 떼면 키보드가 올라온다 — 탭에서만 올라와야 한다). xterm 의 숨은 textarea 에
+ *  inputmode=none 을 두면 어떤 경로로 포커스가 가도 소프트 키보드가 뜨지 않는다. 명시적 탭(focusTerminal)만 text 로 바꾸고
+ *  포커스한다 — 이미 포커스된 채면 blur 뒤 다시 (같은 요소 focus() 는 무동작이라 키보드가 안 뜬다). 키보드가 내려가면(App 의
+ *  판정 nav.keyboard) 다시 none 으로 무장해 다음 잡음 포커스가 키보드를 못 올린다 */
+function textareaOf(id: number): HTMLTextAreaElement | null {
+  return bindings.get(id)?.term?.textarea ?? null;
 }
+function armKeyboardGuard(id: number): void {
+  const ta = textareaOf(id);
+  if (ta) ta.inputMode = 'none';
+}
+export function focusTerminal(id: number): void {
+  const b = bindings.get(id);
+  const ta = b?.term?.textarea;
+  if (!b?.term || !ta) return;
+  if (document.activeElement === ta) ta.blur();
+  ta.inputMode = 'text';
+  b.term.focus();
+}
+watch(
+  () => nav.keyboard,
+  (up) => {
+    if (!up) for (const id of bindings.keys()) armKeyboardGuard(id);
+  },
+);
 
 // ---- 키바 키 — 소프트 키보드에 없는 키를 시퀀스로. 화살표는 sticky 수정키를 CSI 파라미터로 싣는다
 export type BarKey = 'esc' | 'tab' | 'up' | 'down' | 'left' | 'right';

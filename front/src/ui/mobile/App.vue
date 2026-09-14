@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted } from 'vue';
 import { goTo, nav, type Tab } from './nav';
 import SessionsScreen from './SessionsScreen.vue';
 import FilesScreen from './FilesScreen.vue';
@@ -36,7 +36,6 @@ function badge(id: Tab): number {
 // 뚜렷이(25% 넘게) 짧을 때 (viewport meta interactive-widget=resizes-content 라 키보드가 innerHeight 를 줄인다). 기준을
 // screen.height 가 아니라 관측 최대치로 두는 이유: 전체화면 진입·이탈은 15% 안쪽이라 걸리지 않고, 회전은 폭이 바뀌어
 // 기준을 새로 잡는다. 하드웨어 키보드는 높이가 안 줄어 바가 남는다
-const keyboard = ref(false);
 let maxH = window.innerHeight;
 let lastW = window.innerWidth;
 function editing(): boolean {
@@ -48,7 +47,7 @@ function updateKeyboard(): void {
     lastW = window.innerWidth;
     maxH = window.innerHeight;
   } else maxH = Math.max(maxH, window.innerHeight);
-  keyboard.value = editing() && window.innerHeight < maxH * 0.75;
+  nav.keyboard = editing() && window.innerHeight < maxH * 0.75;
 }
 onMounted(() => {
   window.addEventListener('resize', updateKeyboard);
@@ -65,7 +64,7 @@ onMounted(() => {
     <ScmScreen v-else-if="nav.tab === 'scm'" />
     <WorkspaceScreen v-else-if="nav.tab === 'workspace'" />
     <EditorArea v-else />
-    <nav v-show="!keyboard" class="m-tabs">
+    <nav v-show="!nav.keyboard" class="m-tabs">
       <button v-for="t in TABS" :key="t.id" :class="{ active: nav.tab === t.id }" @click="goTo(t.id)">
         <span class="codicon" :class="`codicon-${t.icon}`" />
         <span class="label">{{ t.label }}</span>
