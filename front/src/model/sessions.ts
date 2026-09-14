@@ -108,6 +108,9 @@ interface SessionsEnv {
   /** 데몬 소켓 요청자(셸 심)가 세션에 보낸 요청의 처리기 (와이어 v9) — 어떤 요청이 있는지는
    *  조립 지점(host.ts)이 정한다. 반환값이 요청자에게 돌아가고 throw 는 에러로 돌아간다 */
   onRequest?: (tab: SessionTab, ctx: SessionCtx, method: string, params: unknown) => Promise<unknown>;
+  /** false 면 워크스페이스 상태 복원·저장(workspaceState)을 하지 않는다 — 모바일 셸(ticket mobile-shell): 탭·터미널
+   *  자동 재부착이 없고 화면 구성이 달라 데스크톱 저장분을 적용할 수도 없다. 생략은 true */
+  persist?: boolean;
 }
 let env: SessionsEnv = { kind: 'mock', backendFor: () => { throw new Error('sessions 미구성'); } };
 
@@ -208,7 +211,7 @@ function startInit(tab: SessionTab, ctx: SessionCtx): void {
     // 워크스페이스 상태 복원 → 추적 (ticket workspace-state-restore). 빈 세션·원격 빈 세션은 대상이 아니다.
     // 서브 창은 복원하지 않고(메인이 'restore' 핸드오프로 채운다) 미러 세션만 자기 몫을 저장한다
     const root = t?.root;
-    if (root && !isRemoteEmpty(root) && ctxs.get(tab.id) === ctx) {
+    if (root && env.persist !== false && !isRemoteEmpty(root) && ctxs.get(tab.id) === ctx) {
       if (subWindow) {
         // 서브 창 새로고침이면 자기 몫(같은 label)이 남아 있다 — 그것으로 되살린 뒤 추적
         const mirror = tab.mirror;

@@ -25,7 +25,7 @@ use axum::{Json, Router};
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
-use tower_http::services::ServeDir;
+use tower_http::services::{ServeDir, ServeFile};
 
 mod ssh;
 mod gitcred;
@@ -87,19 +87,29 @@ impl SessionRoots {
 #[derive(Clone)]
 struct App {
     roots: SessionRoots,
-    /// 설정 시 /ws 연결 토큰 — 로컬(loopback+Origin 검증)은 무인증이 기본이라 옵션이다
-    token: Option<String>,
+    /// 설정 시 접속 비밀번호 — 로컬(loopback+Origin 검증)은 무인증이 기본이라 옵션이다. bin 은
+    /// SUPERLITE_PASSWORD(사용자가 정한 값), Tauri 앱은 기동마다 랜덤 토큰
+    password: Option<String>,
+    /// password 의 sha256 hex — 쿠키(superlite_auth)에 담기는 값. 쿠키 jar 에 원문을 두지 않고
+    /// 쿠키 안전 문자만 쓰기 위함이지 별도 비밀은 아니다 (세션 토큰은 범위 밖, ticket web-remote-access)
+    cookie: Option<String>,
+    /// attach 에 실을 세션 detach 유예(초, 와이어 v26) — Fixed(단독 bin) 만 Some. 웹 클라이언트(폰)는
+    /// 화면 잠금이 곧 끊김이라 데몬 기본 300초로는 세션이 회수된다. SUPERLITE_SESSION_GRACE_SECS,
+    /// 기본 12시간. Registry(Tauri 앱)는 None — 데몬 기본 그대로
+    grace: Option<u64>,
     /// 호스트별 예비 ssh 파이프 — relay 들이 공유 (ticket ssh-spare-pipe)
     spares: Arc<ssh::Spares>,
 }
 
 /// 서버 기동 단일 진입점 — 제어 연결을 spawn 하고 /ws(+옵션 dist) 라우터를 listener 위에 serve.
-pub async fn serve(listener: TcpListener, roots: SessionRoots, token: Option<String>, dist: Option<String>) {
+pub async fn serve(listener: TcpListener, roots: SessionRoots, password: Option<String>, dist: Option<String>) {
     // 상주 제어 연결 — 데몬 기동 보장 + 백엔드 생존 신호. 이게 있는 한 데몬은 안 죽는다.
     tokio::spawn(control_loop());
 
     let mut app = Router::new()
         .route("/ws", get(ws_handler))
+        .route("/auth", get(auth_handler))
+        .route("/auth/login", axum::routing::post(auth_login_handler))
         .route("/ssh/hosts", get(hosts_handler))
         .route("/ssh/state", axum::routing::post(state_handler))
         .route("/daemon/clean", axum::routing::post(clean_handler))
@@ -112,16 +122,26 @@ pub async fn serve(listener: TcpListener, roots: SessionRoots, token: Option<Str
         .route("/git/credentials", get(git_credentials_get).post(git_credentials_post))
         .route("/nvim", get(nvim::nvim_handler));
     if let Some(dist) = &dist {
-        // 정적 dist 만 authed 를 거치지 않는다 — 번들에 비밀이 없고, 토큰은 앱이 URL 로 주입한다
+        // 정적 dist 만 authed 를 거치지 않는다 — 번들에 비밀이 없고, 프론트가 /auth 로 로그인 화면을 띄운다.
         // gzip (ticket url-tab-slow-first-load): 원격 PC 에서 캐시 없이 열면 비압축 번들 약 5MB 를 받느라 load 가 2초를 넘었다
+        // /mobile 은 모바일 셸 진입 경로 (ticket mobile-shell) — 별개의 vite 진입 mobile.html (데스크톱 index.html 과 청크·CSS 가 갈린다)
+        // dist 라우터 안에 두어야 dist_cache_control(no-cache)이 같이 걸린다 — 밖에 두면 브라우저 휴리스틱 캐시로 옛 html 이
+        // 남아 재빌드가 폰에 반영되지 않았다 (2026-09-14 실측)
+        let index = ServeFile::new(format!("{dist}/mobile.html"));
         app = app.fallback_service(
             Router::new()
+                .route("/mobile", axum::routing::get_service(index.clone()))
+                .route("/mobile/", axum::routing::get_service(index))
                 .fallback_service(ServeDir::new(dist))
                 .layer(axum::middleware::from_fn(dist_cache_control))
                 .layer(tower_http::compression::CompressionLayer::new()),
         );
     }
-    let app = app.with_state(App { roots, token, spares: Arc::default() });
+    let cookie = password.as_deref().map(sha256_hex);
+    let grace = matches!(roots, SessionRoots::Fixed(_)).then(|| {
+        std::env::var("SUPERLITE_SESSION_GRACE_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(12 * 3600)
+    });
+    let app = app.with_state(App { roots, password, cookie, grace, spares: Arc::default() });
     axum::serve(listener, app).await.unwrap();
 }
 
@@ -446,19 +466,87 @@ async fn write_line(w: &mut (impl AsyncWrite + Unpin), s: &str) -> std::io::Resu
 
 // ---------------------------------------------------------------- relay
 
+/// GET /auth — 지금 요청이 인증되는가: 204 또는 401. 프론트가 부팅 때 불러 로그인 화면 여부를 정한다.
+/// 비밀번호 미설정(로컬)은 Origin 검증만 거쳐 204. 403 이 아니라 401 인 이유: 다른 끝점의 403(거부)과
+/// 달리 "비밀번호를 물어라" 는 신호라서
+async fn auth_handler(
+    State(app): State<App>,
+    Query(query): Query<std::collections::HashMap<String, String>>,
+    headers: HeaderMap,
+) -> Response {
+    if authed(&app, &query, &headers) { StatusCode::NO_CONTENT } else { StatusCode::UNAUTHORIZED }.into_response()
+}
+
+/// POST /auth/login — 본문(text/plain)이 비밀번호. 일치면 superlite_auth 쿠키(HttpOnly·SameSite=Strict·
+/// 1년)를 심고 204, 불일치 403. Secure 는 붙이지 않는다 — LAN·VPN 의 http 가 전제 (TLS 는 범위 밖).
+/// 비밀번호 미설정이면 쿠키 없이 204. 로그아웃·만료·해지는 없다 (세션 토큰은 범위 밖) — 비밀번호를
+/// 바꾸면 sha256 이 달라져 옛 쿠키가 무효가 된다
+async fn auth_login_handler(State(app): State<App>, headers: HeaderMap, body: String) -> Response {
+    let Some(password) = &app.password else {
+        // 로컬 무인증 — Origin 검증은 그대로 (임의 페이지가 fetch 로 두드려도 얻는 것이 없다)
+        return if authed(&app, &Default::default(), &headers) { StatusCode::NO_CONTENT } else { StatusCode::FORBIDDEN }
+            .into_response();
+    };
+    if !token_eq(body.trim_end_matches(['\r', '\n']), password) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let cookie = format!(
+        "{AUTH_COOKIE}={}; Path=/; HttpOnly; SameSite=Strict; Max-Age={}",
+        app.cookie.as_deref().unwrap_or(""),
+        365 * 24 * 3600
+    );
+    let mut resp = StatusCode::NO_CONTENT.into_response();
+    resp.headers_mut().insert("set-cookie", axum::http::HeaderValue::from_str(&cookie).unwrap());
+    resp
+}
+
 /// 이른 반환 없는 상수시간 비교 — 토큰 대조가 타이밍으로 새지 않게 (길이는 샌다)
 fn token_eq(a: &str, b: &str) -> bool {
     let (a, b) = (a.as_bytes(), b.as_bytes());
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-/// /ws 와 /ssh/* 가 공유하는 접속 인증 — 통과 = 워크스페이스(터미널 포함) 접근 권한
+fn sha256_hex(s: &str) -> String {
+    format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(s.as_bytes()))
+}
+
+/// 쿠키 헤더에서 이름이 name 인 값 — 없으면 None. 브라우저 형식(`a=1; b=2`)만 다룬다
+fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers
+        .get_all("cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(';'))
+        .filter_map(|kv| kv.trim().split_once('='))
+        .find(|(k, _)| *k == name)
+        .map(|(_, v)| v)
+}
+
+const AUTH_COOKIE: &str = "superlite_auth";
+
+/// /ws·/nvim·HTTP API 가 공유하는 접속 인증 — 통과 = 워크스페이스(터미널 포함) 접근 권한.
+/// 비밀번호가 설정돼 있으면 일치가 곧 인증이고 Origin 검증은 생략한다 — 임의 웹페이지는 비밀을
+/// 알 수 없어 CSRF 가 성립하지 않고, Tauri webview(tauri://·http://tauri.localhost)처럼 Origin 이
+/// Host 와 다를 수밖에 없는 정당한 클라이언트가 이 경로로 들어온다. 전달 경로 셋:
+/// - 쿠키 superlite_auth = sha256(비밀번호) — 웹 브라우저. WebSocket 은 헤더를 못 붙이므로 웹의
+///   /ws·/nvim 은 이것뿐이다. /auth/login 이 심는다 (ticket web-remote-access)
+/// - Authorization: Bearer <비밀번호> — 비브라우저(검증 스크립트·후속 APK 의 fetch)
+/// - ?tkn= 쿼리 — Registry(Tauri 앱) 만. 앱은 webview 오리진이 relay 와 달라 쿠키를 못 쓰고, 주입
+///   URL 은 주소창·히스토리에 남지 않는다. 단독 bin(Fixed) 은 거부 — 비밀이 URL·북마크에 남던 경로를 닫는다
 fn authed(app: &App, query: &std::collections::HashMap<String, String>, headers: &HeaderMap) -> bool {
-    if let Some(token) = &app.token {
-        // 토큰 일치가 곧 인증 — 이때 Origin 검증은 생략한다. 임의 웹페이지는 랜덤 토큰을
-        // 알 수 없어 CSRF 가 성립하지 않고, Tauri webview(tauri://·http://tauri.localhost)
-        // 처럼 Origin 이 Host 와 다를 수밖에 없는 정당한 클라이언트가 이 경로로 들어온다.
-        return query.get("tkn").is_some_and(|t| token_eq(t, token));
+    if let Some(password) = &app.password {
+        if cookie_value(headers, AUTH_COOKIE).is_some_and(|c| token_eq(c, app.cookie.as_deref().unwrap_or(""))) {
+            return true;
+        }
+        if headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .is_some_and(|t| token_eq(t, password))
+        {
+            return true;
+        }
+        return matches!(app.roots, SessionRoots::Registry(_)) && query.get("tkn").is_some_and(|t| token_eq(t, password));
     }
     if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) {
         // WHY: WS 는 CORS 밖 — Origin 검증이 없으면 사용자가 방문한 임의의 웹페이지가
@@ -733,7 +821,8 @@ async fn ws_handler(
         },
     };
     let spares = app.spares.clone();
-    ws.on_upgrade(move |sock| relay(sock, target, session, spares))
+    let grace = app.grace;
+    ws.on_upgrade(move |sock| relay(sock, target, session, grace, spares))
 }
 
 /// payload 프레임의 상한 — READ_MAX_BYTES(50MB)보다 넉넉한 방어선. 초과는 프레임
@@ -928,7 +1017,7 @@ async fn connect_remote(
 /// 정리한다 (원격은 detach 전환 — 원격 데몬의 세션 grace 가 재접속을 기다린다).
 /// 방향별 전용 태스크 — 바이너리 프레임 읽기(read_frame)는 다중 await 라 select 취소에
 /// 안전하지 않아, 종전의 단일 select 루프 구조를 쓸 수 없다.
-async fn relay(ws: WebSocket, target: Target, session: Option<String>, spares: Arc<ssh::Spares>) {
+async fn relay(ws: WebSocket, target: Target, session: Option<String>, grace: Option<u64>, spares: Arc<ssh::Spares>) {
     use futures_util::{SinkExt, StreamExt};
     let (mut ws_tx, mut ws_rx) = ws.split();
     let (read_half, mut write_half, root_str, mut remote): (
@@ -955,6 +1044,11 @@ async fn relay(ws: WebSocket, target: Target, session: Option<String>, spares: A
     let mut attach = json!({"id": 0, "method": "attach", "params": {"root": root_str}});
     if let Some(s) = session {
         attach["params"]["session"] = json!(s);
+    }
+    // grace (와이어 v26): 단독 bin 의 연결만 — 폰의 화면 잠금을 견디는 detach 유예. 원격 데몬에도 이 값이
+    // 간다 (환경변수는 ssh 너머로 전달되지 않는다)
+    if let Some(g) = grace {
+        attach["params"]["grace"] = json!(g);
     }
     if remote.as_ref().is_some_and(|r| r.browse_only) {
         attach["params"]["watch"] = json!(false);

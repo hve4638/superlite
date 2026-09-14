@@ -1,4 +1,4 @@
-role: 중계 코어 — 준비된 TcpListener 위에 /ws·/ssh/hosts·/ssh/state·/daemon/clean·/tmux-conf(GET/PUT/OPTIONS — 클라이언트 tmux 프로필 내용, 편집기 탭이 연다)·/tmux-conf/profiles(GET/POST — 프로필 목록·CRUD·select)·/ssh-config(GET/PUT/OPTIONS — 이 머신의 ~/.ssh/config)·/settings(GET/PUT/OPTIONS — 이 머신의 사용자 설정 settings.json 원문, ticket user-settings; 다섯 다 conf.rs)·/version·/github/oauth·/git/credentials(gitcred.rs)·/nvim(nvim.rs — 임베드 Neovim 중계, 데몬 와이어 밖) 라우터를 얹어 serve. HTTP 핸들러는 각자 authed()+cors() 전문을 앞세운다(미들웨어 없음 — WS 둘은 예외라 라우터를 갈라야 해서) — 새 엔드포인트가 전문을 빠뜨리면 곧 무인증이다. attach 직후 클라이언트 tmux 적용 프로필(conf::active_content)을 데몬에 tmuxConf 로 밀어 넣는다 (와이어 v17 — 원격별 관리 없이 이 백엔드 머신의 프로필이 원본). 데몬 spawn·attach, 상주 제어 연결 포함. dist 는 옵션 (bin 은 정적 서빙, Tauri 앱은 자산 번들이라 불필요). root 는 세션 해석기(SessionRoots)가 정한다 — 고정 root(bin) 또는 세션 레지스트리 조회(Tauri 앱, decision/workspace-session-tabs.md). root 문자열이 ssh:// 스킴이면 원격 — 해석(Target)은 접속 직전 한 곳에서만 한다
+role: 중계 코어 — 준비된 TcpListener 위에 /ws·/auth(GET — 인증 여부 204/401)·/auth/login(POST — 비밀번호 본문 → superlite_auth 쿠키, ticket web-remote-access)·/ssh/hosts·/ssh/state·/daemon/clean·/tmux-conf(GET/PUT/OPTIONS — 클라이언트 tmux 프로필 내용, 편집기 탭이 연다)·/tmux-conf/profiles(GET/POST — 프로필 목록·CRUD·select)·/ssh-config(GET/PUT/OPTIONS — 이 머신의 ~/.ssh/config)·/settings(GET/PUT/OPTIONS — 이 머신의 사용자 설정 settings.json 원문, ticket user-settings; 다섯 다 conf.rs)·/version·/github/oauth·/git/credentials(gitcred.rs)·/nvim(nvim.rs — 임베드 Neovim 중계, 데몬 와이어 밖) 라우터를 얹어 serve. HTTP 핸들러는 각자 authed()+cors() 전문을 앞세운다(미들웨어 없음 — WS 둘은 예외라 라우터를 갈라야 해서) — 새 엔드포인트가 전문을 빠뜨리면 곧 무인증이다. attach 직후 클라이언트 tmux 적용 프로필(conf::active_content)을 데몬에 tmuxConf 로 밀어 넣는다 (와이어 v17 — 원격별 관리 없이 이 백엔드 머신의 프로필이 원본). 데몬 spawn·attach, 상주 제어 연결 포함. dist 는 옵션 (bin 은 정적 서빙, Tauri 앱은 자산 번들이라 불필요). root 는 세션 해석기(SessionRoots)가 정한다 — 고정 root(bin) 또는 세션 레지스트리 조회(Tauri 앱, decision/workspace-session-tabs.md). root 문자열이 ssh:// 스킴이면 원격 — 해석(Target)은 접속 직전 한 곳에서만 한다
 
 // Registry: SessionRoots::Registry 의 본체 — (세션 id, root?) 등록 순서 목록(Arc<Mutex<Vec>>). 앱(native)이 만들어 넘기고 relay 는 읽기만
 export type Registry
@@ -12,13 +12,22 @@ class Target {
   role: 접속 대상 — Local(데몬 IPC 소켓) 또는 Remote{host, path}(ssh exec 채널). root 문자열의 ssh:// 스킴 여부로 to_target 이 가른다
 }
 fn serve() {
-  role: 서버 기동 단일 진입점 — control_loop spawn + 모듈 role 의 라우트 전부(+옵션 dist ServeDir — 이것만 authed 밖, 번들에 비밀 없음, dist_cache_control 층과 gzip CompressionLayer 로 감싼다 — gzip 은 ticket url-tab-slow-first-load: 원격 PC 에서 캐시 없이 열면 비압축 번들 약 5MB 로 load 가 2초를 넘었다) axum serve. bin 과 Tauri 앱이 공유한다. root 대신 SessionRoots 를 받는다. App 상태에 ssh::Spares(호스트별 예비 파이프)를 함께 둔다 — relay 들이 공유
+  role: 서버 기동 단일 진입점 — control_loop spawn + 모듈 role 의 라우트 전부(+옵션 dist ServeDir — 이것만 authed 밖, 번들에 비밀 없음, dist_cache_control 층과 gzip CompressionLayer 로 감싼다 — gzip 은 ticket url-tab-slow-first-load: 원격 PC 에서 캐시 없이 열면 비압축 번들 약 5MB 로 load 가 2초를 넘었다; dist 가 있으면 /mobile·/mobile/ 은 dist/mobile.html 을 ServeFile 로 — 모바일 셸의 별개 vite 진입, ticket mobile-shell) axum serve. bin 과 Tauri 앱이 공유한다. root 대신 SessionRoots 를 받는다. App 상태에 ssh::Spares(호스트별 예비 파이프)를 함께 둔다 — relay 들이 공유. password 의 sha256 hex(쿠키 값)와 Fixed 모드의 세션 유예(SUPERLITE_SESSION_GRACE_SECS, 기본 12시간 — attach 에 실을 값, 와이어 v26)도 여기서 한 번 계산해 App 에 둔다 (Registry 는 None — 데몬 기본 300초)
 }
 fn dist_cache_control() {
   role: dist 정적 응답의 Cache-Control (ticket url-tab-stale-content) — /assets/(내용 해시 이름)는 public·1년·immutable, 그 밖(index.html·아이콘)은 no-cache 로 매번 재검증(If-Modified-Since → 304). ServeDir 는 Cache-Control 을 안 붙여 브라우저 휴리스틱 캐시가 걸리고, 앱 URL 탭(iframe) 재로드는 재검증 없이 그 캐시를 써서 dist 재빌드가 반영되지 않았다. 앱 in-process serve(dist 없음)는 무관
 }
+fn auth_handler() {
+  role: GET /auth — 이 요청이 인증되는가: 204 또는 401. 프론트(model/auth)가 부팅 때 불러 로그인 화면 여부를 정한다. 401 인 이유: 다른 끝점의 403(거부)과 달리 "비밀번호를 물어라" 는 신호
+}
+fn auth_login_handler() {
+  role: POST /auth/login — 본문(text/plain)이 비밀번호. 일치면 superlite_auth=sha256(비밀번호) 쿠키(HttpOnly·SameSite=Strict·Max-Age 1년, Secure 없음 — http LAN·VPN 전제)를 심고 204, 불일치 403. 비밀번호 미설정이면 Origin 검증만 거쳐 쿠키 없이 204. 로그아웃·만료·해지 없음 — 비밀번호를 바꾸면 sha256 이 달라져 옛 쿠키가 무효 (세션 토큰은 범위 밖)
+}
+fn cookie_value(headers, name) -> value? {
+  role: Cookie 헤더에서 이름이 name 인 값 — 브라우저 형식(a=1; b=2)만
+}
 fn authed() {
-  role: /ws 와 /ssh/* 공유 인증 — SUPERLITE_TOKEN 설정 시 ?tkn= 일치(일치가 곧 인증 — Origin 검증 생략, tauri:// 오리진 수용), 미설정 시 Origin=Host 검증(브라우저 CSRF), Origin 부재(비브라우저)는 통과
+  role: /ws·/nvim·HTTP API 공유 인증 — SUPERLITE_PASSWORD 설정 시 일치가 곧 인증(Origin 검증 생략, tauri:// 오리진 수용). 전달 경로 셋: 쿠키 superlite_auth = sha256(비밀번호)(웹 브라우저 — WebSocket 은 헤더를 못 붙여 /ws·/nvim 은 이것뿐), Authorization: Bearer <비밀번호>(검증 스크립트·후속 APK), ?tkn= 쿼리(Registry=Tauri 앱만 — webview 오리진이 relay 와 달라 쿠키 불가, 주입 URL 은 히스토리에 안 남는다. Fixed=단독 bin 은 거부 — 비밀이 URL·북마크에 남던 경로를 닫는다, ticket web-remote-access). 미설정 시 Origin=Host 검증(브라우저 CSRF), Origin 부재(비브라우저)는 통과
 }
 fn cors() {
   role: /ssh/* 응답에 Access-Control-Allow-Origin '*' — Tauri webview(tauri.localhost 오리진)의 fetch 는 /ws 와 달리 CORS 대상이라 헤더가 없으면 "Failed to fetch". 접근 통제는 authed 가 이미 하므로 권한 확대가 아니다 (토큰 없는 교차 오리진은 403)
@@ -51,13 +60,13 @@ fn clean_local() -> report {
   role: 로컬 데몬 바이너리(daemon_bin_path)를 --clean 으로 실행해 stdout 반환
 }
 fn ws_handler() {
-  role: /ws 관문 — 인증은 authed. Registry 모드에선 ?session= 이 root 있는 등록 세션이어야 하고, 아니면 upgrade 후 close 4403 — HTTP 403 은 브라우저 WS 에서 일반 끊김과 구분되지 않아 프론트가 무한 재연결에 빠지므로, 재시도 무의미를 알리는 유일한 통로가 close code 다. Fixed(bin) 모드는 ?folder= 로 root 를 넘겨받는다 (웹 '폴더 열기' — 인증 통과자는 터미널로 이미 셸을 가지므로 권한 확대가 아니다. 로컬은 canonicalize + 디렉토리 확인, ssh:// 는 형식 파싱만 — 경로 검증은 원격 데몬 attach 가 한다. 실패는 FORBIDDEN). Registry 는 folder 를 무시 — root 결정권은 native 에 남는다
+  role: /ws 관문 — 인증은 authed. Registry 모드에선 ?session= 이 root 있는 등록 세션이어야 하고, 아니면 upgrade 후 close 4403 — HTTP 403 은 브라우저 WS 에서 일반 끊김과 구분되지 않아 프론트가 무한 재연결에 빠지므로, 재시도 무의미를 알리는 유일한 통로가 close code 다. Fixed(bin) 모드는 ?folder= 로 root 를 넘겨받는다 (웹 '폴더 열기' — 인증 통과자는 터미널로 이미 셸을 가지므로 권한 확대가 아니다. 로컬은 canonicalize + 디렉토리 확인, ssh:// 는 형식 파싱만 — 경로 검증은 원격 데몬 attach 가 한다. 실패는 FORBIDDEN). Registry 는 folder 를 무시 — root 결정권은 native 에 남는다. App 의 grace(Fixed 만 Some)를 relay 에 넘긴다
 }
 fn token_eq() {
   role: 상수시간 토큰 비교 — 이른 반환 없이 XOR 누적
 }
 fn relay() {
-  role: WebSocket ↔ 데몬 양방향 중계 (Local 은 IPC 소켓, Remote 는 ssh::pipe_conn 의 stdio — 프레이밍은 동일, 헬퍼는 생 바이트 중계) — 프레이밍만 알고 내용은 불투명 (데몬이 유일한 해석자). 데몬발은 JSON 줄('{' 시작)→WS Text, 0x00 매직+4B BE 길이 프레임(와이어 v6)→WS Binary 재프레이밍. 방향별 전용 태스크 — 바이너리 프레임 읽기(read_frame)가 다중 await 라 select 취소에 안전하지 않아 단일 select 루프를 못 쓴다, 한쪽 종료 시 반대쪽 abort. 첫 줄 attach 에 해석된 root(원격은 원격 경로 — ssh::probe_remote 로 홈·OS·arch 를 얻어 `/~` 를 expand_home 으로 치환, OS·arch 에 맞는 데몬을 배치)와 (있으면) session id 를 실어 보낸다. 경로 없는 ssh://host(원격 빈 세션)는 홈에 watch:false(와이어 v7, 재귀 워처 생략)로 attach — 시작 페이지의 폴더 열기가 그 호스트를 탐색만 한다. 원격 폴더 세션은 첫 줄(attach 응답)의 rootPath 를 ssh::record_recent 로 적어 원격 탐색기의 최근 폴더가 된다. ssh child 는 relay 수명에 묶인다(kill_on_drop) — 종료 시 원격 데몬이 세션을 detach 로 돌린다. 접속 실패는 close 4502 + 사유(123B 내, close_with)로 프론트에 — ssh 접속 실패뿐 아니라 첫 프레임(attach 응답)이 에러이거나 응답 전에 EOF(원격 헬퍼의 데몬 기동 실패·바이너리 실행 불가 — 이때 사유는 ssh child stderr 의 마지막 줄)인 경우도 같은 통로. 4403 과 같은 '재시도 무의미' 통로로, 프론트는 재연결을 멈추고 사유를 보인다 (종전에는 코드 없는 close 라 1초 재연결·매번 ssh 재시도에 빠져 'Reconnecting…' 만 영원히 보였다). 첫 프레임을 기다리는 동안 프론트 Text 요청은 그대로 데몬에 흘리고 프론트 close 는 즉시 접는다. 원격 접속 절차는 connect_remote 가 맡고, 그 결과(RemoteConn: child·enter 가드·host·browse_only·stderr 마지막 줄·접속 중 모아 둔 요청)를 attach 이후에 쓴다
+  role: WebSocket ↔ 데몬 양방향 중계 (Local 은 IPC 소켓, Remote 는 ssh::pipe_conn 의 stdio — 프레이밍은 동일, 헬퍼는 생 바이트 중계) — 프레이밍만 알고 내용은 불투명 (데몬이 유일한 해석자). 데몬발은 JSON 줄('{' 시작)→WS Text, 0x00 매직+4B BE 길이 프레임(와이어 v6)→WS Binary 재프레이밍. 방향별 전용 태스크 — 바이너리 프레임 읽기(read_frame)가 다중 await 라 select 취소에 안전하지 않아 단일 select 루프를 못 쓴다, 한쪽 종료 시 반대쪽 abort. 첫 줄 attach 에 해석된 root(원격은 원격 경로 — ssh::probe_remote 로 홈·OS·arch 를 얻어 `/~` 를 expand_home 으로 치환, OS·arch 에 맞는 데몬을 배치)와 (있으면) session id, (Fixed 면) grace(초, 와이어 v26 — 폰의 화면 잠금을 견디는 detach 유예, 원격 데몬에도 이 값이 간다)를 실어 보낸다. 경로 없는 ssh://host(원격 빈 세션)는 홈에 watch:false(와이어 v7, 재귀 워처 생략)로 attach — 시작 페이지의 폴더 열기가 그 호스트를 탐색만 한다. 원격 폴더 세션은 첫 줄(attach 응답)의 rootPath 를 ssh::record_recent 로 적어 원격 탐색기의 최근 폴더가 된다. ssh child 는 relay 수명에 묶인다(kill_on_drop) — 종료 시 원격 데몬이 세션을 detach 로 돌린다. 접속 실패는 close 4502 + 사유(123B 내, close_with)로 프론트에 — ssh 접속 실패뿐 아니라 첫 프레임(attach 응답)이 에러이거나 응답 전에 EOF(원격 헬퍼의 데몬 기동 실패·바이너리 실행 불가 — 이때 사유는 ssh child stderr 의 마지막 줄)인 경우도 같은 통로. 4403 과 같은 '재시도 무의미' 통로로, 프론트는 재연결을 멈추고 사유를 보인다 (종전에는 코드 없는 close 라 1초 재연결·매번 ssh 재시도에 빠져 'Reconnecting…' 만 영원히 보였다). 첫 프레임을 기다리는 동안 프론트 Text 요청은 그대로 데몬에 흘리고 프론트 close 는 즉시 접는다. 원격 접속 절차는 connect_remote 가 맡고, 그 결과(RemoteConn: child·enter 가드·host·browse_only·stderr 마지막 줄·접속 중 모아 둔 요청)를 attach 이후에 쓴다
 }
 fn connect_remote(ws_tx, ws_rx, host, path, spares) -> conn? {
   role: 원격 접속 절차. 먼저 ssh::Spares 의 예비 파이프를 소비한다 (ticket ssh-spare-pipe) — 있으면 exec 없이 attach 만 남고 connectStage 도 흐르지 않는다, 없거나 죽었으면 원격 정보 조회(probe_remote) → 헬퍼 배치(ensure_remote_bin) → 파이프 spawn(pipe_conn). 접속은 별도 태스크로 돌리며 단계(ssh→helper→upload→daemon)를 {"event":"connectStage"} 로 프론트에 흘린다 (relay 자체 이벤트 — ssh-connect-status) — 그동안 프론트 Close 는 태스크 abort(= ssh child kill)로 즉시 접고, Text 요청은 RemoteConn.early 에 모아 relay 가 attach 줄 뒤에 순서대로 보낸다. 어느 쪽이든 접속 성립 직후 Spares.fill 로 다음 접속용 예비를 보충하고, 접속 수명은 Spares.enter 가드(RemoteConn._enter)로 표시한다 (실제 접속 0 → 만료 타이머). 경로 없는 ssh://host 는 browse_only — 홈(`/~` → expand_home)에 attach. 실패는 close 4502 + 사유로 프론트에 알린 뒤 None, 프론트가 먼저 끊어도 None

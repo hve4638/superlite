@@ -1,0 +1,14 @@
+role: 웹 접속 인증 게이트 (ticket web-remote-access) — 백엔드가 SUPERLITE_PASSWORD 로 떠 있으면 /ws·/nvim·HTTP API 전부가 superlite_auth 쿠키를 요구한다 (브라우저 WebSocket 은 헤더를 못 붙여 쿠키가 유일한 통로). 부팅(host.ts)이 세션 연결을 열기 전에 /auth 를 물어 401 이면 비밀번호 입력 화면을 띄우고 /auth/login 이 쿠키(HttpOnly·1년 — 폰이 저장해 이후 자동 접속)를 심은 뒤에야 진행. 종전 ?tkn= 쿼리는 주소창·히스토리·북마크에 비밀이 남아 폐기 (앱은 프로세스 내부 주입이라 그대로). 로그인 화면은 Vue 마운트 전(모듈 평가 중)이라 DOM 을 직접 만든다 — 데스크톱·모바일 셸이 같이 쓴다
+
+fn authorized() -> bool {
+  role: fetch /auth 의 status 가 401 이 아니면 통과 — 무인증 로컬 204, vite 개발 서버 404, 백엔드 부재(fetch 실패)도 통과 (부재는 WS 재연결 경로가 알린다)
+}
+export fn login(password) -> ok {
+  role: POST /auth/login (text/plain 본문) — 일치면 백엔드가 쿠키를 심고 true
+}
+export fn ensureWebAuth() {
+  role: 부팅 게이트 — authorized 가 아니면 promptPassword 가 끝날 때까지 돌아오지 않는다 (웹 실백엔드 모드만 부른다)
+}
+fn promptPassword() {
+  role: 최소 로그인 화면 — 전체 화면 오버레이에 비밀번호 입력 하나. 성공하면 화면을 걷고 resolve, 실패(403)는 같은 화면에서 재시도, 네트워크 실패는 사유 표시
+}

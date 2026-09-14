@@ -2,6 +2,7 @@ import { EmptyBackend } from '../backend/empty';
 import { MockBackend } from '../backend/mock';
 import { WsBackend } from '../backend/ws';
 import type { AgentInfo, ThinBackend } from '../backend/types';
+import { ensureWebAuth } from './auth';
 import { boot } from './boot';
 import { ctx, viewOf } from './ctx';
 import { daemonClean } from './daemon';
@@ -9,6 +10,9 @@ import { requestDownload } from './downloads';
 import { credential, type CredentialRequest } from './gitauth';
 import { errText, notify } from './notifications';
 import { configureNvim } from './nvim';
+import { mobileShell } from './shell';
+import { loadMobileSessions } from './mobileSessions';
+import { configureWorkspaceStore } from './workspaceState';
 import type { SessionCtx } from './session';
 import { tauri } from './tauri';
 import {
@@ -37,8 +41,6 @@ import { bootActiveSession, subWindow } from './window';
 //      ?mock 일 때만 MockBackend — 예전 기본값(?ws 필수)은 differential 검사용이었는데
 //      그 검사가 사라져 2026-09-08 뒤집었다 (ticket web-default-real-backend).
 const params = new URLSearchParams(location.search);
-// 페이지 URL 의 ?tkn= 을 /ws 로 넘긴다 — 백엔드가 SUPERLITE_TOKEN 으로 떠 있으면 필수.
-const tkn = params.get('tkn');
 /** 웹 실백엔드 모드 — ?mock 이 없으면 같은 오리진 /ws 에 붙는다 (?ws 는 이제 무해한 잉여) */
 const webBackend = !params.has('mock');
 // Tauri 앱은 자산 로드라 location 이 relay 가 아니다 — native 부팅 정보(boot_info)의 endpoint 가 최우선.
@@ -51,10 +53,10 @@ const injectedSessions: SessionTab[] | undefined = boot?.sessions;
  *  부팅 정보가 없으면(웹) '/' — 웹은 보통 부팅 세션 root 에서 시작해 이 값을 안 쓴다. */
 export const openRootDefault: string = boot?.openRoot ?? '/';
 
-/** 웹 /ws 주소 — 세션(탭)마다 ?folder= 로 root 를 지정한다 (빈 root 는 서버 기본 root) */
+/** 웹 /ws 주소 — 세션(탭)마다 ?folder= 로 root 를 지정한다 (빈 root 는 서버 기본 root).
+ *  인증은 쿠키(model/auth) — 브라우저가 같은 오리진 WS 핸드셰이크에 자동으로 싣는다 */
 function webWsUrl(folder: string): string {
   const q = new URLSearchParams();
-  if (tkn !== null) q.set('tkn', tkn);
   if (folder !== '') q.set('folder', folder);
   const qs = q.toString();
   return `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws${qs ? `?${qs}` : ''}`;
@@ -78,12 +80,24 @@ if (injected) {
   for (const t of injectedSessions ?? []) bootSession(t, appBackendOf(t));
   if (bootActiveSession !== null) activateSession(bootActiveSession, false);
 } else if (webBackend) {
+  // 비밀번호 백엔드면 여기서 로그인 화면 — 쿠키가 심긴 뒤에야 /ws·/nvim 을 연다 (최상위 await 가
+  // 모듈 그래프 평가를 잡아 두므로 UI 는 아직 마운트 전이다)
+  await ensureWebAuth();
+  // 모바일 셸은 워크스페이스 상태(탭·터미널 자리)를 데스크톱 웹과 다른 키에 저장한다 (같은 root 를 서로 덮지 않게) 하고,
+  // 지난번 열어 둔 root 들(model/mobileSessions)로 부팅 세션을 만든다 (사용자 결정 2026-09-15). 기억이 없으면 ?folder= 하나
+  if (mobileShell) configureWorkspaceStore('superlite.mobile.state');
   configureSessions({ kind: 'web', backendFor: backendOf, onRequest: handleRequest });
-  configureNvim(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/nvim${tkn !== null ? `?tkn=${tkn}` : ''}`);
-  const folder = params.get('folder') ?? '';
-  const id = genSessionId();
-  const name = folder.split('/').filter((s) => s !== '').pop() ?? '';
-  bootSession({ id, name, root: folder }, new WsBackend(webWsUrl(folder), id));
+  configureNvim(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/nvim`);
+  const saved = mobileShell ? loadMobileSessions() : null;
+  const roots = saved && saved.roots.length > 0 ? saved.roots : [params.get('folder') ?? ''];
+  let activeId: string | null = null;
+  for (const folder of roots) {
+    const id = genSessionId();
+    const name = folder.split('/').filter((s) => s !== '').pop() ?? '';
+    bootSession({ id, name, root: folder }, new WsBackend(webWsUrl(folder), id));
+    if (folder === saved?.active) activeId = id;
+  }
+  if (activeId !== null) activateSession(activeId, false);
 } else {
   configureSessions({ kind: 'mock', backendFor: () => new MockBackend() });
   configureNvim(null); // mock 은 relay 가 없다 — vim 모드 없음
@@ -428,7 +442,7 @@ function replaceTarget(): string | undefined {
 /**
  * 백엔드 자체 HTTP API(/ssh/*) 주소 — 데몬 와이어(/ws) 밖에서 백엔드가 직접 응답하는
  * 첫 표면이다 (주소·연결은 백엔드 소유 — ws docs/decision/remote-ssh.md). 웹은 같은
- * 오리진 상대 경로, 앱은 주입된 WS endpoint 에서 오리진·토큰을 유도한다.
+ * 오리진 상대 경로(인증은 쿠키), 앱은 주입된 WS endpoint 에서 오리진·토큰을 유도한다.
  * mock 은 null — 호출측(원격 탐색기)이 UI 를 감추는 신호다.
  */
 export function backendApiUrl(path: string, query: Record<string, string> = {}): string | null {
@@ -441,7 +455,6 @@ export function backendApiUrl(path: string, query: Record<string, string> = {}):
     return `${u.origin}${path}${qs ? `?${qs}` : ''}`;
   }
   if (!webBackend) return null;
-  if (tkn !== null) q.set('tkn', tkn);
   const qs = q.toString();
   return `${path}${qs ? `?${qs}` : ''}`;
 }

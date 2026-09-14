@@ -8,13 +8,17 @@ import { notify, errText } from './notifications'
 import { daemonClean } from './daemon'
 import { credential, CredentialRequest } from './gitauth'
 import { requestDownload } from './downloads'
+import { ensureWebAuth } from './auth'
 import { SessionCtx } from './session'
 
 import { boot } from './boot'
 import { tauri } from './tauri'
 import { bootActiveSession, subWindow } from './window'
 import { configureNvim } from './nvim'
-role: ThinBackend 조립 지점 — 구현체를 직접 참조해도 되는 유일한 파일 (itir boundary assembly). 세션 관리자에 환경(kind·탭별 연결 생성기)을 주입하고 부팅 세션들을 등록한다. 앱은 부팅 정보(boot — invoke boot_info)의 ws endpoint 와 sessions 목록(native 레지스트리가 발급 — 복원이면 여럿, 마지막이 활성)으로, 웹은 ?tkn=·?folder= 로 /ws 부팅 세션 하나를 만든다 (기본이 실 백엔드 — ?mock 일 때만 MockBackend, 2026-09-08 뒤집음. ?ws 는 무해한 잉여). root 가 null 인 탭(빈 세션)은 연결을 열지 않는다 — EmptyBackend (앱·웹 공통). 서브 창(subWindow)은 세션 탭의 mirror(미러 세션 id)로 연결을 열고, 미러가 없는 탭은 무연결 자리표시(EmptyBackend) — 탭이 오면 native ensure_mirror 로 미러가 생겨 컨텍스트가 교체된다. 부팅 후 묶음의 활성 세션(bootActiveSession)이 있으면 그 탭으로 (sync 없이). 모듈 평가 시점에 부팅을 끝낸다 — model shim 을 쓰는 모든 모듈보다 앞서야 하므로 main.ts 가 이 파일을 최우선 import 한다 (boot 의 최상위 await 가 IPC 응답까지 그래프 평가를 잡아 둔다). 임베드 nvim(편집기 vim 모드)의 /nvim 주소도 여기서 configureNvim 으로 준다 — 웹은 같은 오리진 /nvim(+tkn), 앱은 부팅 정보 endpoint 의 /ws 를 /nvim 으로, mock 은 null
+import { mobileShell } from './shell'
+import { loadMobileSessions } from './mobileSessions'
+import { configureWorkspaceStore } from './workspaceState'
+role: ThinBackend 조립 지점 — 구현체를 직접 참조해도 되는 유일한 파일 (itir boundary assembly). 세션 관리자에 환경(kind·탭별 연결 생성기)을 주입하고 부팅 세션들을 등록한다. 앱은 부팅 정보(boot — invoke boot_info)의 ws endpoint 와 sessions 목록(native 레지스트리가 발급 — 복원이면 여럿, 마지막이 활성)으로, 웹은 ensureWebAuth(model/auth — 비밀번호 백엔드면 로그인 화면, 쿠키가 심긴 뒤 진행) 를 최상위 await 로 거친 뒤 ?folder= 로 /ws 부팅 세션 하나를 만든다 (인증은 쿠키 — ?tkn= 은 폐기, ticket web-remote-access). 모바일 셸(model/shell.mobileShell)이면 워크스페이스 상태 저장 키를 'superlite.mobile.state' 로 바꾸고(configureWorkspaceStore — 같은 오리진 데스크톱 웹과 root 가 겹쳐도 서로 덮지 않게) 지난번 열어 둔 root 들(model/mobileSessions)로 부팅 세션을 여럿 만들어 기억한 활성 root 를 활성으로 — 기억이 없으면 ?folder= 하나 (ticket mobile-shell, 사용자 결정 2026-09-15) (기본이 실 백엔드 — ?mock 일 때만 MockBackend, 2026-09-08 뒤집음. ?ws 는 무해한 잉여). root 가 null 인 탭(빈 세션)은 연결을 열지 않는다 — EmptyBackend (앱·웹 공통). 서브 창(subWindow)은 세션 탭의 mirror(미러 세션 id)로 연결을 열고, 미러가 없는 탭은 무연결 자리표시(EmptyBackend) — 탭이 오면 native ensure_mirror 로 미러가 생겨 컨텍스트가 교체된다. 부팅 후 묶음의 활성 세션(bootActiveSession)이 있으면 그 탭으로 (sync 없이). 모듈 평가 시점에 부팅을 끝낸다 — model shim 을 쓰는 모든 모듈보다 앞서야 하므로 main.ts 가 이 파일을 최우선 import 한다 (boot 의 최상위 await 가 IPC 응답까지 그래프 평가를 잡아 둔다). 임베드 nvim(편집기 vim 모드)의 /nvim 주소도 여기서 configureNvim 으로 준다 — 웹은 같은 오리진 /nvim(쿠키), 앱은 부팅 정보 endpoint 의 /ws 를 /nvim 으로, mock 은 null
 
 export val backend
 export val openRootDefault
@@ -56,7 +60,7 @@ export fn openFolder(root, opts?) {
   role: '폴더 열기' 확정의 단일 진입점 — 앱·웹 모두 "새 세션 탭 추가"이되, 활성 탭이 빈 세션이면 그 자리를 교체한다 (replace — 시작 페이지에서 열기 흐름). 앱은 native open_folder_path invoke (검증·등록은 native 소유, sessions-changed 반향으로 탭 생성. 잘못된 경로 reject 는 notify 로 드러낸다 — 퀵인풋이 자동완성 없이도 타이핑 확정을 허용하므로), 웹은 세션 관리자가 ?folder= 연결을 하나 더 연다. mock 은 무동작. 환경 분기가 여기 숨어 퀵인풋·원격 탐색기는 환경을 모른다. root 는 로컬 절대 경로 또는 ssh://host/path (원격 탐색기 접속 — 해석은 relay 몫). 활성 세션이 원격이면 맨 경로도 그 호스트의 경로로 본다 (퀵인풋 browseDir 가 원격 데몬을 탐색하므로 — VS Code 원격 창의 Open Folder 와 동일). opts.mode 'replace' 면 비어 있지 않은 활성 탭도 대체 (웹은 openWebFolder replace, 앱은 invoke 후 replaceAppSession — native replace 는 빈 탭 전용. 활성 탭이 빈 세션이면 'replace' 도 native 제자리 교체(replace id)를 써서, 대상이 이미 열려 있으면 Welcome 탭이 남는다 — 2026-09-05), 'new' 면 활성 빈 탭도 남기고 새 탭을 배경에 연다 — 현재 탭이 활성으로 남는다 (원격 탐색기 '새 탭에 연결', 2026-09-05. 앱은 openInBackground 예약 후 invoke, reject 면 cancelBackground), 생략은 활성 빈 탭만 제자리 교체
 }
 export fn backendApiUrl(path, query?) -> url? {
-  role: 백엔드 자체 HTTP API(/ssh/*) 주소 — 데몬 와이어(/ws) 밖에서 백엔드가 직접 응답하는 첫 표면 (주소·연결은 백엔드 소유 — ws docs/decision/remote-ssh.md). 웹은 같은 오리진 상대 경로, 앱은 주입된 WS endpoint 에서 오리진·토큰 유도. mock 은 null — 호출측(원격 탐색기)이 UI 를 감추는 신호
+  role: 백엔드 자체 HTTP API(/ssh/*) 주소 — 데몬 와이어(/ws) 밖에서 백엔드가 직접 응답하는 첫 표면 (주소·연결은 백엔드 소유 — ws docs/decision/remote-ssh.md). 웹은 같은 오리진 상대 경로(인증은 쿠키), 앱은 주입된 WS endpoint 에서 오리진·토큰 유도. mock 은 null — 호출측(원격 탐색기)이 UI 를 감추는 신호
 }
 export fn confirmDaemonClean() {
   role: 강제 정리 승인 — 실패 세션의 root(rootOfBackend)에서 host 를 얻어 POST /daemon/clean(host 없으면 로컬)로 superlite-daemon --clean 을 실행하고 결과를 알림으로 보인 뒤 sessions.reconnectSession(초기 로드가 실패했던 세션이면 로드도 다시). 실패는 알림. 승인 없이는 아무것도 죽이지 않는다

@@ -52,6 +52,12 @@ export interface WorkspaceState {
 
 const DEBOUNCE_MS = 1000;
 const WEB_KEY = 'superlite.state';
+/** 웹 저장 키 — 기본은 recents.ts 와 같은 'superlite.state'. 모바일 셸은 다른 키(host.ts 가 configureWorkspaceStore) — 같은 오리진의
+ *  데스크톱 웹과 root 가 겹쳐도 서로 덮어쓰지 않게 (모바일은 그룹 하나뿐이라 데스크톱 배치를 잃는다) */
+let webKey = WEB_KEY;
+export function configureWorkspaceStore(key: string): void {
+  webKey = key;
+}
 
 export type StoreKind = 'app' | 'web' | 'mock';
 
@@ -116,7 +122,7 @@ type WebState = { version: number; workspaces?: Record<string, WorkspaceState> }
 
 function loadWebAll(): WebState {
   try {
-    const p = JSON.parse(localStorage.getItem(WEB_KEY) ?? '') as WebState;
+    const p = JSON.parse(localStorage.getItem(webKey) ?? '') as WebState;
     if (p.version === 2) return p;
   } catch {
     // 없음·파싱 실패
@@ -153,7 +159,7 @@ function persist(kind: StoreKind, id: string, root: string, s: SubSnapshot | nul
   if (kind === 'web' && s) {
     const all = loadWebAll();
     all.workspaces = { ...all.workspaces, [root]: s };
-    localStorage.setItem(WEB_KEY, JSON.stringify(all));
+    localStorage.setItem(webKey, JSON.stringify(all));
   }
   return Promise.resolve();
 }

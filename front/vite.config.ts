@@ -16,6 +16,8 @@ const channelPlugin = {
 
 export default defineConfig({
   plugins: [vue(), channelPlugin],
+  // 진입 둘 — index.html(데스크톱)·mobile.html(모바일 셸, ticket mobile-shell). relay 가 /mobile 을 mobile.html 로 서빙한다
+  build: { rollupOptions: { input: { main: 'index.html', mobile: 'mobile.html' } } },
   server: {
     host: true,
     port: 8793,

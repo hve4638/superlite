@@ -65,6 +65,10 @@ struct Session {
     sink: Sink,
     /// None = 연결이 붙어 있다. Some(시각) 부터 세션 grace 를 재고 넘기면 회수.
     detached_at: Mutex<Option<Instant>>,
+    /// 이 세션의 detach 유예 (와이어 v26) — attach params.grace(초)가 있으면 그 값, 없으면 데몬 기본
+    /// (SUPERLITE_SESSION_GRACE_SECS, 300). 재접속 attach 마다 갱신 — 폰(웹 bin)은 화면 잠금이 곧
+    /// 끊김이라 시간 단위 유예가 필요하고, 데스크톱 앱은 300초 그대로 (ticket web-remote-access)
+    grace: Mutex<Duration>,
     /// 프론트 응답 대기 중인 요청자 요청 (와이어 v9)
     pending: front::Pending,
     /// 빠른 열기 파일 목록 캐시 (와이어 v12) — 세션 수명이라 재접속 뒤 첫 Ctrl+P 가 다시 걷지 않는다
@@ -73,10 +77,11 @@ struct Session {
 
 type Sessions = Arc<Mutex<HashMap<String, Arc<Session>>>>;
 
-/// detach 후 grace 를 넘긴 세션 회수 — 터미널 kill 후 맵에서 제거.
-fn reap_sessions(sessions: &Sessions, grace: Duration) {
+/// detach 후 그 세션의 grace 를 넘긴 세션 회수 — 터미널 kill 후 맵에서 제거.
+fn reap_sessions(sessions: &Sessions) {
     let mut dead = Vec::new();
     sessions.lock().unwrap().retain(|_, s| {
+        let grace = *s.grace.lock().unwrap();
         let expired = s.detached_at.lock().unwrap().is_some_and(|t| t.elapsed() >= grace);
         if expired {
             dead.push(s.clone());
@@ -300,18 +305,19 @@ async fn main() {
         })
     };
 
-    // 세션 reaper — detach 된 세션의 터미널을 세션 grace 뒤 회수.
+    // 세션 기본 grace — attach 가 grace 를 주지 않은 세션(데스크톱 앱)의 유예. 웹 bin 은 attach 에 실어 온다
+    let session_grace: u64 = std::env::var("SUPERLITE_SESSION_GRACE_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(300);
+    // 세션 reaper — detach 된 세션의 터미널을 그 세션의 grace 뒤 회수.
     // 데몬 자체가 유휴 종료하면 그때 함께 죽는다 (백엔드 제어 연결이 있는 한 안 죽는다)
     {
         let sessions = sessions.clone();
-        let session_grace: u64 = std::env::var("SUPERLITE_SESSION_GRACE_SECS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(300);
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(5)).await;
-                reap_sessions(&sessions, Duration::from_secs(session_grace));
+                reap_sessions(&sessions);
             }
         });
     }
@@ -358,7 +364,7 @@ async fn main() {
                     // 감소는 drop guard 로 — handle_conn 이 panic 하면 이 뒤 코드는 실행되지 않아
                     // 카운터가 새고, 유휴 종료(연결 0 판정)가 영구히 막힌다
                     let _count = ConnCount(conns);
-                    handle_conn(stream, sessions).await;
+                    handle_conn(stream, sessions, Duration::from_secs(session_grace)).await;
                 });
             }
         });
@@ -604,6 +610,7 @@ fn attach_session(
     sessions: &Sessions,
     id: &str,
     root: &Path,
+    grace: Duration,
     tx: &UnboundedSender<String>,
 ) -> Result<(Arc<Session>, bool), String> {
     let mut map = sessions.lock().unwrap();
@@ -625,20 +632,22 @@ fn attach_session(
         //      락을 잡으면, 오래 잡히는 terms 경로(kill 대기 등)가 전역 attach 를 막는다.
         //      호출자가 맵 락을 놓은 뒤 리셋한다.
         *s.detached_at.lock().unwrap() = None;
+        *s.grace.lock().unwrap() = grace;
         return Ok((s.clone(), true));
     }
-    let s = Arc::new(new_session(Some(id.to_string()), root.to_path_buf(), tx));
+    let s = Arc::new(new_session(Some(id.to_string()), root.to_path_buf(), grace, tx));
     map.insert(id.to_string(), s.clone());
     Ok((s, false))
 }
 
-fn new_session(id: Option<String>, root: PathBuf, tx: &UnboundedSender<String>) -> Session {
+fn new_session(id: Option<String>, root: PathBuf, grace: Duration, tx: &UnboundedSender<String>) -> Session {
     Session {
         id,
         root,
         terms: Terms::default(),
         sink: Arc::new(Mutex::new(SinkState::Attached(tx.clone()))),
         detached_at: Mutex::new(None),
+        grace: Mutex::new(grace),
         pending: front::Pending::default(),
         quick: req::QuickCache::default(),
     }
@@ -720,6 +729,7 @@ fn payload_frame(header: &serde_json::Value, body: &[u8]) -> Vec<u8> {
 async fn handle_conn(
     stream: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static,
     sessions: Sessions,
+    default_grace: Duration,
 ) {
     let (read_half, mut write_half) = tokio::io::split(stream);
     // WHY: 응답·터미널 이벤트가 여러 태스크/스레드에서 나오므로 단일 writer 태스크로 직렬화.
@@ -862,8 +872,11 @@ async fn handle_conn(
                     Ok(r) => {
                         // resumed — 재접속인데 false 면 세션이 이미 회수됐다는 뜻.
                         // 프론트가 죽은 터미널을 정리할 유일한 단서다
+                        // grace (와이어 v26): 이 세션의 detach 유예(초). 웹 bin(relay Fixed)이 실어 보낸다 —
+                        // 없으면 데몬 기본. 재접속마다 갱신되므로 같은 세션에 다른 클라이언트가 붙어도 마지막 값
+                        let grace = req["params"]["grace"].as_u64().map_or(default_grace, Duration::from_secs);
                         let (s, resumed) = match req["params"]["session"].as_str() {
-                            Some(sid) => match attach_session(&sessions, sid, &r, &tx) {
+                            Some(sid) => match attach_session(&sessions, sid, &r, grace, &tx) {
                                 Ok(pair) => {
                                     cleanup.named = true;
                                     pair
@@ -873,7 +886,7 @@ async fn handle_conn(
                                     break;
                                 }
                             },
-                            None => (Arc::new(new_session(None, r.clone(), &tx)), false),
+                            None => (Arc::new(new_session(None, r.clone(), grace, &tx)), false),
                         };
                         // terms (와이어 v22): 이 세션에 살아 있는 터미널 id — 같은 session id 로 새 프론트가
                         // 붙는 경우(창 새로고침·세션 탭 창 분리)에 프론트가 term id 카운터를 그 위로 올려,

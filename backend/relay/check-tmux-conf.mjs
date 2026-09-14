@@ -24,7 +24,7 @@ const env = {
   SUPERLITE_SOCK: join(dir, 'daemon.sock'),
   SUPERLITE_HTTP: '127.0.0.1:18788',
   SUPERLITE_GRACE_SECS: '2',
-  SUPERLITE_TOKEN: TOKEN,
+  SUPERLITE_PASSWORD: TOKEN,
   HOME: dir, // config_dir 격리 — 이 머신의 tmux.conf 를 건드리지 않는다
   XDG_CONFIG_HOME: join(dir, 'config'),
 };
@@ -32,12 +32,13 @@ const bin = fileURLToPath(new URL('../../target/debug/superlite-backend', import
 const backend = spawn(bin, [wsRoot], { env, stdio: 'ignore' });
 backend.on('error', () => {});
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const url = `http://127.0.0.1:18788/tmux-conf?tkn=${TOKEN}`;
+const url = 'http://127.0.0.1:18788/tmux-conf';
+const AUTH = { authorization: `Bearer ${TOKEN}` };
 const ORIGIN = 'http://tauri.localhost';
 
 try {
   for (let i = 0; ; i++) {
-    const ok = await fetch(`http://127.0.0.1:18788/version?tkn=${TOKEN}`).then((r) => r.ok, () => false);
+    const ok = await fetch('http://127.0.0.1:18788/version', { headers: AUTH }).then((r) => r.ok, () => false);
     if (ok) break;
     assert.ok(i < 50, '백엔드 기동 실패 — cargo build -p superlite-backend -p superlite-daemon 먼저');
     await sleep(100);
@@ -55,10 +56,10 @@ try {
 
   // 2) PUT → 파일 → GET 왕복 (교차 오리진 헤더 그대로)
   const body = 'set -g mouse on\n# check\n';
-  const put = await fetch(url, { method: 'PUT', headers: { origin: ORIGIN }, body });
+  const put = await fetch(url, { method: 'PUT', headers: { origin: ORIGIN, ...AUTH }, body });
   assert.strictEqual(put.status, 204, `PUT status ${put.status}`);
   assert.strictEqual(put.headers.get('access-control-allow-origin'), '*', 'PUT 응답 allow-origin');
-  const got = await fetch(url, { headers: { origin: ORIGIN } });
+  const got = await fetch(url, { headers: { origin: ORIGIN, ...AUTH } });
   assert.strictEqual(await got.text(), body, 'GET 이 PUT 본문을 돌려준다');
 
   // 3) 토큰 없는 PUT 은 여전히 403 — preflight 응답이 권한을 넓히지 않는다

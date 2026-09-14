@@ -1,0 +1,22 @@
+<!doctype html>
+<!-- 모바일 셸 진입 (ticket mobile-shell) — index.html(데스크톱)과 별개의 vite 진입. relay 가 /mobile 로 서빙한다.
+     WHY: main.ts 안의 동적 import 분기는 vite 8(rolldown)이 두 import 를 하나의 preload 로 합쳐 모바일 청크의 CSS 를
+     싣지 않았다 (2026-09-14 실측) — 진입 HTML 을 나누면 청크·CSS 가 각자 온전하다 -->
+<html lang="en" style="background-color: #1f1f1f">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content" />
+    <title>Superlite</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <!-- 홈 화면 설치(PWA) — 설치된 앱은 주소창 없이 standalone 으로 떠서 Fullscreen API 와 Chrome 의 "전체 화면을 종료하려면"
+         안내 말풍선이 필요 없다 (2026-09-15 사용자 불편). http 원격 IP 는 비보안 출처라 폰 Chrome 의
+         chrome://flags/#unsafely-treat-insecure-origin-as-secure 에 이 출처를 넣어야 설치가 뜬다 -->
+    <link rel="manifest" href="/mobile.webmanifest" />
+    <meta name="theme-color" content="#1f1f1f" />
+    <meta name="mobile-web-app-capable" content="yes" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/ui/mobile/mobile.ts"></script>
+  </body>
+</html>

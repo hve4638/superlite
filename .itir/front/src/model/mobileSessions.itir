@@ -1,0 +1,11 @@
+import { sessions } from './sessions'
+role: 모바일 셸의 열린 워크스페이스 기억 (ticket mobile-shell, 사용자 결정 2026-09-15) — 웹 세션 목록은 페이지 수명이라 새로고침이면 서버 기본 root 하나로 돌아가는데, 폰은 늘 같은 브라우저라 열어 둔 root 목록과 활성 root 를 localStorage 'superlite.mobile.sessions' 에 두고 host.ts 가 부팅 세션을 그것으로 만든다 (탭·터미널은 workspaceState 가 root 별로 되살린다). 빈 세션(root null)·root 미확정 부팅 세션('')은 싣지 않고, 실을 root 가 없으면 지난 기억을 지우지 않는다. 데스크톱 웹은 자동 복원이 없다(app-empty-session) — 모바일 진입(ui/mobile/mobile.ts)만 추적을 켠다
+
+export type MobileSessions
+
+export fn loadMobileSessions() {
+  role: 저장분 읽기 (version 1 아니면 null)
+}
+export fn trackMobileSessions() {
+  role: sessions.list 의 root 와 activeId 를 effect 로 따라가며 저장
+}

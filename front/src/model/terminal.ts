@@ -486,7 +486,7 @@ export const terminalState = viewOf(() => ctx().terminals.state);
 export const createTerminal = (at?: TerminalTabAt): TerminalInstance => ctx().terminals.createTerminal(at);
 export const toggleTerminal = (): void => ctx().terminals.toggleTerminal();
 export const disposeTerminal = (id: number): void => ctx().terminals.disposeTerminal(id);
-export const attachTerminal = (info: TerminalInfo, opts?: { newTab?: boolean }): TerminalInstance | null =>
+export const attachTerminal = (info: TerminalInfo, opts?: { newTab?: boolean; at?: TerminalTabAt }): TerminalInstance | null =>
   ctx().terminals.attachTerminal(info, opts);
 export const refreshTerminals = (): Promise<void> => ctx().terminals.refreshTerminals();
 export const requestKillTerminal = (id: number): void => ctx().terminals.requestKill(id);
