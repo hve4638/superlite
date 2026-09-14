@@ -150,6 +150,40 @@ export interface TerminalInfo {
   activity: number;
   created: number;
   command: string;
+  /** 활성 pane 의 현재 폴더 (와이어 v25) — 사라진 워크트리에 앉은 카드 대조(`superlite card close --cwd`). 삭제된 폴더는
+   *  proc cwd 규칙대로 ' (deleted)' 접미가 붙는다 */
+  cwd: string;
+  /** 카드로 만들 때 붙은 탭의 터미널 세션 id (와이어 v25, 세션 환경 SUPERLITE_TMUX_HOST) — 사이드바 목록이 같은 탭의 카드를
+   *  한 묶음으로 보이고, 목록에서 붙이면 그 탭의 카드로 연다. 배치 정보일 뿐 수명 관계는 없다. 없으면 null */
+  host: string | null;
+  /** 에이전트 마지막 상태 (와이어 v24) — 데몬 캐시에 있을 때만. 아무 탭도 안 붙은 세션의 사이드바 행도 같은 값을 본다 */
+  agent?: AgentStatus;
+}
+
+/** 에이전트 상태 어휘 (와이어 v24, ticket agent-hooks-status — cmux 와 같은 다섯). 단위는 탭이 아니라 tmux 세션 id:
+ *  에이전트는 tmux 세션에 살고 같은 세션을 여러 탭·창이 본다. unknown 은 프론트 전용(stale 강등) */
+export type AgentState = 'unknown' | 'running' | 'needsInput' | 'idle' | 'exited';
+
+/** 에이전트 훅 사건을 데몬이 정규화한 상태 — agent 는 종류(claude·codex…), detail 은 원본 훅 이름·도구·알림 종류·
+ *  메시지, at 은 데몬 시각(unix ms) */
+export interface AgentStatus {
+  agent: string;
+  state: AgentState;
+  detail: { hook?: string; tool?: string; type?: string; message?: string };
+  at: number;
+}
+
+/** 등록된 에이전트 하나 (listAgents 항목, 와이어 v23 — ticket superlite-agent-registry). id 는 tmux session id
+ *  (등록 단위이자 고유 식별자), session 은 그 tmux 세션 이름, root 는 워크스페이스(없으면 null), name·role·lane 은
+ *  등록 정보, parent 는 상위 에이전트의 tmux session id. 이름은 중복될 수 있다 — 표시는 `name ($3)` */
+export interface AgentInfo {
+  id: string;
+  session: string;
+  root: string | null;
+  name: string;
+  role: string | null;
+  lane: string | null;
+  parent: string | null;
 }
 
 /** 원격 접속 단계 (relay 의 connectStage 이벤트) — ssh: 원격 정보 조회(인증 포함) → helper: 헬퍼
@@ -252,7 +286,10 @@ export interface ThinBackend {
   gitPush(repo: string): Promise<void>;
   /** attach (와이어 v17): 새 셸 대신 기존 tmux 세션(TerminalInfo.id)에 붙는다 — 같은 세션을 여러
    *  탭·창이 동시에 볼 수 있다 */
-  createTerminal(cols: number, rows: number, attach?: string): TerminalSession;
+  /** cwd (와이어 v25): 새 셸의 작업 폴더 — 카드 생성(`superlite card new --cwd`)이 워크트리를 준다. 없으면 root.
+   *  없는 폴더는 spawn 실패(termData 사유 + termExit null). host (와이어 v25): 카드가 붙는 탭의 터미널 세션 id — 새 세션
+   *  환경에 남아 listTerminals 의 host 로 돌아온다 */
+  createTerminal(cols: number, rows: number, attach?: string, cwd?: string, host?: string): TerminalSession;
   /** 살아 있는 tmux 세션 목록 (와이어 v17, 옵셔널 — WsBackend 만). 기본은 이 워크스페이스 것, all 이면
    *  이 서버의 전부. plain·unsupported 데몬은 빈 배열 */
   listTerminals?(all?: boolean): Promise<TerminalInfo[]>;
@@ -263,8 +300,24 @@ export interface ThinBackend {
   applyTmuxConf?(content: string): Promise<string>;
   /** 터미널의 현재 작업 디렉토리 (와이어 v21, 옵셔널 — WsBackend 만). tmux 는 활성 pane 의 cwd, plain 은 root */
   termCwd?(term: number): Promise<TermCwd>;
+  /** 등록된 에이전트 전부 (와이어 v23, 옵셔널 — WsBackend 만). 이 데몬의 tmux 서버 전체 — 오케스트레이터와 워커는
+   *  다른 워크트리(root)에 산다. plain·unsupported 데몬은 에러 */
+  listAgents?(): Promise<AgentInfo[]>;
+  /** tmux 세션 id 단위 등록 (같은 세션은 덮어쓴다). 데몬이 세션 환경변수에 저장 — 세션이 죽으면 함께 사라진다.
+   *  parent 는 상위 에이전트의 tmux session id (이름 해석은 호출측 몫) */
+  registerAgent?(reg: { id: string; name: string; role?: string; lane?: string; parent?: string }): Promise<void>;
+  /** tmux 세션 활성 pane 의 화면 텍스트 (와이어 v25, 옵셔널 — WsBackend 만). 기본은 보이는 화면, lines 면 스크롤백 포함 마지막 lines 줄 */
+  captureTerminal?(id: string, lines?: number): Promise<string>;
+  /** tmux 세션 활성 pane 에 텍스트 입력 (와이어 v25) — 글자 그대로(send-keys -l), enter 면 Enter 키를 뒤따라 */
+  sendTerminal?(id: string, text: string, enter: boolean): Promise<void>;
   /** 데몬의 터미널 방식 구독 — attach 응답마다 (재접속 포함). error 는 plain 의 사유 */
   onTerminalMode?(cb: (mode: TerminalMode, error: string | null) => void): void;
+  /** 에이전트 상태 변경 구독 (와이어 v24 termAgent, 옵셔널 — WsBackend 만). 데몬이 attach 된 모든 세션에 방송하므로
+   *  이 세션이 열지 않은 tmux 세션의 것도 온다 — 구독자가 tmux 세션 id 로 탭·카드·사이드바 행에 사영한다 */
+  onTermAgent?(cb: (tmuxId: string, status: AgentStatus) => void): void;
+  /** 에이전트 훅 설치·제거 (와이어 v24, 옵셔널 — WsBackend 만) — 데몬 머신 홈의 에이전트 설정 파일(claude:
+   *  ~/.claude/settings.json)에 superlite 항목만 병합·제거. 원격 세션이면 원격 홈. 반환 path 는 그 파일 */
+  agentHooks?(agent: 'claude', action: 'install' | 'uninstall'): Promise<{ path: string; installed: boolean }>;
   /**
    * 기존 데몬 터미널을 이 연결의 핸들로 잡는다 (탭을 다른 창으로 옮기기, 옵셔널 — WsBackend 만).
    * term 만 주면 같은 세션이 이미 소유한 터미널(세션 탭 분리 — 같은 session id 재-attach)의

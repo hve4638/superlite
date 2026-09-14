@@ -5,6 +5,7 @@ import { confirm } from './dialog';
 import { errText, notify } from './notifications';
 import { EDITOR_ZOOM_MAX, EDITOR_ZOOM_MIN, EDITOR_ZOOM_STEP, editorView, loadWindowZoom, saveWindowZoom, setEditorZoom } from './editors';
 import type { CardSet, createEditors } from './editors';
+import { createAgentStatus } from './agent';
 
 export interface TerminalInstance {
   id: number;
@@ -14,6 +15,12 @@ export interface TerminalInstance {
   restoreBuffer?: string;
   /** 붙어 있는 tmux 세션 (와이어 v17 termTmux) — 없으면 plain 터미널 (탭 닫기가 곧 종료) */
   tmux?: { id: string; name: string };
+  /** tmux 세션 확정 대기 (ticket superlite-card-control) — termTmux 가 오면 {id,name}, plain 대체·spawn 실패면 reject.
+   *  `superlite card new` 가 새 카드의 세션 id 를 알아 등록·초기 명령을 넣는 데 쓴다 (onTmux 슬롯은 register 가 이미 차지) */
+  ready: Promise<{ id: string; name: string }>;
+  /** 바닥 신호 (ticket agent-hooks-status, model/agent) — 보이지 않는 동안 출력이 왔다 / BEL 이 왔다. 보거나 입력하면 지운다 */
+  activity?: boolean;
+  bell?: boolean;
 }
 
 /** 창 이동 핸드오프의 터미널 한 개 — term 은 백엔드(데몬) 쪽 id, buffer 는 xterm 직렬화.
@@ -83,6 +90,9 @@ export function createTerminals(backend: ThinBackend, editorsM: ReturnType<typeo
 
   editorsM.setTerminalCloser((term) => disposeTerminal(term));
 
+  // 에이전트 상태·바닥 신호 (ticket agent-hooks-status) — tmux 세션 id 단위, 표시는 배지뿐
+  const agent = createAgentStatus(backend, editorsM, terminals, () => closeRequested);
+
   // 터미널 탭 포커스 이력 (최근이 앞, 인스턴스 id) — 활성 탭이 터미널이 될 때마다 앞으로 옮긴다.
   // "최근" 은 연 시각이 아니라 마지막으로 활성이 된 시각 (VS Code 와 같다, ticket terminal-toggle-keys)
   const focusOrder: number[] = [];
@@ -93,8 +103,20 @@ export function createTerminals(backend: ThinBackend, editorsM: ReturnType<typeo
     focusOrder.unshift(t.term);
   });
 
-  function createTerminal(at?: TerminalTabAt): TerminalInstance {
-    return register(backend.createTerminal(80, 24), 'bash', undefined, at);
+  /** opts.cwd (와이어 v25): 새 셸의 작업 폴더 — 카드 생성 동사가 워크트리를 준다. 없으면 root.
+   *  카드(at.host)면 그 탭의 터미널 세션 id 를 host 로 넘긴다 — 새 세션 환경에 남아 사이드바 목록이 같은 탭의 카드로 묶는다.
+   *  탭이 터미널이 아니면(파일 탭의 카드) 묶을 세션이 없어 넘기지 않는다 */
+  function createTerminal(at?: TerminalTabAt, opts: { cwd?: string } = {}): TerminalInstance {
+    const host = at?.host !== undefined ? tabTmuxOf(at.host) : undefined;
+    return register(backend.createTerminal(80, 24, undefined, opts.cwd, host), 'bash', undefined, at);
+  }
+  /** 탭 id 의 터미널 세션 id — 터미널 탭이 아니거나 tmux 가 아니면 undefined */
+  function tabTmuxOf(tabId: string): string | undefined {
+    for (const g of editorsM.editors.groups) {
+      const t = g.tabs.find((x) => x.id === tabId);
+      if (t) return t.kind === 'terminal' ? terminals.list.find((x) => x.id === t.term)?.tmux?.id : undefined;
+    }
+    return undefined;
   }
 
   /** Ctrl+` — 터미널 탭이 없으면 생성, 있으면 창 전체에서 가장 최근에 활성이었던 터미널 탭으로 (사용자 결정
@@ -119,14 +141,46 @@ export function createTerminals(backend: ThinBackend, editorsM: ReturnType<typeo
         return open;
       }
     }
-    return register(backend.createTerminal(80, 24, info.id), info.name, undefined, opts.at);
+    const at = opts.at ?? (opts.newTab ? undefined : cardPlaceFor(info));
+    return register(backend.createTerminal(80, 24, info.id), info.name, undefined, at);
+  }
+
+  /** 사이드바에서 자리 없이 붙일 때 — host(와이어 v25)가 있으면 그 탭의 카드로 연다. host 가 이 창에 없고 살아 있으면
+   *  host 를 탭으로 먼저 열고, host 세션이 없으면 같은 host 의 카드가 이미 앉은 탭으로 모은다. 어디도 없으면 탭으로.
+   *  배치일 뿐 수명 관계는 없다 (ticket superlite-card-control, 사용자 결정 2026-09-14) */
+  function cardPlaceFor(info: TerminalInfo): TerminalTabAt | undefined {
+    if (!info.host) return undefined;
+    const seat = (id: number): TerminalTabAt | undefined => {
+      const h = hostTabFor(id);
+      return h ? { groupId: h.groupId, host: h.tabId } : undefined;
+    };
+    const openInst = (tmuxId: string) => terminals.list.find((t) => t.tmux?.id === tmuxId);
+    const hostInst = openInst(info.host);
+    if (hostInst) return seat(hostInst.id);
+    const hostInfo = state.list.find((t) => t.id === info.host);
+    if (hostInfo) {
+      const inst = attachTerminal(hostInfo, { at: {} });
+      return inst ? seat(inst.id) : undefined;
+    }
+    for (const sib of state.list) {
+      if (sib.id === info.id || sib.host !== info.host) continue;
+      const inst = openInst(sib.id);
+      if (inst) return seat(inst.id);
+    }
+    return undefined;
   }
 
   /** 목록 등록 + 탭 열기 — 생성과 인수(adopt)가 공유한다 */
   function register(session: TerminalSession, title: string, restoreBuffer?: string, at?: TerminalTabAt, tmux?: TerminalInstance['tmux']): TerminalInstance {
-    const inst: TerminalInstance = { id: nextId++, title, session };
+    let ready!: { resolve: (v: { id: string; name: string }) => void; reject: (e: Error) => void };
+    const readyP = new Promise<{ id: string; name: string }>((resolve, reject) => { ready = { resolve, reject }; });
+    readyP.catch(() => {}); // 기다리는 이가 없을 때(보통 터미널) unhandled rejection 이 되지 않게
+    const inst: TerminalInstance = { id: nextId++, title, session, ready: readyP };
     if (restoreBuffer) inst.restoreBuffer = restoreBuffer;
-    if (tmux) inst.tmux = tmux;
+    if (tmux) {
+      inst.tmux = tmux;
+      ready.resolve(tmux);
+    }
     // tmux 세션 정보(와이어 v17) — 탭 제목이 세션 이름이 되고 사이드바가 "열려 있음" 을 대조한다.
     // 실패(null)면 이 터미널은 plain 으로 떴다 — 배지에 사유를 올린다 (데몬 방식은 tmux 인 채로)
     session.onTmux?.((info, error) => {
@@ -139,9 +193,11 @@ export function createTerminals(backend: ThinBackend, editorsM: ReturnType<typeo
         // tmux 가 다시 되면 이전 실패 배지를 내린다 — 종전엔 onTerminalMode(재접속)만 비워 세션 끝까지 남았다
         state.error = null;
         void refreshTerminals();
+        ready.resolve(info);
       } else {
         state.error = error ?? 'tmux 실패';
         notify('warning', `tmux 를 쓸 수 없어 일반 터미널로 엽니다: ${state.error}`);
+        ready.reject(new Error(state.error));
       }
     });
     // 셸이 스스로 종료(exit·crash)하면 탭도 닫는다 (VS Code 기본 동작). 실제 종료 코드가
@@ -151,6 +207,7 @@ export function createTerminals(backend: ThinBackend, editorsM: ReturnType<typeo
     //      없고, 패널 열기→자동 생성→즉시 닫힘 루프로 패널 전체가 고착된다.
     //      그 탭만 유지해 에러를 보이고, 정리는 kill 버튼 몫
     session.onExit((code) => {
+      ready.reject(new Error(code === null ? '터미널 생성 실패' : `셸 종료 (${code})`));
       if (code !== null) disposeTerminal(inst.id);
     });
     terminals.list.push(inst);
@@ -234,6 +291,43 @@ export function createTerminals(backend: ThinBackend, editorsM: ReturnType<typeo
     }
   }
 
+  /** 인스턴스가 앉은 탭 — 카드면 붙은 호스트 탭, 탭이면 자기 탭 (ticket superlite-card-control: `card new` 가 요청자
+   *  터미널과 같은 탭에 카드를 붙인다). 이 창에 없으면 null */
+  function hostTabFor(id: number): { groupId: number; tabId: string; activeCard: string | null } | null {
+    for (const g of editorsM.editors.groups) {
+      for (const t of g.tabs) {
+        const isSelf = t.kind === 'terminal' && t.term === id;
+        if (isSelf || t.cards?.tabs.some((c) => c.kind === 'terminal' && c.term === id)) {
+          return { groupId: g.id, tabId: t.id, activeCard: t.cards?.activeTabId ?? null };
+        }
+      }
+    }
+    return null;
+  }
+
+  // ---- 닫기 요청 (ticket superlite-card-control, 사용자 결정 2026-09-13·14): `superlite card close` 는 즉시 종료가 아니라
+  //      요청이다 — 세션 이름에 [D] 를 붙이고(옛 wtree post-destroy 훅의 window 표시와 같다) 요청을 기록한다. 그 카드가
+  //      보이면 TerminalView 가 카드 영역 오른쪽 아래에 작은 상자(닫기 / 거절 / x)를 그린다 — 창 전체 모달이 아니다.
+  //      닫기면 tmux 세션 종료, 거절이면 기록만 지우고 [D] 는 남긴다. 이 창의 상태라 새로고침이면 잊는다
+  const closeRequested = reactive(new Map<string, string>()); // tmux id → 사유
+  async function requestClose(tmuxId: string, reason: string): Promise<void> {
+    const name = state.list.find((t) => t.id === tmuxId)?.name ?? terminals.list.find((t) => t.tmux?.id === tmuxId)?.title ?? tmuxId;
+    if (!name.startsWith('[D]')) await renameListed(tmuxId, `[D]${name}`);
+    closeRequested.set(tmuxId, reason);
+  }
+  /** 인스턴스(id)에 걸린 닫기 요청 사유 — 없으면 null. TerminalView 가 상자를 그릴지 판정한다 */
+  function closeRequestOf(id: number): string | null {
+    const tmuxId = terminals.list.find((t) => t.id === id)?.tmux?.id;
+    return tmuxId === undefined ? null : closeRequested.get(tmuxId) ?? null;
+  }
+  /** 상자의 답 — close 면 세션 종료, 아니면(거절·x) 기록만 지운다 */
+  async function answerClose(id: number, close: boolean): Promise<void> {
+    const tmuxId = terminals.list.find((t) => t.id === id)?.tmux?.id;
+    if (tmuxId === undefined) return;
+    closeRequested.delete(tmuxId);
+    if (close) await killListed(tmuxId);
+  }
+
   /** 탭 닫기 = tmux 클라이언트 종료 = detach — 세션은 서버에 남는다 (plain 이면 셸이 죽는다) */
   function disposeTerminal(id: number): void {
     const idx = terminals.list.findIndex((t) => t.id === id);
@@ -253,6 +347,7 @@ export function createTerminals(backend: ThinBackend, editorsM: ReturnType<typeo
       console.warn(`listTerminals 실패: ${errText(e)}`);
       return [];
     });
+    agent.reconcile(state.list);
   }
 
   /** 복원용 목록 조회 (workspaceState) — 조회가 실패(예외)하면 500ms·1s·2s·4s 백오프로 재시도한다 (약 8초 —
@@ -266,6 +361,7 @@ export function createTerminals(backend: ThinBackend, editorsM: ReturnType<typeo
     for (let i = 0; ; i++) {
       try {
         state.list = await backend.listTerminals();
+        agent.reconcile(state.list);
         return state.list;
       } catch (e) {
         if (i >= backoff.length) throw e;
@@ -350,8 +446,8 @@ export function createTerminals(backend: ThinBackend, editorsM: ReturnType<typeo
   });
 
   return {
-    terminals, state, createTerminal, toggleTerminal, attachTerminal, disposeTerminal, snapshot, releaseTerminal, adoptTerminals,
-    refreshTerminals, listTerminalsFor, requestKill, killListed, renameListed,
+    terminals, state, agent, createTerminal, toggleTerminal, attachTerminal, disposeTerminal, snapshot, releaseTerminal, adoptTerminals,
+    refreshTerminals, listTerminalsFor, requestKill, killListed, renameListed, hostTabFor, requestClose, closeRequestOf, answerClose,
   };
 }
 
@@ -397,6 +493,8 @@ export const requestKillTerminal = (id: number): void => ctx().terminals.request
 export const killListedTerminal = (tmuxId: string): Promise<void> => ctx().terminals.killListed(tmuxId);
 export const renameListedTerminal = (tmuxId: string, name: string): Promise<void> =>
   ctx().terminals.renameListed(tmuxId, name);
+export const closeRequestOf = (id: number): string | null => ctx().terminals.closeRequestOf(id);
+export const answerCloseRequest = (id: number, close: boolean): Promise<void> => ctx().terminals.answerClose(id, close);
 
 // ---- IME 진단 (ticket term-ime-toggle-stuck, 임시) — Windows 실기에서 터미널 한/영 키가 먹지 않는 원인을 가르기 위해
 //      terminalHost 가 한/영 keydown 때 활성 요소·textarea 위치·버퍼 상태와 native 포커스·IME 열림 상태를 한 줄씩 남긴다.

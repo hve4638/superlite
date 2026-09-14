@@ -1,7 +1,7 @@
 import { EmptyBackend } from '../backend/empty';
 import { MockBackend } from '../backend/mock';
 import { WsBackend } from '../backend/ws';
-import type { ThinBackend } from '../backend/types';
+import type { AgentInfo, ThinBackend } from '../backend/types';
 import { boot } from './boot';
 import { ctx, viewOf } from './ctx';
 import { daemonClean } from './daemon';
@@ -96,8 +96,8 @@ if (injected) {
  * 않고 params 에 {args: 나머지 인자, cwd: 셸의 작업 폴더} 를 실어 보낸다 — 동사의 이름·인자·
  * 확인 여부는 전부 여기서 정한다. 내장 동사: notify(알림)·open(경로 열기: 파일은 그 세션 편집기,
  * 폴더는 폴더 열기)·download(Download 뷰 대기열에 넣고 바로 'queued' — `--wait` 면 사용자 확인·전송이
- * 끝나야 돌아간다)·credential(git helper 중계). 새 내장 동사는 case 를 더한다; 플러그인이
- * 동사를 등록하는 방식은 ticket plugin-architecture 의 결정을 따른다. 결과는 요청자에게 돌아가고
+ * 끝나야 돌아간다)·credential(git helper 중계)·agent register|list|whoami(에이전트 등록부 — agentVerb).
+ * 새 내장 동사는 case 를 더한다; 플러그인이 동사를 등록하는 방식은 ticket plugin-architecture 의 결정을 따른다. 결과는 요청자에게 돌아가고
  * throw 는 에러로 돌아간다. 요청이 온 세션 탭으로 전환한다 (VS Code 가 요청한 창을 앞으로
  * 가져오는 것과 같은 의미 — OS 수준 창 포커스는 없음). 상대 경로는 cwd 기준 (에이전트는
  * `superlite open src/a.ts` 처럼 친다)
@@ -159,9 +159,228 @@ async function handleRequest(
     // password} 또는 null, store/erase 는 null
     case 'credential':
       return credential(p as unknown as CredentialRequest);
+    case 'agent':
+      return agentVerb(ctx, p);
+    case 'card':
+      return cardVerb(ctx, p);
     default:
       throw new Error(`미지 요청: ${method}`);
   }
+}
+
+const AGENT_USAGE =
+  'Usage: superlite agent register <name> [--role <role>] [--lane <lane>] [--parent <name|$id>] | list | whoami';
+
+/**
+ * 에이전트 등록부 동사 (ticket superlite-agent-registry, 와이어 v23). 등록 단위는 요청자의 tmux 세션 id —
+ * 데몬이 request params 에 동봉한 tmux. 저장은 데몬의 tmux 세션 환경변수라 세션과 함께 사라진다 (사용자 결정
+ * 2026-09-13). 이름은 중복될 수 있어 표시는 늘 `이름 ($id)` 이고, --parent 는 이름 또는 `$id` — 이름이 둘 이상에
+ * 맞으면 에러로 `$id` 지목을 요구한다. list 는 서버 전체(모든 워크트리), whoami 는 자기 세션의 등록 한 줄.
+ * plain·Windows 터미널(tmux 없음)은 register·whoami 가 에러 — 등록 단위가 없다. 하위 워커 자동 등록
+ * (superlite-card-control)은 같은 registerAgent 를 새 세션의 id 와 요청자의 id(parent)로 부르면 된다
+ */
+async function agentVerb(ctx: SessionCtx, p: Record<string, unknown>): Promise<unknown> {
+  const { positional, opts } = argOpts(p);
+  const sub = positional[0];
+  const be = ctx.backend;
+  if (!be.listAgents || !be.registerAgent) throw new Error('이 세션의 백엔드는 에이전트 등록을 지원하지 않는다');
+  const me = typeof p.tmux === 'string' ? p.tmux : null;
+  switch (sub) {
+    case 'list': {
+      const list = await be.listAgents();
+      return list.length === 0 ? '(등록된 에이전트 없음)' : list.map((a) => agentLine(a, list)).join('\n');
+    }
+    case 'whoami': {
+      if (me === null) throw new Error('tmux 세션 밖 — 등록 단위가 tmux 세션이라 plain·Windows 터미널에서는 쓸 수 없다');
+      const list = await be.listAgents();
+      const self = list.find((a) => a.id === me);
+      if (!self) throw new Error(`미등록 (tmux 세션 ${me}) — superlite agent register <이름> 으로 등록한다`);
+      return agentLine(self, list);
+    }
+    case 'register': {
+      const name = positional[1];
+      if (!name) throw new Error(AGENT_USAGE);
+      if (me === null) throw new Error('tmux 세션 밖 — 등록 단위가 tmux 세션이라 plain·Windows 터미널에서는 쓸 수 없다');
+      let parent: string | undefined;
+      if (opts.parent !== undefined) {
+        parent = resolveAgent(await be.listAgents(), opts.parent).id;
+        if (parent === me) throw new Error('자기 자신을 parent 로 둘 수 없다');
+      }
+      await be.registerAgent({ id: me, name, role: opts.role, lane: opts.lane, parent });
+      return `registered ${name} (${me})`;
+    }
+    default:
+      throw new Error(AGENT_USAGE);
+  }
+}
+
+// 한 줄에 다 넣으면 좁은 터미널에서 접혀 읽을 수 없다 (사용자 지적 2026-09-14) — 하위 동사마다 한 줄, 문구는 영어
+const CARD_USAGE = [
+  'Usage:',
+  '  superlite card new [--cwd <dir>] [--name <name>] [--role <role>] [--lane <lane>] [-- <command...>]',
+  '  superlite card read <$id|name> [--lines N]',
+  '  superlite card send <$id|name> [--no-enter] -- <text...>',
+  '  superlite card close <$id|name...>',
+  '  superlite card close --cwd <dir>',
+].join('\n');
+
+/**
+ * 카드 제어 동사 (ticket superlite-card-control, 와이어 v25). 카드의 식별자는 tmux 세션 id(`$N`, 등록부와 같은 단위) —
+ * 대상은 늘 명시한다 ("활성 터미널" 같은 암묵 대상 없음). new 는 요청자 터미널이 앉은 탭의 카드로 새 셸을 띄우고(cwd 는
+ * --cwd, 없으면 요청자 셸의 cwd), 새 세션 id 로 registerAgent(parent = 요청자, lane 은 요청자 것 상속, role 기본
+ * worker)한 뒤 `--` 뒤의 인자를 셸 인용해 한 줄로 넣는다 — 옛 wtree post-create 훅의 tmux new-window + send-keys
+ * 와 같은 동작. 뒤에서 만든다 — 요청자 탭이 보던 카드를 되돌려 화면을 빼앗지 않는다 (훅의 -d 와 같다). 출력은 `$N`.
+ * read 는 화면(기본)·스크롤백(--lines N), send 는 글자 그대로 + Enter(--no-enter 면 생략), close 는 즉시 종료가 아니라
+ * 닫기 요청(terminals.requestClose — [D] 표시 + 사용자가 그 카드로 가면 닫기/유지 확인, 사용자 결정 2026-09-13).
+ * close --cwd <폴더> 는 그 폴더(사라진 워크트리)에 앉은 이 워크스페이스의 카드 전부 — post-destroy 훅이 쓴다
+ */
+async function cardVerb(ctx: SessionCtx, p: Record<string, unknown>): Promise<unknown> {
+  const be = ctx.backend;
+  if (!be.listTerminals || !be.captureTerminal || !be.sendTerminal || !be.listAgents || !be.registerAgent) {
+    throw new Error('이 세션의 백엔드는 카드 제어를 지원하지 않는다');
+  }
+  const rawArgs = (Array.isArray(p.args) ? p.args : []).filter((a): a is string => typeof a === 'string');
+  const dash = rawArgs.indexOf('--');
+  const head = dash === -1 ? rawArgs : rawArgs.slice(0, dash);
+  const tail = dash === -1 ? [] : rawArgs.slice(dash + 1);
+  const { positional, opts } = argOpts({ args: head });
+  const sub = positional[0];
+  const me = typeof p.tmux === 'string' ? p.tmux : null;
+  const cwd = typeof p.cwd === 'string' ? p.cwd : '';
+  switch (sub) {
+    case 'new': {
+      if (me === null) throw new Error('tmux 세션 밖 — 카드 단위가 tmux 세션이라 plain·Windows 터미널에서는 쓸 수 없다');
+      const dir = opts.cwd !== undefined ? resolveAgainst(cwd, opts.cwd) : cwd;
+      const mine = ctx.terminals.terminals.list.find((t) => t.tmux?.id === me);
+      const place = mine ? ctx.terminals.hostTabFor(mine.id) : null;
+      const inst = ctx.terminals.createTerminal(place ? { host: place.tabId, groupId: place.groupId } : undefined, { cwd: dir });
+      // 뒤에서 — 요청자 탭이 보던 카드(또는 탭 자신)를 되돌린다
+      if (place) ctx.editors.setActiveCard(place.groupId, place.tabId, place.activeCard);
+      const created = await inst.ready;
+      if (opts.name !== undefined) await ctx.terminals.renameListed(created.id, opts.name);
+      const agents = await be.listAgents();
+      const parent = agents.find((a) => a.id === me);
+      await be.registerAgent({ id: created.id, name: opts.name ?? created.name, role: opts.role ?? 'worker', lane: opts.lane ?? parent?.lane ?? undefined, parent: me });
+      if (tail.length > 0) await be.sendTerminal(created.id, tail.map(shellQuote).join(' '), true);
+      return created.id;
+    }
+    case 'read': {
+      const target = positional[1];
+      if (!target) throw new Error(CARD_USAGE);
+      const id = await resolveCard(ctx, target);
+      const lines = opts.lines !== undefined ? Number(opts.lines) : undefined;
+      if (lines !== undefined && !(lines > 0)) throw new Error('--lines 는 양의 정수');
+      return await be.captureTerminal(id, lines);
+    }
+    case 'send': {
+      const target = positional[1];
+      if (!target) throw new Error(CARD_USAGE);
+      const id = await resolveCard(ctx, target);
+      const text = (tail.length > 0 ? tail : positional.slice(2)).join(' ');
+      await be.sendTerminal(id, text, opts['no-enter'] === undefined);
+      return null;
+    }
+    case 'close': {
+      let ids: string[];
+      if (opts.cwd !== undefined) {
+        const dead = resolveAgainst(cwd, opts.cwd);
+        const list = await be.listTerminals();
+        ids = list.filter((t) => onDeadPath(t.cwd, dead)).map((t) => t.id);
+        if (ids.length === 0) return `(그 폴더에 앉은 카드 없음: ${dead})`;
+      } else {
+        if (positional.length < 2) throw new Error(CARD_USAGE);
+        ids = await Promise.all(positional.slice(1).map((t) => resolveCard(ctx, t)));
+      }
+      const reason = opts.cwd !== undefined ? `워크트리가 삭제되었습니다: ${opts.cwd}` : '에이전트가 닫기를 요청했습니다';
+      for (const id of ids) await ctx.terminals.requestClose(id, reason);
+      return ids.map((id) => `close requested ${id}`).join('\n');
+    }
+    default:
+      throw new Error(CARD_USAGE);
+  }
+}
+
+/** 카드 대상 — `$id`(맨 숫자도 id — 셸이 `$154` 를 `$1`+`54` 로 펼치므로 따옴표 없이 `154` 로 칠 수 있게), 아니면 등록
+ *  이름(resolveAgent — 모호하면 에러), 그것도 없으면 tmux 세션 이름 (서버 전체) */
+async function resolveCard(ctx: SessionCtx, ref: string): Promise<string> {
+  const be = ctx.backend;
+  const list = await be.listTerminals!(true);
+  if (ref.startsWith('$') || /^\d+$/.test(ref)) {
+    const id = ref.startsWith('$') ? ref : `$${ref}`;
+    if (!list.some((t) => t.id === id)) throw new Error(`없는 카드: ${id}`);
+    return id;
+  }
+  const agents = await be.listAgents!();
+  if (agents.some((a) => a.name === ref)) return resolveAgent(agents, ref).id;
+  const byName = list.filter((t) => t.name === ref);
+  if (byName.length === 1) return byName[0].id;
+  if (byName.length === 0) throw new Error(`없는 카드: ${ref}`);
+  throw new Error(`모호한 이름 ${ref}: ${byName.map((t) => t.id).join(', ')} — $id 로 지목한다`);
+}
+
+/** wtree post-destroy 훅의 on_dead_path 와 같은 규칙 — 그 경로 자체·하위, 삭제된 cwd 의 ' (deleted)' 접미 */
+function onDeadPath(cwd: string, dead: string): boolean {
+  const base = cwd.endsWith(' (deleted)') ? cwd.slice(0, -' (deleted)'.length) : cwd;
+  return base === dead || base.startsWith(`${dead}/`);
+}
+
+/** 상대 경로를 요청자 cwd 기준으로 (Windows 드라이브 경로 포함) */
+function resolveAgainst(cwd: string, p: string): string {
+  if (p.startsWith('/') || /^[A-Za-z]:[\\/]/.test(p)) return p;
+  return `${cwd.replace(/\/$/, '')}/${p}`;
+}
+
+/** 초기 명령 인자 하나를 대화형 셸이 같은 argv 로 되읽게 인용 — 안전 문자만이면 그대로, 아니면 작은따옴표
+ *  (내부 ' 는 '\'' — 옛 post-create 훅과 같은 규칙) */
+function shellQuote(a: string): string {
+  return /^[A-Za-z0-9_\-./=:@%+,]+$/.test(a) ? a : `'${a.replace(/'/g, "'\\''")}'`;
+}
+
+/** 등록 한 줄 — `이름 ($id)` 뒤에 있는 필드만 `key=값`, parent 는 목록에서 이름을 찾아 `이름 ($id)` */
+function agentLine(a: AgentInfo, all: AgentInfo[]): string {
+  const cols = [`${a.name} (${a.id})`];
+  if (a.role) cols.push(`role=${a.role}`);
+  if (a.lane) cols.push(`lane=${a.lane}`);
+  if (a.parent) {
+    const pa = all.find((x) => x.id === a.parent);
+    cols.push(`parent=${pa ? `${pa.name} (${pa.id})` : a.parent}`);
+  }
+  cols.push(`session=${a.session}`);
+  if (a.root) cols.push(`root=${a.root}`);
+  return cols.join('  ');
+}
+
+/** 이름 또는 `$id` 로 에이전트 하나를 고른다 — 없으면 에러, 이름이 여럿에 맞으면 후보를 나열하며 `$id` 지목을 요구 */
+function resolveAgent(list: AgentInfo[], ref: string): AgentInfo {
+  if (ref.startsWith('$')) {
+    const hit = list.find((a) => a.id === ref);
+    if (!hit) throw new Error(`없는 에이전트: ${ref}`);
+    return hit;
+  }
+  const hits = list.filter((a) => a.name === ref);
+  if (hits.length === 1) return hits[0];
+  if (hits.length === 0) throw new Error(`없는 에이전트: ${ref}`);
+  throw new Error(`모호한 이름 ${ref}: ${hits.map((a) => `${a.name} (${a.id})`).join(', ')} — $id 로 지목한다`);
+}
+
+/** 심 params 의 args 를 위치 인자와 `--키 값` 옵션으로 나눈다 (값 없는 `--키` 는 'true') */
+function argOpts(p: Record<string, unknown>): { positional: string[]; opts: Record<string, string> } {
+  const args = (Array.isArray(p.args) ? p.args : []).filter((a): a is string => typeof a === 'string');
+  const positional: string[] = [];
+  const opts: Record<string, string> = {};
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (!a.startsWith('--')) {
+      positional.push(a);
+      continue;
+    }
+    const next = args[i + 1];
+    if (next !== undefined && !next.startsWith('--')) {
+      opts[a.slice(2)] = next;
+      i++;
+    } else opts[a.slice(2)] = 'true';
+  }
+  return { positional, opts };
 }
 
 /** 심 params 의 `--플래그` 인자 집합 */

@@ -21,7 +21,8 @@
 //!
 //! 데몬→프론트 요청(와이어 v9): 소켓 요청자의 frontRequest 를 세션 프론트에 request 이벤트로
 //! 전달하고 requestReply 를 되돌린다 (front 모듈). PTY 는 SUPERLITE_SOCK·SUPERLITE_SESSION
-//! 환경변수로 요청자가 이 데몬·세션을 찾는 좌표를 받는다.
+//! 환경변수로 요청자가 이 데몬·세션을 찾는 좌표를 받는다. 요청자의 tmux 세션 id 는 request 의
+//! params.tmux 로 동봉한다 (와이어 v23 — 에이전트 등록 단위, ticket superlite-agent-registry).
 //!
 //! 모듈: req(RPC 요청 처리) · term(PTY) · watch(파일 감시) · front(프론트 요청 중계).
 //! 이 파일은 수명과 연결만 안다.
@@ -44,6 +45,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
+mod agent;
 mod clean;
 mod front;
 mod req;
@@ -90,6 +92,9 @@ fn reap_sessions(sessions: &Sessions, grace: Duration) {
 
 /// tmux 관리 메서드 (와이어 v17) — listTerminals{all?}·killTerminal{id}·renameTerminal{id,name}·
 /// tmuxConf{content}. attach 전(root 없음)의 listTerminals 는 all 로만 동작한다.
+/// listAgents·agentRegister{id,name,role?,lane?,parent?}(와이어 v23)는 에이전트 등록부 — 세션 환경변수
+/// (tmux::ENV_AGENT)에 저장·조회, 서버 전체 범위. plain·unsupported 는 등록 단위가 없어 에러.
+/// tmuxCapture{id,lines?}·tmuxSend{id,text,enter?}(와이어 v25)는 카드 제어 — 화면 읽기·입력 전송
 /// termCwd{term}(와이어 v21)은 tmux_id(호출자가 terms 락에서 꺼낸 그 터미널의 tmux 세션 id)로
 /// 활성 pane 의 cwd — plain·unsupported 는 root 를 cwd 로 돌려준다 (에러 아님, 터미널 경로 링크의
 /// 상대 경로 기준). home 은 이 머신의 홈 — 링크의 `~` 해석
@@ -114,7 +119,14 @@ async fn tmux_request(method: &str, p: &Value, root: Option<&Path>, tmux_id: Opt
     match method {
         "listTerminals" => {
             let scope = if p["all"].as_bool() == Some(true) { None } else { root };
-            tmux::list(bin, scope).await.map(Value::Array)
+            let mut items = tmux::list(bin, scope).await?;
+            // 에이전트 마지막 상태 동봉 (와이어 v24) — 아무 탭도 안 붙은 세션의 사이드바 행도 같은 값을 본다
+            for it in &mut items {
+                if let Some(a) = it["id"].as_str().and_then(agent::status_of) {
+                    it["agent"] = a;
+                }
+            }
+            Ok(Value::Array(items))
         }
         "killTerminal" => {
             tmux::kill(bin, p["id"].as_str().ok_or("id 없음")?).await?;
@@ -122,6 +134,24 @@ async fn tmux_request(method: &str, p: &Value, root: Option<&Path>, tmux_id: Opt
         }
         "renameTerminal" => {
             tmux::rename(bin, p["id"].as_str().ok_or("id 없음")?, p["name"].as_str().ok_or("name 없음")?).await?;
+            Ok(json!({"ok": true}))
+        }
+        "listAgents" => tmux::agent_list(bin).await.map(Value::Array),
+        // 카드 제어 (와이어 v25, ticket superlite-card-control) — 대상은 tmux 세션 id, 화면 읽기·입력 전송
+        "tmuxCapture" => {
+            let text = tmux::capture(bin, p["id"].as_str().ok_or("id 없음")?, p["lines"].as_u64()).await?;
+            Ok(json!({"text": text}))
+        }
+        "tmuxSend" => {
+            let id = p["id"].as_str().ok_or("id 없음")?;
+            tmux::send_keys(bin, id, p["text"].as_str().unwrap_or(""), p["enter"].as_bool().unwrap_or(true)).await?;
+            Ok(json!({"ok": true}))
+        }
+        "agentRegister" => {
+            let id = p["id"].as_str().ok_or("id 없음")?;
+            let name = p["name"].as_str().filter(|n| !n.is_empty()).ok_or("name 없음")?;
+            let reg = json!({"name": name, "role": p["role"], "lane": p["lane"], "parent": p["parent"]});
+            tmux::agent_register(bin, id, &reg).await?;
             Ok(json!({"ok": true}))
         }
         _ => {
@@ -491,11 +521,17 @@ fn ctty_name() -> Option<String> {
 /// 터미널의 pty. 여럿이면(다중 attach) 가장 늦게 붙은 터미널의 세션. 없으면 SUPERLITE_SESSION 폴백.
 /// WHY: 세션 id 환경변수는 셸이 태어날 때 고정되는데 tmux 셸은 프론트·데몬 세션보다 오래 산다 —
 ///      새로고침·다른 클라이언트의 이어받기 뒤엔 죽었거나 남의 세션을 가리킨다. sessions 락 아래에서
-///      terms 락을 잡지 않는다 — Arc 목록을 복사한 뒤 푼다
-fn resolve_requester(sessions: &Sessions, tty: Option<&str>, session: Option<&str>) -> Option<Arc<Session>> {
+///      terms 락을 잡지 않는다 — Arc 목록을 복사한 뒤 푼다.
+/// 함께 돌려주는 tmux 세션 id 는 request 이벤트에 동봉된다 (와이어 v23) — 프론트의 에이전트 등록 단위
+fn resolve_requester(
+    sessions: &Sessions,
+    tty: Option<&str>,
+    session: Option<&str>,
+) -> Option<(Arc<Session>, Option<String>)> {
     let all: Vec<Arc<Session>> = sessions.lock().unwrap().values().cloned().collect();
+    let mut tmux_id = None;
     if let Some(tty) = tty {
-        let tmux_id = match crate::tmux::mode() {
+        tmux_id = match crate::tmux::mode() {
             crate::tmux::Mode::Tmux { bin } => crate::tmux::session_of_pane(bin, tty),
             _ => None,
         };
@@ -505,10 +541,23 @@ fn resolve_requester(sessions: &Sessions, tty: Option<&str>, session: Option<&st
             .filter_map(|s| term::owner_of(&s.terms, tty, tmux_id.as_deref()).map(|at| (at, s.clone())))
             .max_by_key(|(at, _)| *at);
         if let Some((_, s)) = hit {
-            return Some(s);
+            return Some((s, tmux_id));
         }
     }
-    session.and_then(|sid| all.into_iter().find(|s| s.id.as_deref() == Some(sid)))
+    session
+        .and_then(|sid| all.into_iter().find(|s| s.id.as_deref() == Some(sid)))
+        .map(|s| (s, tmux_id))
+}
+
+/// attach 된 모든 세션에 이벤트 한 줄 방송 (와이어 v24 termAgent) — detach 세션은 건너뛴다 (상태는 캐시가
+/// 들고 있어 재접속 뒤 listTerminals 로 받는다). sessions 락 아래에서 sink 락을 잡지 않는다
+fn broadcast(sessions: &Sessions, msg: String) {
+    let all: Vec<Arc<Session>> = sessions.lock().unwrap().values().cloned().collect();
+    for s in all {
+        if matches!(&*s.sink.lock().unwrap(), SinkState::Attached(_)) {
+            term::sink_send(&s.sink, msg.clone(), true);
+        }
+    }
 }
 
 /// 데몬 본체 spawn (헬퍼 → 자기 자신을 인자 없이) — relay 의 spawn_daemon 과 같은 정책
@@ -721,7 +770,8 @@ async fn handle_conn(
             // 요청자(셸 심)의 프론트 요청 (와이어 v9) — attach 없이 허용. 응답은 프론트의
             // requestReply 가 올 때 front::reply 가 이 연결로 돌려준다.
             // 대상은 params.tty(지금 그 터미널을 보는 세션, 와이어 v18) 우선, 없으면 params.session.
-            // 해석은 tmux 조회(subprocess)를 낄 수 있어 블로킹 풀에서
+            // 해석은 tmux 조회(subprocess)를 낄 수 있어 블로킹 풀에서. 해석에서 얻은 요청자의 tmux
+            // 세션 id 는 params.tmux 로 동봉 (와이어 v23, 없으면 null — plain·Windows)
             "frontRequest" => {
                 let (id, p) = (req["id"].clone(), req["params"].clone());
                 let (sessions, tx) = (sessions.clone(), tx.clone());
@@ -733,18 +783,62 @@ async fn handle_conn(
                         .ok()
                         .flatten();
                     match target {
-                        Some(s) => front::request(
-                            &s.pending,
-                            &s.sink,
-                            &tx,
-                            id,
-                            p["method"].as_str().unwrap_or(""),
-                            p["params"].clone(),
-                        ),
+                        Some((s, tmux)) => {
+                            let mut params = p["params"].clone();
+                            if let Value::Object(m) = &mut params {
+                                m.insert("tmux".into(), json!(tmux));
+                            }
+                            front::request(&s.pending, &s.sink, &tx, id, p["method"].as_str().unwrap_or(""), params)
+                        }
                         None => {
                             let _ = tx.send(json!({"id": id, "error": "세션 없음"}).to_string());
                         }
                     }
+                });
+            }
+            // 에이전트 훅의 상태 사건 (와이어 v24, ticket agent-hooks-status) — attach 없이 허용. 요청자 tty →
+            // tmux 세션 id 로 단위를 정하고(tmux 방식만 — plain 은 세션 단위가 없어 무시), 캐시 갱신 뒤 attach 된
+            // 모든 세션에 termAgent 방송. 응답은 {ok} 한 줄 — 심은 0.5초만 기다린다
+            "agentEvent" => {
+                let (id, p) = (req["id"].clone(), req["params"].clone());
+                let (sessions, tx) = (sessions.clone(), tx.clone());
+                tokio::spawn(async move {
+                    let tty = p["tty"].as_str().map(str::to_string);
+                    let tmux_id = tokio::task::spawn_blocking(move || match (crate::tmux::mode(), tty) {
+                        (crate::tmux::Mode::Tmux { bin }, Some(tty)) => crate::tmux::session_of_pane(bin, &tty),
+                        _ => None,
+                    })
+                    .await
+                    .ok()
+                    .flatten();
+                    let ok = match tmux_id {
+                        Some(tid) => {
+                            let ev = agent::record(&tid, p["agent"].as_str().unwrap_or("unknown"), &p["event"]);
+                            if let Some(ev) = ev {
+                                broadcast(&sessions, ev.to_string());
+                            }
+                            true
+                        }
+                        None => false,
+                    };
+                    let _ = tx.send(json!({"id": id, "result": {"ok": ok}}).to_string());
+                });
+            }
+            // 에이전트 훅 설치·제거 (와이어 v24) — 이 머신 홈의 설정 파일. 파일 IO 라 블로킹 풀
+            "agentHooks" => {
+                let (id, p) = (req["id"].clone(), req["params"].clone());
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let out = tokio::task::spawn_blocking(move || {
+                        agent::hooks(p["agent"].as_str().unwrap_or("claude"), p["action"].as_str().unwrap_or("install"))
+                    })
+                    .await
+                    .unwrap_or_else(|e| Err(e.to_string()));
+                    let msg = match out {
+                        Ok(v) => json!({"id": id, "result": v}),
+                        Err(e) => json!({"id": id, "error": e}),
+                    };
+                    let _ = tx.send(msg.to_string());
                 });
             }
             // 프론트의 요청 응답 — 이 연결의 세션에서 대기 중인 요청자에게 회신
@@ -850,7 +944,8 @@ async fn handle_conn(
             // 내장 tmux 세션 관리 (와이어 v17) — 목록·종료·이름·클라이언트 conf 적용. tmux 명령은
             // 서브프로세스라 태스크로. tmuxConf 는 relay 가 attach 직후 id 없이 밀어 넣는 것도 받는다
             // (응답은 id 가 있을 때만). plain·unsupported 면 목록은 비고 나머지는 에러
-            "listTerminals" | "killTerminal" | "renameTerminal" | "tmuxConf" | "termCwd" => {
+            "listTerminals" | "killTerminal" | "renameTerminal" | "tmuxConf" | "termCwd" | "listAgents" | "agentRegister"
+            | "tmuxCapture" | "tmuxSend" => {
                 let (id, params) = (req["id"].clone(), req["params"].clone());
                 let root = cleanup.session.as_ref().map(|s| s.root.clone());
                 // termCwd (와이어 v21): 터미널 → tmux 세션 id 는 read 루프에서 terms 락으로 바로 (짧다)

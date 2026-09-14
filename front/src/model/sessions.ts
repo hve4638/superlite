@@ -145,6 +145,11 @@ export function allSessionCtxs(): SessionCtx[] {
   return [...ctxs.values()];
 }
 
+/** 세션 id 의 컨텍스트 (없으면 null) — 세션 탭 배지(TitleBar)가 그 세션의 터미널 상태를 읽을 때 */
+export function sessionCtxOf(id: string): SessionCtx | null {
+  return ctxs.get(id) ?? null;
+}
+
 /** 활성 세션 컨텍스트 (없으면 null) */
 export function activeSessionCtx(): SessionCtx | null {
   return ctxs.get(sessions.activeId) ?? null;

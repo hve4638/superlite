@@ -4,6 +4,8 @@ import type { EditorGroup, OpenPriority, Tab } from '../../model/editors';
 import { closeEmptyGroup, closeTab, editors, isHtml, moveTabToGroup, openFile, openFolderTab, pinTab, reloadPreview, setGroupOpenPriority, toggleGroupLock, toggleHtmlPreview, setActiveTab } from '../../model/editors';
 import { openContextMenu, type ContextMenuItem } from '../../model/workbench';
 import { createTerminal, requestKillTerminal, terminals } from '../../model/terminal';
+import { tabDot } from '../../model/agent';
+import TerminalBadge from './TerminalBadge.vue';
 import { DND_EDITOR, detachEditorTab, multiWindow, requestTabsMove, sessionRoot, sessions } from '../../model/sessions';
 import { windowLabel } from '../../model/window';
 import { DETACH_DX, DETACH_DY, insertIndexAt, pointerOutside } from '../dndUtil';
@@ -251,6 +253,8 @@ function onForeignDrop(e: DragEvent) {
         <span v-else-if="tab.kind === 'downloads'" class="codicon codicon-cloud-download tab-icon" />
         <FileIcon v-else :name="iconName(tab)" />
         <span class="tab-label">{{ tab.name }}</span>
+        <!-- 상태 점 요약 (ticket agent-hooks-status): 탭 자신 + 카드들의 노랑/초록, 바닥 신호(벨·활동)는 터미널 탭 자신 것만 -->
+        <TerminalBadge :inst="tab.kind === 'terminal' ? terminals.list.find((t) => t.id === tab.term) : undefined" :dot="tabDot(tab)" />
         <span v-if="descriptions.get(tab.id)" class="tab-description">{{ descriptions.get(tab.id) }}</span>
         <span class="tab-actions">
           <span

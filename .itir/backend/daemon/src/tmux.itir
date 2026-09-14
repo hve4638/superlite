@@ -21,8 +21,8 @@ export fn base_args() -> args {
 export fn resource_base(bin) {
   role: 데몬 시작 시 살아 있는 서버에 base.conf 를 다시 source (main) — 서버는 데몬보다 오래 살아 옛 빌드의 값을 들고 있다. 새 pane 부터 적용. base.conf 는 재적용해도 불어나지 않게(append 없음) 써 두었고 끝의 user.conf source 로 사용자 덮어쓰기 순서가 유지된다. 서버 없음은 무동작
 }
-export fn new_session(bin, root, env) -> id_and_name {
-  role: 새 tmux 세션 detached 로 — 이름은 <폴더명>-<n> (충돌 시 n 증가), cwd root, -e 로 세션 환경변수(셸 심 좌표·ENV_ROOT). PATH 만은 new-session 클라이언트(이 프로세스) env 에도 싣는다 — tmux 는 새 pane 의 PATH 를 세션 환경이 아니라 부른 클라이언트 환경에서 가져온다 (3.7b 실측, -e PATH 무시). -P -F 로 session_id 를 받아 돌려준다. 명령의 cwd 는 / 로 고정 — 서버가 여기서 처음 뜨면 이 cwd 를 물려받아 데몬보다 오래 살고, 워크트리에서 뜬 서버는 폴더 삭제 뒤 -c 를 무시한다 (tmux 3.7b, ticket tmux-server-cwd-utf8)
+export fn new_session(bin, cwd, env) -> id_and_name {
+  role: 새 tmux 세션 detached 로 — 이름은 `terminal <n>` (충돌 시 n 증가; 서버가 워크스페이스 공용이라 번호는 서버 전체 고유, 소속은 ENV_ROOT 가 안다 — 사용자 결정 2026-09-14, 종전 <폴더명>-<n> 은 탭·목록에 너무 길었다), 첫 pane 의 cwd 는 cwd (보통 root — 카드 생성 `superlite card new --cwd` 만 워크트리를 준다, 와이어 v25), -e 로 세션 환경변수(셸 심 좌표·ENV_ROOT·카드면 ENV_HOST). PATH 만은 new-session 클라이언트(이 프로세스) env 에도 싣는다 — tmux 는 새 pane 의 PATH 를 세션 환경이 아니라 부른 클라이언트 환경에서 가져온다 (3.7b 실측, -e PATH 무시). -P -F 로 session_id 를 받아 돌려준다. 명령의 cwd 는 / 로 고정 — 서버가 여기서 처음 뜨면 이 cwd 를 물려받아 데몬보다 오래 살고, 워크트리에서 뜬 서버는 폴더 삭제 뒤 -c 를 무시한다 (tmux 3.7b, ticket tmux-server-cwd-utf8)
 }
 export fn session_of_pane(bin, tty) -> id? {
   role: pane tty → 그 pane 이 속한 세션 id (list-panes -a) — askpass 요청자 좌표 해석 (와이어 v18). 요청자는 tmux 안의 셸 자식이라 자기 tty 만 안다. 서버 부재·미발견은 None
@@ -34,7 +34,7 @@ export fn name_of(bin, id) -> name {
   role: attach 시 프론트 탭 제목용 세션 이름 (display-message) — 실패면 id
 }
 export fn list(bin, root?) -> items[] {
-  role: 살아 있는 세션 [{id, name, root, attached, activity(ms), created(ms), command}] — ls -F 뒤 세션마다 show-environment 로 ENV_ROOT 를 붙여 root 로 거른다 (없는 세션은 우리 것이 아님). 서버 없음은 빈 목록. ls 실패·show-environment 실패(unknown variable 제외)는 stderr(daemon.log)에 남긴다 (ticket term-layout-restore-flaky). 걸러진 세션은 사유별로(필드 6개 미만 — 원문 80자, ENV_ROOT 없음, root 불일치 — want·got 쌍) 진단 줄을 남기고 끝에 요약 한 줄(받은 줄 수 → 반환 개수, 사유별 개수, want) — 3초 폴링이라 진단 블록이 직전과 같으면 찍지 않는다. 미복원 원인(로케일·타이밍·root 불일치)을 다음 발생 한 번으로 가리기 위함 (ticket term-list-diag-logging)
+  role: 살아 있는 세션 [{id, name, root, attached, activity(ms), created(ms), command, cwd(활성 pane 의 현재 폴더 — 와이어 v25, 사라진 워크트리에 앉은 카드 대조용, 삭제된 폴더는 ' (deleted)' 접미), host(ENV_HOST — 카드가 붙은 탭의 터미널 세션 id, 없으면 null, 와이어 v25)}] — ls -F 뒤 세션마다 show-environment(전체 — ENV_ROOT·ENV_HOST 를 한 번에)로 ENV_ROOT 를 붙여 root 로 거른다 (없는 세션은 우리 것이 아님). 서버 없음은 빈 목록. ls 실패·show-environment 실패(unknown variable 제외)는 stderr(daemon.log)에 남긴다 (ticket term-layout-restore-flaky). 걸러진 세션은 사유별로(필드 6개 미만 — 원문 80자, ENV_ROOT 없음, root 불일치 — want·got 쌍) 진단 줄을 남기고 끝에 요약 한 줄(받은 줄 수 → 반환 개수, 사유별 개수, want) — 3초 폴링이라 진단 블록이 직전과 같으면 찍지 않는다. 미복원 원인(로케일·타이밍·root 불일치)을 다음 발생 한 번으로 가리기 위함 (ticket term-list-diag-logging)
 }
 export fn detach_args(tty) -> args {
   role: 특정 클라이언트(그 pty tty)를 clean detach 하는 인자 — 탭 닫기 정리(term::kill_term)용
@@ -46,7 +46,21 @@ export fn wait_client_gone(bin, tty, timeout) {
   role: tty 의 클라이언트가 tmux 목록에서 사라질 때까지 블로킹 (list-clients 폴링, timeout). detach-client 뒤 이 시점까지 기다린 뒤에야 pty(master)를 닫는다 — 클라이언트 프로세스가 종료해도 서버가 detach 를 끝내기 전에 master 를 닫으면 그 pane(셸)까지 죽는다 (실측 2026-09-07)
 }
 export fn kill(bin, id)
+export val ENV_HOST
+export val ENV_AGENT
+export fn agent_register(bin, id, reg) {
+  role: 에이전트 등록 정보(JSON {name, role, lane, parent})를 세션 환경변수 SUPERLITE_AGENT 에 set-environment 로 (덮어)쓴다 (와이어 v23, ticket superlite-agent-registry). 세션 원장 = tmux 원칙 그대로 — 파일도 데몬 캐시도 없이 세션과 함께 살고 죽으며 원격이면 원격 tmux 서버에 있다 (사용자 결정 2026-09-13)
+}
+export fn agent_list(bin) -> items[] {
+  role: 등록된 에이전트 전부 [{id, session, root, name, role, lane, parent}] — 서버의 모든 root(오케스트레이터와 워커는 다른 워크트리). ls 뒤 세션마다 show-environment 전체를 읽어 ENV_ROOT·ENV_AGENT 를 한 번에 고른다(agent_item — 변수 없음·해제 표기·JSON 아님은 미등록). parent 는 상위의 tmux 세션 id. 서버 없음은 빈 목록
+}
 export fn rename(bin, id, name)
+export fn capture(bin, id, lines?) -> text {
+  role: 세션 활성 pane 의 화면 텍스트 (와이어 v25, `superlite card read`) — capture-pane -p, lines 면 -S -N 으로 스크롤백 포함 마지막 N 줄. 기본을 화면으로 좁힌 이유는 에이전트가 읽는 용도(토큰) — 사용자 결정 2026-09-13
+}
+export fn send_keys(bin, id, text, enter) {
+  role: 세션 활성 pane 에 텍스트 입력 (와이어 v25, `superlite card send`·`card new` 초기 명령) — send-keys -l -- 로 글자 그대로, enter 면 Enter 키를 뒤따라. 옛 wtree post-create 훅과 같은 방식 (new-window <cmd> 는 비대화형 셸이라 alias·함수를 건너뛴다)
+}
 export fn apply_conf(bin, content) -> message {
   role: 클라이언트 tmux 프로필을 user.conf 로 기록하고(빈 내용 = 내장 기본값 복귀) base.conf 를 다시 만든 뒤 서버가 떠 있으면 source-file base.conf — 반환은 tmux 가 낸 경고·오류 텍스트(문법 오류는 실패가 아니라 프론트 알림감), 서버 없음은 빈 문자열
 }

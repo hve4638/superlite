@@ -1,8 +1,9 @@
 import { reactive } from '@vue/reactivity';
 import { openQuickInput, showViewlet, toggleSideBar } from './workbench';
 import { openFolderDialog } from './host';
-import { closeTab, reopenClosedEditor, saveActive, splitGroup, toggleGroupLock, activeGroup, activeTab, openHex, toggleHtmlPreview, isHtml, openUrl, openSettings, toggleWordWrap, stepEditorZoom, setEditorZoom, setActiveTab, urlDiag } from './editors';
+import { closeTab, reopenClosedEditor, saveActive, splitGroup, toggleGroupLock, activeGroup, activeTab, openHex, toggleHtmlPreview, isHtml, openUrl, openSettings, toggleWordWrap, stepEditorZoom, setEditorZoom, setActiveTab, setActiveCard, urlDiag } from './editors';
 import { createTerminal, imeDiag, toggleTerminal } from './terminal';
+import { installAgentHooks } from './agent';
 import { openSettingsJson, openSshConfig, openTmuxConf } from './configfiles';
 import { showAllDownloads } from './downloads';
 import { refreshScm } from './scm';
@@ -211,6 +212,25 @@ export function setupCommands(): void {
     },
   });
 
+  // 에이전트 훅 설치기 (ticket agent-hooks-status) — ConfirmDialog 뒤 이 세션 데몬 머신의 ~/.claude/settings.json 에
+  // superlite 항목만 병합·제거 (사용자 결정 2026-09-13: 설정 파일 병합 방식)
+  register({
+    id: 'agent.installClaudeHooks',
+    title: 'Agent: Install Claude Code Hooks',
+    run: () => {
+      if (activeSessionEmpty()) return;
+      void installAgentHooks('install');
+    },
+  });
+  register({
+    id: 'agent.uninstallClaudeHooks',
+    title: 'Agent: Remove Claude Code Hooks',
+    run: () => {
+      if (activeSessionEmpty()) return;
+      void installAgentHooks('uninstall');
+    },
+  });
+
   register({
     id: 'workbench.action.reloadWindow',
     title: 'Developer: Reload Window',
@@ -316,6 +336,23 @@ export function setupCommands(): void {
     run: () => cycleTab(-1),
   }, 'ctrl+pageup', 'alt+arrowleft');
 
+  // Alt+↑/↓ — 활성 탭의 카드 목록(탭 자신 + 카드들)에서 보는 카드를 위아래로 넘긴다. 카드 없는 탭은 무동작.
+  // 터미널 포커스에서도 가로챈다(skipShell). 편집기 포커스에서는 monaco 의 줄 이동이 먼저 받는다
+  register({
+    id: 'workbench.action.nextCard',
+    title: 'View: Switch to Next Card',
+    keybinding: 'Alt+Down',
+    skipShell: true,
+    run: () => cycleCard(1),
+  }, 'alt+arrowdown');
+  register({
+    id: 'workbench.action.previousCard',
+    title: 'View: Switch to Previous Card',
+    keybinding: 'Alt+Up',
+    skipShell: true,
+    run: () => cycleCard(-1),
+  }, 'alt+arrowup');
+
   // 활성 탭의 경로를 hex 뷰어로 — 이진 안내 탭의 링크와 같은 진입 (텍스트 파일도 hex 로 볼 수 있다)
   register({
     id: 'hexEditor.openFile',
@@ -407,6 +444,16 @@ export function setupCommands(): void {
     title: 'Help: About',
     run: () => showAbout(),
   });
+}
+
+/** 카드 순환 — [탭 자신(null), ...카드 id] 에서 활성 카드 옆으로 (끝에서 돌아온다) */
+function cycleCard(dir: 1 | -1): void {
+  const g = activeGroup();
+  const t = activeTab();
+  if (!t?.cards) return;
+  const ids = [null, ...t.cards.tabs.map((c) => c.id)];
+  const idx = ids.indexOf(t.cards.activeTabId);
+  setActiveCard(g.id, t.id, ids[(idx + dir + ids.length) % ids.length]);
 }
 
 function cycleTab(dir: 1 | -1): void {

@@ -16,6 +16,9 @@ use crate::err;
 
 /// 세션 환경변수 — 이 세션이 어느 워크스페이스 것인가 (역방향 조회 키)
 pub(crate) const ENV_ROOT: &str = "SUPERLITE_TMUX_WORKSPACE_PATH";
+/// 카드가 붙은 탭의 터미널 세션 id (와이어 v25, ticket superlite-card-control) — 사이드바 목록이 같은 탭의 카드를 한 묶음으로
+/// 보이는 배치 정보. 수명 관계는 없다 (그 세션이 죽어도 카드 세션은 산다)
+pub(crate) const ENV_HOST: &str = "SUPERLITE_TMUX_HOST";
 const BASE_CONF: &str = superlite_common::TMUX_BASE_CONF;
 
 /// 이 데몬의 터미널 방식 — 데몬당 한 번 판정 (tmux -V)
@@ -190,27 +193,26 @@ fn out_text(o: std::process::Output) -> Result<String, String> {
 }
 
 /// 세션 이름 — 워크스페이스 폴더명 + 번호. tmux 이름 규칙('.'·':' 금지)에 맞춰 치환
-fn session_name(root: &Path, n: u32) -> String {
-    let folder = root.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "term".into());
-    let clean: String = folder
-        .chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
-        .collect();
-    format!("{clean}-{n}")
+/// 새 세션 이름 — `terminal <n>` (사용자 결정 2026-09-14). 종전엔 워크스페이스 폴더명이었지만 탭·목록에 긴 이름이
+/// 그대로 떠서 읽기 어려웠다. 서버는 워크스페이스 공용이라 번호는 서버 전체에서 고유하다 (소속은 ENV_ROOT 가 안다)
+fn session_name(n: u32) -> String {
+    format!("terminal {n}")
 }
 
 /// 새 tmux 세션 (detached) — 반환 (session_id, name). 이름 충돌은 번호를 올려 재시도.
-/// env 는 세션 환경변수(-e)로 — 셸 심 좌표(SUPERLITE_SOCK·SESSION)와 워크스페이스 역방향 키
-pub(crate) fn new_session(bin: &Path, root: &Path, env: &[(&str, String)]) -> Result<(String, String), String> {
+/// env 는 세션 환경변수(-e)로 — 셸 심 좌표(SUPERLITE_SOCK·SESSION)와 워크스페이스 역방향 키.
+/// cwd 는 첫 pane 의 작업 폴더 — 보통 root 와 같고, 카드 생성(`superlite card new --cwd`, 와이어 v25)만 다른
+/// 폴더(워크트리)를 준다
+pub(crate) fn new_session(bin: &Path, cwd: &Path, env: &[(&str, String)]) -> Result<(String, String), String> {
     let mut last = String::new();
     for n in 1..=99u32 {
-        let name = session_name(root, n);
+        let name = session_name(n);
         let mut c = command(bin)?;
         // 서버가 아직 없으면 이 명령이 서버를 띄우고, 서버는 이 프로세스의 cwd 를 물려받아 데몬보다 오래
         // 산다. 워크트리에서 뜬 서버는 그 폴더가 삭제되면 이후 모든 new-session 의 -c 를 무시하고 옛 cwd 에
         // 서 pane 을 띄운다 (tmux 3.7b 실측, ticket tmux-server-cwd-utf8) — 사라지지 않는 / 로 고정
         c.current_dir("/");
-        c.args(["new-session", "-d", "-s", &name, "-c"]).arg(root).args(["-P", "-F", "#{session_id}"]);
+        c.args(["new-session", "-d", "-s", &name, "-c"]).arg(cwd).args(["-P", "-F", "#{session_id}"]);
         for (k, v) in env {
             c.arg("-e").arg(format!("{k}={v}"));
             // PATH 만은 -e 로 안 들어간다 — tmux 는 새 pane 의 PATH 를 세션 환경이 아니라 new-session 을
@@ -281,7 +283,8 @@ pub(crate) async fn list(bin: &Path, root: Option<&Path>) -> Result<Vec<Value>, 
 
 /// list 본체 — 진단 줄을 stderr 대신 돌려준다 (테스트가 사유를 검사한다). 마지막 줄이 요약
 async fn list_diag(bin: &Path, root: Option<&Path>) -> Result<(Vec<Value>, Vec<String>), String> {
-    const FMT: &str = "#{session_id}\t#{session_name}\t#{session_attached}\t#{session_activity}\t#{session_created}\t#{pane_current_command}";
+    // cwd(활성 pane 의 현재 폴더, 와이어 v25)는 카드 정리(`superlite card close --cwd` — 사라진 워크트리에 앉은 카드)가 대조한다
+    const FMT: &str = "#{session_id}\t#{session_name}\t#{session_attached}\t#{session_activity}\t#{session_created}\t#{pane_current_command}\t#{pane_current_path}";
     let o = async_command(bin)?.args(["ls", "-F", FMT]).output().await.map_err(err)?;
     let text = match out_text(o) {
         Ok(t) => t,
@@ -306,15 +309,16 @@ async fn list_diag(bin: &Path, root: Option<&Path>) -> Result<(Vec<Value>, Vec<S
             diag.push(format!("superlite-daemon: tmux ls 줄 건너뜀 (필드 {}개 < 6): {head:?}", f.len()));
             continue;
         }
-        let env = async_command(bin)?.args(["show-environment", "-t", f[0], ENV_ROOT]).output().await.map_err(err)?;
-        let r = match out_text(env) {
-            Ok(s) => s.split_once('=').map(|(_, v)| v.to_string()),
+        // 변수 하나가 아니라 전체를 읽는다 — ENV_ROOT 와 ENV_HOST 를 한 번에 (세션마다 프로세스 하나)
+        let env = async_command(bin)?.args(["show-environment", "-t", f[0]]).output().await.map_err(err)?;
+        let (r, host) = match out_text(env) {
+            Ok(s) => (env_value(&s, ENV_ROOT), env_value(&s, ENV_HOST)),
             Err(e) => {
                 // "unknown variable" = 우리 것이 아닌 세션(정상 제외). 그 외(ls 뒤 사라짐 등)는 목록 누락의 단서라 기록
                 if !e.contains("unknown variable") {
                     eprintln!("superlite-daemon: tmux show-environment {} 실패: {e}", f[0]);
                 }
-                None
+                (None, None)
             }
         };
         let Some(r) = r else {
@@ -333,6 +337,8 @@ async fn list_diag(bin: &Path, root: Option<&Path>) -> Result<(Vec<Value>, Vec<S
             "activity": f[3].parse::<u64>().unwrap_or(0) * 1000,
             "created": f[4].parse::<u64>().unwrap_or(0) * 1000,
             "command": f[5],
+            "cwd": f.get(6).copied().unwrap_or(""),
+            "host": host,
         }));
     }
     diag.push(format!(
@@ -340,6 +346,11 @@ async fn list_diag(bin: &Path, root: Option<&Path>) -> Result<(Vec<Value>, Vec<S
         out.len()
     ));
     Ok((out, diag))
+}
+
+/// show-environment 전체 출력에서 변수 하나의 값 — 없거나 해제 표기(`-NAME`)면 None
+fn env_value(env: &str, key: &str) -> Option<String> {
+    env.lines().find_map(|l| l.strip_prefix(key)?.strip_prefix('=').map(str::to_string))
 }
 
 /// 특정 클라이언트(그 pty tty)를 clean detach 하는 인자 — tmux 세션·pane 은 산다. 탭 닫기
@@ -393,6 +404,94 @@ pub(crate) async fn rename(bin: &Path, id: &str, name: &str) -> Result<(), Strin
     out_text(o).map(|_| ())
 }
 
+/// 세션 활성 pane 의 화면 텍스트 (와이어 v25, `superlite card read`) — 기본은 보이는 화면, lines 를 주면 스크롤백을
+/// 포함한 마지막 lines 줄 (capture-pane -S -N). 에이전트가 읽는 용도라 기본을 화면으로 좁힌다 (사용자 결정 2026-09-13)
+pub(crate) async fn capture(bin: &Path, id: &str, lines: Option<u64>) -> Result<String, String> {
+    let mut c = async_command(bin)?;
+    c.args(["capture-pane", "-p", "-t", id]);
+    if let Some(n) = lines {
+        c.arg("-S").arg(format!("-{n}"));
+    }
+    let o = c.output().await.map_err(err)?;
+    let text = out_text(o)?;
+    // -S -N 은 "화면 위 N 줄부터 화면 끝까지" 라 화면 높이만큼 더 온다 — 끝의 빈 줄을 걷고 마지막 N 줄만
+    Ok(match lines {
+        Some(n) => {
+            let all: Vec<&str> = text.lines().collect();
+            all[all.len().saturating_sub(n as usize)..].join("\n")
+        }
+        None => text,
+    })
+}
+
+/// 세션 활성 pane 에 텍스트 입력 (와이어 v25, `superlite card send`) — send-keys -l 로 글자 그대로, enter 면 Enter 키를
+/// 뒤따라 보낸다. wtree post-create 훅이 claude 를 띄우던 방식과 같다 (new-window <cmd> 는 비대화형 셸이라 alias 를
+/// 건너뛴다). `--` 로 텍스트가 -로 시작해도 옵션으로 읽히지 않게 한다
+pub(crate) async fn send_keys(bin: &Path, id: &str, text: &str, enter: bool) -> Result<(), String> {
+    if !text.is_empty() {
+        let o = async_command(bin)?.args(["send-keys", "-t", id, "-l", "--", text]).output().await.map_err(err)?;
+        out_text(o)?;
+    }
+    if enter {
+        let o = async_command(bin)?.args(["send-keys", "-t", id, "Enter"]).output().await.map_err(err)?;
+        out_text(o)?;
+    }
+    Ok(())
+}
+
+/// 에이전트 등록 정보의 세션 환경변수 (와이어 v23, ticket superlite-agent-registry) — 값은 JSON
+/// {name, role, lane, parent}. 세션 원장 = tmux 원칙 그대로: 파일도 데몬 캐시도 없이 세션과 함께 살고
+/// 죽으며, 원격이면 원격 tmux 서버에 있다 (사용자 결정 2026-09-13). 단위는 tmux 세션 id
+pub(crate) const ENV_AGENT: &str = "SUPERLITE_AGENT";
+
+/// 세션 id 에 등록 정보를 (덮어)쓴다 — set-environment 의 인자는 셸을 거치지 않아 JSON 그대로 들어간다
+pub(crate) async fn agent_register(bin: &Path, id: &str, reg: &Value) -> Result<(), String> {
+    let o = async_command(bin)?
+        .args(["set-environment", "-t", id, ENV_AGENT, &reg.to_string()])
+        .output()
+        .await
+        .map_err(err)?;
+    out_text(o).map(|_| ())
+}
+
+/// 등록된 에이전트 전부 — 서버의 모든 root (오케스트레이터와 워커는 다른 워크트리에 산다).
+/// [{id, session, root, name, role, lane, parent}] — parent 는 상위 에이전트의 tmux 세션 id. 서버 없음은 빈 목록
+pub(crate) async fn agent_list(bin: &Path) -> Result<Vec<Value>, String> {
+    let o = async_command(bin)?.args(["ls", "-F", "#{session_id}\t#{session_name}"]).output().await.map_err(err)?;
+    let text = match out_text(o) {
+        Ok(t) => t,
+        Err(e) if no_server(&e) => return Ok(Vec::new()),
+        Err(e) => return Err(e),
+    };
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let Some((id, session)) = line.split_once('\t') else { continue };
+        // 변수 하나가 아니라 전체를 읽는다 — ENV_ROOT 와 ENV_AGENT 를 한 번에
+        let env = async_command(bin)?.args(["show-environment", "-t", id]).output().await.map_err(err)?;
+        if let Some(item) = out_text(env).ok().and_then(|e| agent_item(id, session, &e)) {
+            out.push(item);
+        }
+    }
+    Ok(out)
+}
+
+/// show-environment 전체 출력에서 등록 항목 하나 — ENV_AGENT 가 없거나 JSON 이 아니면 None (미등록)
+fn agent_item(id: &str, session: &str, env: &str) -> Option<Value> {
+    let (mut root, mut reg) = (None, None);
+    for l in env.lines() {
+        if let Some(v) = l.strip_prefix(ENV_ROOT).and_then(|r| r.strip_prefix('=')) {
+            root = Some(v.to_string());
+        } else if let Some(v) = l.strip_prefix(ENV_AGENT).and_then(|r| r.strip_prefix('=')) {
+            reg = serde_json::from_str::<Value>(v).ok();
+        }
+    }
+    let reg = reg?;
+    Some(json!({
+        "id": id, "session": session, "root": root,
+        "name": reg["name"], "role": reg["role"], "lane": reg["lane"], "parent": reg["parent"],
+    }))
+}
+
 /// 데몬 시작 시 살아 있는 서버에 base.conf 를 다시 source — 서버는 데몬보다 오래 살아 -f 로 준 옛 base.conf 값
 /// (default-terminal·COLORTERM 등)을 그대로 들고 있다. 이후 새 pane 부터 적용된다 (기존 pane 은 TERM 이 이미 넘어갔다).
 /// base.conf 는 재적용해도 값이 불어나지 않게 써 두었다. 서버가 없으면 무동작 (ticket terminal-font-color)
@@ -422,6 +521,23 @@ pub(crate) async fn apply_conf(bin: &Path, content: &str) -> Result<String, Stri
 mod tests {
     use super::*;
 
+    /// show-environment 전체 출력에서 등록 항목을 고른다 — 미등록(변수 없음·`-SUPERLITE_AGENT` 해제 표기)은 None,
+    /// 등록은 root 와 함께 (ticket superlite-agent-registry)
+    #[test]
+    fn agent_item_parses_registration() {
+        let env = "SUPERLITE_TMUX_WORKSPACE_PATH=/ws/a\nSUPERLITE_AGENT={\"name\":\"w1\",\"role\":\"worker\",\"lane\":null,\"parent\":\"$1\"}\nTERM=x";
+        let item = agent_item("$3", "a-1", env).unwrap();
+        assert_eq!(item["id"], "$3");
+        assert_eq!(item["session"], "a-1");
+        assert_eq!(item["root"], "/ws/a");
+        assert_eq!(item["name"], "w1");
+        assert_eq!(item["role"], "worker");
+        assert!(item["lane"].is_null());
+        assert_eq!(item["parent"], "$1");
+        assert!(agent_item("$4", "b", "SUPERLITE_TMUX_WORKSPACE_PATH=/ws/b\n-SUPERLITE_AGENT").is_none(), "해제된 변수는 미등록");
+        assert!(agent_item("$5", "c", "SUPERLITE_AGENT=not json").is_none(), "JSON 아니면 미등록");
+    }
+
     /// LANG 없는 원격 데몬은 UTF-8 로케일을 채워야 한다 (없으면 tmux 가 -F 의 탭·한글을 _ 로 찍어
     /// 목록 파싱이 깨진다 — ticket term-persist-status). 사용자 설정(LC_ALL·UTF-8 LANG)은 존중
     #[cfg(unix)]
@@ -447,7 +563,7 @@ mod tests {
         std::fs::write(
             &bin,
             "#!/bin/sh\nfor a in \"$@\"; do case \"$a\" in ls) printf '$0\\tmine-1\\t0\\t1\\t1\\tbash\\n$1\\tstray\\t0\\t1\\t1\\tsh\\n$2\\tother-1\\t0\\t1\\t1\\tvim\\n$3_한글-1_0_1_1_bash\\n'; exit 0;; \
-show-environment) shift; while [ \"$1\" != -t ]; do shift; done; case \"$2\" in '$0') echo 'SUPERLITE_TMUX_WORKSPACE_PATH=/ws/mine'; exit 0;; '$2') echo 'SUPERLITE_TMUX_WORKSPACE_PATH=/ws/other'; exit 0;; *) echo 'unknown variable' >&2; exit 1;; esac;; esac; done\n",
+show-environment) shift; while [ \"$1\" != -t ]; do shift; done; case \"$2\" in '$0') echo 'SUPERLITE_TMUX_WORKSPACE_PATH=/ws/mine'; echo '-SUPERLITE_AGENT'; echo 'SUPERLITE_TMUX_HOST=$9'; exit 0;; '$2') echo 'SUPERLITE_TMUX_WORKSPACE_PATH=/ws/other'; exit 0;; *) echo 'unknown variable' >&2; exit 1;; esac;; esac; done\n",
         )
         .unwrap();
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -455,6 +571,7 @@ show-environment) shift; while [ \"$1\" != -t ]; do shift; done; case \"$2\" in 
         std::fs::remove_dir_all(&dir).ok();
         assert_eq!(items.len(), 1, "{diag:?}");
         assert_eq!(items[0]["id"], "$0");
+        assert_eq!(items[0]["host"], "$9", "전체 환경에서 host 도 읽는다");
         let joined = diag.join("\n");
         assert!(joined.contains("필드 1개 < 6") && joined.contains("$3_한글-1_0_1_1_bash"), "깨진 줄 원문: {joined}");
         assert!(joined.contains("$1 (stray) 제외: SUPERLITE_TMUX_WORKSPACE_PATH 없음"), "ENV_ROOT 없음: {joined}");

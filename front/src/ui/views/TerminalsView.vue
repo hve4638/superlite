@@ -5,7 +5,7 @@
 // 폼(ticket config-editors) — select 로 적용 프로필을 고르면 접속 중인 모든 데몬에 즉시 적용되고,
 // 편집은 편집기 탭(openTmuxConf)에서. default 는 내장 기본값(읽기 전용)이고 + 는 그것을 복사해 시작, 복제는 선택된
 // 프로필 복사 — 둘 다 인라인 이름 입력. 삭제는 확인 대화상자 (default 불가)
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import type { TerminalInfo } from '../../backend/types';
 import {
   terminalState, terminals, refreshTerminals, attachTerminal, killListedTerminal, renameListedTerminal,
@@ -14,6 +14,8 @@ import {
   configEnabled, openTmuxConf, refreshTmuxProfiles, selectTmuxProfile, tmuxProfiles, updateTmuxProfiles,
 } from '../../model/configfiles';
 import { openContextMenu } from '../../model/workbench';
+import { agentStateOfListed, listedDot } from '../../model/agent';
+import TerminalBadge from '../editor/TerminalBadge.vue';
 import { errText, notify } from '../../model/notifications';
 import InlineNameInput from '../widgets/InlineNameInput.vue';
 import { confirm } from '../../model/dialog';
@@ -22,6 +24,33 @@ import { confirm } from '../../model/dialog';
 onMounted(() => {
   void refreshTerminals();
   if (configEnabled()) refreshTmuxProfiles().catch((e) => notify('error', `tmux profiles: ${errText(e)}`));
+});
+
+/** 표시 순서 — 카드 세션(host 있음)은 그 탭의 터미널 세션 아래에 들여쓴다 (ticket superlite-card-control). 들여쓰기는 배치일
+ *  뿐 수명 관계가 아니다 — 삭제는 그 행의 세션 하나만 종료한다. host 세션이 목록에 없으면 같은 host 의 첫 세션 아래로 모은다 */
+const rows = computed(() => {
+  const list = terminalState.list;
+  const ids = new Set(list.map((t) => t.id));
+  const leadOf = (t: TerminalInfo): string => {
+    if (!t.host) return t.id;
+    return ids.has(t.host) ? t.host : list.find((x) => x.host === t.host)!.id;
+  };
+  const children = new Map<string, TerminalInfo[]>();
+  for (const t of list) {
+    const lead = leadOf(t);
+    if (lead !== t.id) children.set(lead, [...(children.get(lead) ?? []), t]);
+  }
+  const out: { info: TerminalInfo; depth: number }[] = [];
+  const seen = new Set<string>();
+  const emit = (t: TerminalInfo, depth: number): void => {
+    if (seen.has(t.id)) return;
+    seen.add(t.id);
+    out.push({ info: t, depth });
+    for (const c of children.get(t.id) ?? []) emit(c, depth + 1);
+  };
+  for (const t of list) if (leadOf(t) === t.id) emit(t, 0);
+  for (const t of list) emit(t, 0); // host 가 서로를 가리키는 고리 — 빠진 것 없이 평평하게
+  return out;
 });
 
 /** 이 창에서 열려 있는 세션인가 */
@@ -141,11 +170,12 @@ async function askDelete(name: string): Promise<void> {
         No live terminals in this workspace. Ctrl+` opens a new one.
       </div>
       <div
-        v-for="t in terminalState.list"
+        v-for="{ info: t, depth } in rows"
         :key="t.id"
         class="row"
         :class="{ open: isOpen(t) }"
-        :title="`${t.name} — ${t.command}${t.attached ? ` · ${t.attached} attached` : ' · detached'}`"
+        :style="{ paddingLeft: `${4 + depth * 16}px` }"
+        :title="`${t.name} — ${t.command}${t.attached ? ` · ${t.attached} attached` : ' · detached'}${agentStateOfListed(t.id) ? ` · ${t.agent?.agent ?? 'agent'} ${agentStateOfListed(t.id)}` : ''}`"
         @click="attachTerminal(t)"
         @contextmenu="onContextMenu($event, t)"
       >
@@ -164,8 +194,10 @@ async function askDelete(name: string): Promise<void> {
           <span class="row-name">{{ t.name }}</span>
           <span class="row-desc">{{ t.command }}</span>
           <span class="row-meta">
+            <TerminalBadge :inst="terminals.list.find((i) => i.tmux?.id === t.id)" :dot="listedDot(t.id)" />
             <span v-if="t.attached" class="codicon codicon-eye" :title="`${t.attached} attached`" />
             <span class="ago">{{ ago(t.activity) }}</span>
+            <span class="codicon codicon-trash kill" title="Kill Terminal" @click.stop="void killListedTerminal(t.id)" />
           </span>
         </template>
       </div>
@@ -243,6 +275,14 @@ async function askDelete(name: string): Promise<void> {
 }
 .row-meta .codicon {
   font-size: 14px;
+}
+.row-meta .kill {
+  display: none;
+  cursor: pointer;
+  color: var(--vscode-icon-foreground);
+}
+.row:hover .kill {
+  display: inline-block;
 }
 .rename {
   flex: 1;

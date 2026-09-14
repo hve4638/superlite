@@ -335,7 +335,11 @@ pub(crate) fn handle_term(
             let rows = p["rows"].as_u64().unwrap_or(24) as u16;
             // attach (와이어 v17): 기존 tmux 세션 id — 사이드바 목록·레이아웃 복원이 준다
             let attach = p["attach"].as_str();
-            if let Err(e) = spawn_term(id, cols, rows, root, session, attach, terms.clone(), sink.clone()) {
+            // cwd (와이어 v25): 새 셸의 작업 폴더 — `superlite card new --cwd` 가 워크트리를 준다. 없으면 root
+            let cwd = p["cwd"].as_str().map(Path::new);
+            // host (와이어 v25): 카드가 붙은 탭의 터미널 세션 id — 새 세션 환경 SUPERLITE_TMUX_HOST 로 남겨 목록이 묶는다
+            let host = p["host"].as_str();
+            if let Err(e) = spawn_term(id, cols, rows, root, session, attach, cwd, host, terms.clone(), sink.clone()) {
                 let msg = json!({"event": "termData", "term": id, "data": format!("pty 생성 실패: {e}\r\n")});
                 sink_send(sink, msg.to_string(), true);
                 // code 없는 termExit = 비정상 — 프론트가 탭을 유지해 위 에러 출력을 보여준다
@@ -419,7 +423,7 @@ struct Program {
     fallback: Option<String>,
 }
 
-fn program(root: &Path, session: Option<&str>, attach: Option<&str>) -> Program {
+fn program(root: &Path, session: Option<&str>, attach: Option<&str>, cwd: &Path, host: Option<&str>) -> Program {
     // 셸 심(`superlite <path>`, ticket cli-open-command)이 이 데몬·세션을 찾는 좌표 (와이어 v9).
     // SUPERLITE_SOCK 은 common 의 우회 변수와 같은 이름 — 셸 안에서 띄운 백엔드·심이 socket_path()
     // 만으로 이 데몬(격리 인스턴스 포함)에 붙는다. 원격에서는 원격 데몬이 만드니 자연히 원격 소켓
@@ -455,9 +459,12 @@ fn program(root: &Path, session: Option<&str>, attach: Option<&str>) -> Program 
     if let crate::tmux::Mode::Tmux { bin } = crate::tmux::mode() {
         // tmux 세션 환경변수로 — 새 창·패널의 셸에 상속되고, 워크스페이스 역방향 조회 키가 된다
         env.push((crate::tmux::ENV_ROOT, root.to_string_lossy().into_owned()));
+        if let Some(h) = host {
+            env.push((crate::tmux::ENV_HOST, h.to_string()));
+        }
         let target = match attach {
             Some(id) => Ok((id.to_string(), crate::tmux::name_of(bin, id))),
-            None => crate::tmux::new_session(bin, root, &env),
+            None => crate::tmux::new_session(bin, cwd, &env),
         };
         match target.and_then(|t| crate::tmux::base_args().map(|a| (t, a))) {
             Ok(((id, name), args)) => {
@@ -473,7 +480,7 @@ fn program(root: &Path, session: Option<&str>, attach: Option<&str>) -> Program 
                 // 켜지지 않는다 (ticket ime-composition-window)
                 cmd.args(["-T", "sync"]);
                 cmd.args(["attach-session", "-t", &id]);
-                cmd.cwd(root);
+                cmd.cwd(cwd);
                 cmd.env("TERM", "xterm-256color");
                 // 데몬이 tmux 안에서 떴어도 클라이언트가 중첩 경고를 내지 않게
                 cmd.env_remove("TMUX");
@@ -489,7 +496,7 @@ fn program(root: &Path, session: Option<&str>, attach: Option<&str>) -> Program 
     #[cfg(windows)]
     let shell = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into());
     let mut cmd = CommandBuilder::new(shell);
-    cmd.cwd(root);
+    cmd.cwd(cwd);
     // ConPTY 세계엔 TERM 규약이 없다 — 심어두면 Windows 태생 도구들이 오판한다
     #[cfg(unix)]
     {
@@ -510,13 +517,21 @@ fn spawn_term(
     root: &Path,
     session: Option<&str>,
     attach: Option<&str>,
+    cwd: Option<&Path>,
+    host: Option<&str>,
     terms: Terms,
     sink: Sink,
 ) -> Result<(), String> {
+    // 없는 폴더는 spawn 실패로 — 프론트가 termData 로 사유를 보이고 카드 생성 동사는 에러로 돌려준다
+    let cwd = match cwd {
+        Some(c) if !c.is_dir() => return Err(format!("cwd 없음: {}", c.display())),
+        Some(c) => c,
+        None => root,
+    };
     let pty = native_pty_system()
         .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
         .map_err(err)?;
-    let Program { cmd, tmux, fallback } = program(root, session, attach);
+    let Program { cmd, tmux, fallback } = program(root, session, attach, cwd, host);
     // tmux 클라이언트는 정리 시 detach-client -t <이 pty tty> 로 clean detach 한다 (kill_term).
     // tty 를 못 구하면 detach 없음 → SIGHUP 폴백 (그 경우 pane 이 죽지만 tty 부재는 드물다)
     #[cfg(unix)]
@@ -678,7 +693,7 @@ mod tests {
         //      첫 호출 전에 둬야 하고, 이 프로세스의 다른 테스트는 tmux 를 타지 않는다.
         std::env::set_var("SUPERLITE_TMUX", "0");
         std::env::set_var("SHELL", "/bin/sh");
-        spawn_term(1, 80, 24, Path::new("/"), None, None, terms_a.clone(), sink_a.clone()).expect("pty");
+        spawn_term(1, 80, 24, Path::new("/"), None, None, None, None, terms_a.clone(), sink_a.clone()).expect("pty");
         // A 에 이미 있는 id 로는 못 붙인다 / 없는 출처는 실패
         assert!(adopt(&terms_a, 9, &terms_b, 7, &sink_b).is_err(), "없는 출처 터미널");
         adopt(&terms_a, 1, &terms_b, 7, &sink_b).expect("adopt");

@@ -2,7 +2,7 @@
  * WsBackend — 백엔드(backend/)의 /ws 에 붙는 ThinBackend 구현. 백엔드가 데몬으로 중계한다.
  *
  * 프로토콜: {id,method,params} 요청/응답 (JSON, 대형 readFile 응답은 바이너리 payload 프레임) +
- * 이벤트 프레임 {event,…} — connectStage·fsChanges·request·termData·termTmux·termInputAck·termExit.
+ * 이벤트 프레임 {event,…} — connectStage·fsChanges·request·termData·termTmux·termAgent(v24)·termInputAck·termExit.
  * 프론트·relay·데몬은 한 빌드로 배포되고 데몬 IPC 주소가 데몬 빌드 해시로 갈려 빌드 불일치 자체가
  * 막힌다 (backend/common socket_path) — 메서드 목록의 TS 사영은 ./types.ts 의 ThinBackend, rust
  * 쪽은 backend/daemon/src.
@@ -12,6 +12,7 @@
  * 끊기는 순간 진행 중이던 요청만 실패한다 (실행 여부 불명 — 네트워크 실패의 본질).
  */
 import type {
+  AgentInfo, AgentStatus,
   ConnectStage, DirEntry, FileContent, FileSearchResult, FileStat, FsChange, GitCommitFile, GitLogItem, GitStatus, QuickOpenResult, TerminalInfo, TermCwd, TerminalMode, TerminalSession, ThinBackend, WorkspaceInfo, WriteResult,
 } from './types';
 
@@ -60,6 +61,7 @@ export class WsBackend implements ThinBackend {
   private termExitHandlers = new Map<number, (code: number | null) => void>();
   private termTmuxHandlers = new Map<number, (info: { id: string; name: string } | null, error?: string) => void>();
   private terminalModeHandler: ((mode: TerminalMode, error: string | null) => void) | null = null;
+  private termAgentHandler: ((tmuxId: string, status: AgentStatus) => void) | null = null;
   /** 터미널별 미ack 수신량 — CHAR_COUNT_ACK_SIZE 를 넘으면 termAck 로 비운다 */
   private termRecv = new Map<number, number>();
   /** 연결 세대 — 성공한 연결(onopen)마다 1 증가. 터미널의 생사 판별 기준 */
@@ -202,6 +204,13 @@ export class WsBackend implements ThinBackend {
         const cb = this.termTmuxHandlers.get(msg.term);
         if (typeof msg.id === 'string') cb?.({ id: msg.id, name: String(msg.name ?? msg.id) });
         else cb?.(null, String(msg.error ?? 'tmux 실패'));
+        return;
+      }
+      if (msg.event === 'termAgent') {
+        // 와이어 v24: 에이전트 상태 방송 — tmux 세션 id 단위, 이 세션이 열지 않은 것도 온다
+        if (typeof msg.tmuxId === 'string' && typeof msg.state === 'string') {
+          this.termAgentHandler?.(msg.tmuxId, { agent: String(msg.agent ?? 'unknown'), state: msg.state, detail: msg.detail ?? {}, at: Number(msg.at) || Date.now() });
+        }
         return;
       }
       if (msg.event === 'termExit') {
@@ -492,12 +501,12 @@ export class WsBackend implements ThinBackend {
     this.requestHandler = cb;
   }
 
-  createTerminal(cols: number, rows: number, attach?: string): TerminalSession {
+  createTerminal(cols: number, rows: number, attach?: string, cwd?: string, host?: string): TerminalSession {
     // WHY: 계약이 동기 반환이라 term id 는 클라이언트가 발급하고 생성은 fire-and-forget
     const term = this.nextTerm++;
     this.markTermEpoch(term);
-    // attach 가 undefined 면 JSON.stringify 가 키를 떨군다 — 데몬은 새 세션으로 본다
-    this.send({ method: 'createTerminal', params: { term, cols, rows, attach } });
+    // attach·cwd·host 가 undefined 면 JSON.stringify 가 키를 떨군다 — 데몬은 새 세션·root·묶음 없음으로 본다
+    this.send({ method: 'createTerminal', params: { term, cols, rows, attach, cwd, host } });
     return this.termHandle(term);
   }
 
@@ -506,6 +515,19 @@ export class WsBackend implements ThinBackend {
   }
   termCwd(term: number): Promise<TermCwd> {
     return this.call('termCwd', { term });
+  }
+  listAgents(): Promise<AgentInfo[]> {
+    return this.call('listAgents', {});
+  }
+  async registerAgent(reg: { id: string; name: string; role?: string; lane?: string; parent?: string }): Promise<void> {
+    await this.call('agentRegister', reg);
+  }
+  async captureTerminal(id: string, lines?: number): Promise<string> {
+    const r = await this.call<{ text?: string }>('tmuxCapture', { id, lines });
+    return r?.text ?? '';
+  }
+  async sendTerminal(id: string, text: string, enter: boolean): Promise<void> {
+    await this.call('tmuxSend', { id, text, enter });
   }
   killTerminal(id: string): Promise<void> {
     return this.call('killTerminal', { id });
@@ -519,6 +541,12 @@ export class WsBackend implements ThinBackend {
   }
   onTerminalMode(cb: (mode: TerminalMode, error: string | null) => void): void {
     this.terminalModeHandler = cb;
+  }
+  onTermAgent(cb: (tmuxId: string, status: AgentStatus) => void): void {
+    this.termAgentHandler = cb;
+  }
+  agentHooks(agent: 'claude', action: 'install' | 'uninstall'): Promise<{ path: string; installed: boolean }> {
+    return this.call('agentHooks', { agent, action });
   }
 
   /** 터미널 하나의 로컬 상태 전부 정리 — termExit 수신·dispose·release 가 같은 집합을 지운다 */

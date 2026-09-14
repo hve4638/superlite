@@ -6,6 +6,8 @@ import { createTerminal } from '../model/terminal';
 import { endEditorDrag, startNewTabDrag } from './editor/tabDnd';
 import { DETACH_DX, DETACH_DY, insertIndexAt } from './dndUtil';
 import StripScroll from './widgets/StripScroll.vue';
+import TerminalBadge from './editor/TerminalBadge.vue';
+import type { DotSpec } from '../model/agent';
 import {
   inApp,
   appWindow,
@@ -17,6 +19,7 @@ import {
 } from '../model/window';
 import {
   sessions,
+  sessionCtxOf,
   sessionsEnabled,
   activeSessionEmpty,
   activateSession,
@@ -40,6 +43,11 @@ import {
 // 같은 이름(루트 basename)의 세션이 한 창에 여럿이면, rename 된 적 없는 탭들의 라벨을 전체 경로로
 // 바꿔 구분한다 (2026-09-07 사용자 결정). 세그먼트가 많으면 가운데를 줄인다 (/a/.../c/d). 중복이
 // 풀리면 basename 으로 돌아온다 — 라벨은 저장값이 아니라 계산값. rename 된 탭은 중복이어도 그대로
+/** 세션 탭의 상태 점 — 그 세션 컨텍스트의 터미널 요약 (빈 세션·미로드는 null) */
+function sessionDot(id: string): DotSpec | null {
+  return sessionCtxOf(id)?.terminals.agent.dotOfSession() ?? null;
+}
+
 const labels = computed(() => {
   const byName = new Map<string, SessionTab[]>();
   for (const t of sessions.list) byName.set(sessionLabel(t), [...(byName.get(sessionLabel(t)) ?? []), t]);
@@ -279,6 +287,8 @@ function onNewTabDragStart(e: DragEvent, kind: 'new-folder' | 'new-terminal'): v
             <template v-else>
               <!-- 이름은 워크스페이스 정보가 오면 채워진다 — 그 전엔 빈 세션(시작 페이지 탭)만 Welcome, 로드 중인 세션은 공백 -->
               <span class="session-name">{{ labels.get(tab.id) ?? sessionLabel(tab) }}</span>
+              <!-- 세션의 터미널 상태 요약 점 (ticket agent-hooks-status) — 노랑/초록 반반, 닫기 요청만 있으면 빨강 -->
+              <TerminalBadge :dot="sessionDot(tab.id)" />
             </template>
             <!-- 로딩 스피너 — 초기 로드(ctx.init) 중, X 바로 왼쪽. 예비 파이프 접속은 상태바 단계가
                  안 보이므로 로드 완료의 유일한 시각 신호다 -->

@@ -74,6 +74,9 @@ export fn rootOfBackend(backend) -> String? {
 export fn reconnectSession(backend) {
   role: 영구 실패(close 4403·4502) 뒤 사용자 주도 재접속 (시작 페이지·탐색기 Retry, 강제 정리 뒤) — backend.reconnect 하고, 초기 로드가 실패했던 세션(initFailed)이면 init 을 다시 돌려 트리·SCM·감시 구독을 붙인다. 로드가 끝난 뒤의 실패는 재연결 알림의 전체 리프레시가 재동기화하므로 init 을 다시 돌리지 않는다 (ticket remote-connect-retry)
 }
+export fn sessionCtxOf(id) -> SessionCtx? {
+  role: 세션 id 의 컨텍스트 — 세션 탭 배지(TitleBar)가 그 세션 터미널의 요약 점(agent.dotOfSession)을 읽을 때
+}
 export fn allSessionCtxs() -> SessionCtx[] {
   role: 열려 있는 모든 세션 컨텍스트 — tmux.conf 저장을 접속 중인 데몬 전부에 적용할 때
 }

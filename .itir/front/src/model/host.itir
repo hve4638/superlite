@@ -1,4 +1,4 @@
-import { ThinBackend } from '../backend/types'
+import { AgentInfo, ThinBackend } from '../backend/types'
 import { MockBackend } from '../backend/mock'
 import { WsBackend } from '../backend/ws'
 import { EmptyBackend } from '../backend/empty'
@@ -20,7 +20,24 @@ export val backend
 export val openRootDefault
 
 fn handleRequest(tab, ctx, method, params) {
-  role: 데몬 소켓 요청자(셸 심 `superlite <동사> [인자…]` backend/cli, 데몬 credential helper)가 세션에 보낸 요청의 처리기 (와이어 v9). 심은 동사를 해석하지 않고 params {args, cwd} 를 실어 보낸다 — 동사의 이름·인자·확인 여부는 전부 여기서 정한다 (ticket cli-control-discussion). 내장 동사: notify(알림 표시)·open(경로 열기 — stat 성공이면 파일로 그 세션 편집기에, 아니면 browseDir 로 폴더 확인 후 openFolder)·download <경로…> [--wait](경로마다 stat 으로 file/directory 판정 → downloads.requestDownload 항목 하나, 글로브는 셸이 펼친다 — 기본은 대기열 등록 후 즉시 'queued [n]', --wait 면 전부의 사용자 확인·전송이 끝나야 응답, 하나라도 취소·실패면 에러)·credential(gitauth 중계). 새 내장 동사는 case 추가, 플러그인 등록 방식은 ticket plugin-architecture 결정을 따른다. 상대 경로는 argPath 가 cwd 기준으로 절대화
+  role: 데몬 소켓 요청자(셸 심 `superlite <동사> [인자…]` backend/cli, 데몬 credential helper)가 세션에 보낸 요청의 처리기 (와이어 v9). 심은 동사를 해석하지 않고 params {args, cwd} 를 실어 보낸다 — 동사의 이름·인자·확인 여부는 전부 여기서 정한다 (ticket cli-control-discussion). 내장 동사: notify(알림 표시)·open(경로 열기 — stat 성공이면 파일로 그 세션 편집기에, 아니면 browseDir 로 폴더 확인 후 openFolder)·download <경로…> [--wait](경로마다 stat 으로 file/directory 판정 → downloads.requestDownload 항목 하나, 글로브는 셸이 펼친다 — 기본은 대기열 등록 후 즉시 'queued [n]', --wait 면 전부의 사용자 확인·전송이 끝나야 응답, 하나라도 취소·실패면 에러)·credential(gitauth 중계)·agent register|list|whoami(에이전트 등록부 — agentVerb)·card new|read|send|close(카드 제어 — cardVerb). 새 내장 동사는 case 추가, 플러그인 등록 방식은 ticket plugin-architecture 결정을 따른다. 상대 경로는 argPath 가 cwd 기준으로 절대화
+}
+fn agentVerb(ctx, p) {
+  role: 에이전트 등록부 동사 (ticket superlite-agent-registry, 와이어 v23) — 등록 단위는 요청자의 tmux 세션 id(데몬이 request params 에 동봉한 tmux). register <이름> [--role] [--lane] [--parent <이름|$id>] 는 backend.registerAgent(덮어쓰기 — 저장은 데몬의 tmux 세션 환경변수라 세션과 함께 사라진다, 사용자 결정 2026-09-13), list 는 서버 전체를 한 줄씩(agentLine — `이름 ($id)` 뒤 있는 필드만, parent 는 이름으로 풀어), whoami 는 자기 세션의 등록 한 줄(미등록은 에러). --parent 의 이름이 여럿에 맞으면 에러로 $id 지목을 요구(resolveAgent). tmux 없는 터미널(plain·Windows)은 register·whoami 가 에러. 하위 워커 자동 등록(superlite-card-control)은 같은 registerAgent 를 새 세션 id + 요청자 id(parent)로 부른다
+}
+fn cardVerb(ctx, p) {
+  role: 카드 제어 동사 (ticket superlite-card-control, 와이어 v25). 카드 식별자는 tmux 세션 id `$N`(등록부와 같은 단위), 대상은 늘 명시 — "활성 터미널" 암묵 대상 없음 (사용자 결정 2026-09-13). new [--cwd] [--name] [--role] [--lane] [-- <초기 명령…>]: 요청자 터미널(p.tmux)이 앉은 탭(terminals.hostTabFor)의 카드로 createTerminal({host}, {cwd — 없으면 요청자 셸 cwd}), 보던 카드를 되돌려 뒤에서 만들고(옛 훅의 -d), ready 로 세션 id 를 받아 --name 이면 renameListed, registerAgent(parent=요청자, lane 은 요청자 등록 상속, role 기본 worker), `--` 뒤 인자를 shellQuote 로 인용해 sendTerminal 한 줄 + Enter (옛 post-create 훅의 send-keys 와 같다). 출력 `$N`. read <대상> [--lines N]: captureTerminal. send <대상> [--no-enter] -- <텍스트…>: 글자 그대로 + Enter. close <대상…> | close --cwd <폴더>: 즉시 종료가 아니라 terminals.requestClose([D] + 방문 시 닫기/유지 확인) — --cwd 는 이 워크스페이스 listTerminals 의 cwd 가 그 폴더(사라진 워크트리, ' (deleted)' 접미 포함)에 앉은 카드 전부 (post-destroy 훅용, 옛 훅의 on_dead_path 규칙). 대상 해석은 resolveCard — `$id` 또는 맨 숫자(셸이 `$154` 를 `$1`+`54` 로 펼치므로 `154` 도 받는다) 그대로(존재 확인), 등록 이름(resolveAgent, 모호하면 에러), 없으면 tmux 세션 이름(서버 전체, 유일할 때만)
+}
+fn resolveCard(ctx, ref) -> tmux_id
+fn onDeadPath(cwd, dead) -> Bool
+fn resolveAgainst(cwd, p) -> abs
+fn shellQuote(a) -> quoted {
+  role: 초기 명령 인자 하나를 대화형 셸이 같은 argv 로 되읽게 인용 — 안전 문자만이면 그대로, 아니면 작은따옴표(내부 ' 는 '\'' — 옛 post-create 훅 규칙)
+}
+fn agentLine(a, all) -> line
+fn resolveAgent(list, ref) -> AgentInfo
+fn argOpts(p) -> positional_and_opts {
+  role: 심 args 를 위치 인자와 `--키 값` 옵션으로 나눈다 (값 없는 --키 는 'true') — 값 옵션이 필요한 동사용, argFlags 와 별개
 }
 fn argFlags(p) -> set {
   role: 심 params 의 `--플래그` 인자 집합

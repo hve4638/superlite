@@ -1,10 +1,19 @@
-role: ThinBackend 계약 — 와이어 프로토콜(백엔드 /ws JSON-RPC, v6 부터 대형 readFile 응답은 바이너리 payload 프레임 — 계약 표면(content=string)은 불변, 복원은 ws.ts 몫. v10 adoptTerminal — 세션 간 터미널 이동. v11 readFile 범위 읽기 offset + stat size — hex 뷰어 청크. v12 listFiles → quickOpen: 빠른 열기 목록을 나르지 않고 데몬 캐시에서 검색. v14 writeFile append — 청크 업로드. v16 readDir 절대 경로 + 항목 mtime·size — 폴더 탭의 워크스페이스 밖 탐색·자세히 보기 (v15 는 폐기된 termd 분리 빌드가 소켓 충돌 방지로 건너뛴 번호). v17 내장 tmux — createTerminal attach·listTerminals·killTerminal·renameTerminal·applyTmuxConf·onTerminalMode·TerminalSession.onTmux. v19 copy — 탐색기 드래그 복사. v20 gitCommitFiles + gitOriginalContent rev — SCM 커밋 상세(ticket scm-commit-detail). v21 termCwd + stat dir — 터미널 경로 링크(ticket terminal-path-links): 상대 경로의 기준 cwd 와 디렉토리 실존 확인. v22 attach 응답 terms — 세션에 살아 있는 터미널 id 목록, 같은 session id 로 새 프론트가 붙을 때 term id 충돌 방지(ticket multi-client-terminal-crosstalk, WsBackend 내부 소비라 계약 표면 불변))의 TS 사영. 와이어 쪽 대응은 daemon/src 참조
+role: ThinBackend 계약 — 와이어 프로토콜(백엔드 /ws JSON-RPC, v6 부터 대형 readFile 응답은 바이너리 payload 프레임 — 계약 표면(content=string)은 불변, 복원은 ws.ts 몫. v10 adoptTerminal — 세션 간 터미널 이동. v11 readFile 범위 읽기 offset + stat size — hex 뷰어 청크. v12 listFiles → quickOpen: 빠른 열기 목록을 나르지 않고 데몬 캐시에서 검색. v14 writeFile append — 청크 업로드. v16 readDir 절대 경로 + 항목 mtime·size — 폴더 탭의 워크스페이스 밖 탐색·자세히 보기 (v15 는 폐기된 termd 분리 빌드가 소켓 충돌 방지로 건너뛴 번호). v17 내장 tmux — createTerminal attach·listTerminals·killTerminal·renameTerminal·applyTmuxConf·onTerminalMode·TerminalSession.onTmux. v19 copy — 탐색기 드래그 복사. v20 gitCommitFiles + gitOriginalContent rev — SCM 커밋 상세(ticket scm-commit-detail). v21 termCwd + stat dir — 터미널 경로 링크(ticket terminal-path-links): 상대 경로의 기준 cwd 와 디렉토리 실존 확인. v22 attach 응답 terms — 세션에 살아 있는 터미널 id 목록, 같은 session id 로 새 프론트가 붙을 때 term id 충돌 방지(ticket multi-client-terminal-crosstalk, WsBackend 내부 소비라 계약 표면 불변). v23 listAgents·registerAgent + request 이벤트 params.tmux — 에이전트 등록부(ticket superlite-agent-registry). v25 createTerminal cwd·host·captureTerminal·sendTerminal + TerminalInfo.cwd — 카드 제어(ticket superlite-card-control, v24 는 agent-hooks-status). v24 termAgent 이벤트 + listTerminals agent + agentHooks — 에이전트 상태(ticket agent-hooks-status))의 TS 사영. 와이어 쪽 대응은 daemon/src 참조
 
 export class TerminalMode {
   role: 데몬의 터미널 방식 (attach 응답, 와이어 v17) — 'tmux'(내장 tmux 서버) | 'plain'(unix 인데 tmux 를 못 써 PTY 직접 — 경고 배지) | 'unsupported'(Windows — 아이콘 없음)
 }
+export class AgentInfo {
+  role: 등록된 에이전트 하나 (listAgents 항목, 와이어 v23) — id(tmux session id = 등록 단위·고유 식별자)·session(tmux 세션 이름)·root(워크스페이스, 없으면 null)·name·role·lane(등록 정보)·parent(상위 에이전트의 tmux session id). 이름은 중복될 수 있어 표시는 `name ($3)`
+}
 export class TerminalInfo {
-  role: 살아 있는 tmux 세션 하나 (listTerminals 항목) — id(tmux session id, 이름 바꿔도 불변)·name·root(세션 환경변수 SUPERLITE_TMUX_WORKSPACE_PATH)·attached(붙은 클라이언트 수)·activity·created(unix ms)·command(활성 패널의 현재 명령)
+  role: 살아 있는 tmux 세션 하나 (listTerminals 항목) — id(tmux session id, 이름 바꿔도 불변)·name·root(세션 환경변수 SUPERLITE_TMUX_WORKSPACE_PATH)·attached(붙은 클라이언트 수)·activity·created(unix ms)·command(활성 패널의 현재 명령)·cwd(활성 패널의 현재 폴더, 와이어 v25 — 사라진 워크트리 카드 대조)·host(카드로 만들 때 붙은 탭의 터미널 세션 id, 세션 환경변수 SUPERLITE_TMUX_HOST, 와이어 v25 — 사이드바 묶음·붙이기 자리. 배치일 뿐 수명 관계 없음, 없으면 null)·agent?(에이전트 마지막 상태 AgentStatus — 와이어 v24, 데몬 캐시에 있을 때만)
+}
+export class AgentState {
+  role: 에이전트 상태 어휘 (와이어 v24, ticket agent-hooks-status — cmux 와 같은 다섯) 'unknown' | 'running' | 'needsInput' | 'idle' | 'exited'. 단위는 탭이 아니라 tmux 세션 id. unknown 은 프론트 전용(30분 stale 강등)
+}
+export class AgentStatus {
+  role: 에이전트 훅 사건을 데몬이 정규화한 상태 — agent(종류 claude·codex…)·state(AgentState)·detail{hook, tool?, type?, message?}(원본 훅 이름·도구·알림 종류·메시지)·at(데몬 시각 unix ms)
 }
 
 export class ConnectStage {
@@ -95,8 +104,8 @@ port ThinBackend {
   fn gitPush(repo) {
     role: gitFetch 와 같은 인증 경로의 push — 상류 없는 브랜치는 origin 에 같은 이름으로 (push.autoSetupRemote)
   }
-  fn createTerminal(cols, rows, attach?) -> TerminalSession {
-    role: PTY 세션 생성. attach(와이어 v17)는 새 셸 대신 기존 tmux 세션 id 에 붙는다 — 같은 세션을 여러 탭·창이 동시에 본다. onTmux 콜백으로 붙은 세션 {id,name} 또는 plain 대체 사유가 온다. (동기 핸들, 데이터·셸 종료는 콜백 — onExit 는 셸 자연 종료에만 exit code 와 함께 발화(spawn 실패는 null), dispose 로 인한 정리에는 발화하지 않는다). onData 콜백은 done 을 함께 받는다 — 구독자(xterm)가 청크 처리를 마치면 호출해야 하는 렌더러 배압 신호 (WsBackend 가 ack 시점으로 쓴다, mock 은 생략)
+  fn createTerminal(cols, rows, attach?, cwd?, host?) -> TerminalSession {
+    role: PTY 세션 생성. attach(와이어 v17)는 새 셸 대신 기존 tmux 세션 id 에 붙는다 — 같은 세션을 여러 탭·창이 동시에 본다. cwd(와이어 v25)는 새 셸의 작업 폴더 — 카드 생성 동사가 워크트리를 준다, 없으면 root. host(와이어 v25)는 카드가 붙는 탭의 터미널 세션 id — 새 세션 환경에 남아 listTerminals 의 host 로 돌아온다. onTmux 콜백으로 붙은 세션 {id,name} 또는 plain 대체 사유가 온다. (동기 핸들, 데이터·셸 종료는 콜백 — onExit 는 셸 자연 종료에만 exit code 와 함께 발화(spawn 실패는 null), dispose 로 인한 정리에는 발화하지 않는다). onData 콜백은 done 을 함께 받는다 — 구독자(xterm)가 청크 처리를 마치면 호출해야 하는 렌더러 배압 신호 (WsBackend 가 ack 시점으로 쓴다, mock 은 생략)
   }
   fn listTerminals(all?) -> TerminalInfo[] {
     role: 살아 있는 tmux 세션 목록 (와이어 v17, 옵셔널 — WsBackend 만) — 기본은 이 워크스페이스, all 이면 서버 전부. plain·unsupported 데몬은 빈 배열
@@ -110,11 +119,29 @@ port ThinBackend {
   fn applyTmuxConf(content) -> message {
     role: 클라이언트 tmux.conf 를 이 데몬에 적용 — 반환은 tmux 의 경고·오류 문자열 ('' 이면 정상)
   }
+  fn listAgents() -> AgentInfo[] {
+    role: 등록된 에이전트 전부 (와이어 v23, 옵셔널 — WsBackend 만) — 이 데몬의 tmux 서버 전체(모든 워크트리). plain·unsupported 데몬은 에러
+  }
+  fn registerAgent(reg) {
+    role: tmux 세션 id 단위 등록 {id, name, role?, lane?, parent?} — 같은 세션은 덮어쓴다. 데몬이 세션 환경변수에 저장해 세션이 죽으면 함께 사라진다. parent 는 상위의 tmux session id (이름 → id 해석은 호출측 host.ts agentVerb)
+  }
+  fn captureTerminal(id, lines?) -> text {
+    role: tmux 세션 활성 pane 의 화면 텍스트 (와이어 v25, 옵셔널 — WsBackend 만) — 기본 보이는 화면, lines 면 스크롤백 포함 마지막 lines 줄. `superlite card read`
+  }
+  fn sendTerminal(id, text, enter) {
+    role: tmux 세션 활성 pane 에 텍스트 입력 (와이어 v25) — 글자 그대로, enter 면 Enter 키. `superlite card send`·`card new` 의 초기 명령
+  }
   fn termCwd(term) -> TermCwd {
     role: 터미널의 현재 작업 디렉토리 (와이어 v21, 옵셔널 — WsBackend 만). tmux 면 그 세션 활성 pane 의 pane_current_path(전경 프로세스 cwd, 셸 통합 불필요 — 조사 terminal-path-links-research), plain 은 워크스페이스 root. home 은 데몬 머신의 홈 — 링크의 `~` 해석. 터미널 경로 링크가 상대 경로를 풀 때 호버한 줄마다 한 번 묻는다 (분할 pane 은 활성 pane 기준 — 좌표 매핑은 후속)
   }
   fn onTerminalMode(cb) {
     role: 데몬의 터미널 방식 구독 — attach 응답마다 (mode, error)
+  }
+  fn onTermAgent(cb) {
+    role: 에이전트 상태 변경 구독 (와이어 v24 termAgent, 옵셔널 — WsBackend 만) — (tmuxId, AgentStatus). 데몬이 attach 된 모든 세션에 방송하므로 이 세션이 열지 않은 tmux 세션의 것도 온다 — 구독자(model/agent)가 tmux 세션 id 로 탭·카드·사이드바 행에 사영한다
+  }
+  fn agentHooks(agent, action) -> AgentHooksResult {
+    role: 에이전트 훅 설치·제거 (와이어 v24, 옵셔널 — WsBackend 만) — 데몬 머신 홈의 에이전트 설정 파일(claude: ~/.claude/settings.json)에 superlite 항목만 병합('install')·제거('uninstall'). 원격 세션이면 원격 홈. 사용자 결정 2026-09-13 (설정 파일 병합 방식)
   }
   fn adoptTerminal(opts) -> TerminalSession {
     role: 기존 데몬 터미널을 이 연결의 핸들로 잡는다 (옵셔널 — WsBackend 만, 탭을 다른 창으로 옮기기). term 만: 같은 세션이 소유한 터미널(세션 탭 분리 — 같은 session id 재-attach)의 로컬 핸들 재구성, 데몬 요청 없음. from: 같은 root 의 다른 세션이 소유한 터미널을 데몬에서 이 세션으로 옮긴다 (와이어 v10 adoptTerminal, 새 로컬 id 발급). 이동 실패는 onExit(null) 로 드러난다. TerminalSession.release 는 로컬 핸들만 놓는다 (데몬 터미널은 살림 — 받는 쪽이 adopt)

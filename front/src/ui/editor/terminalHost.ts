@@ -8,7 +8,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import { pushImeDiag, setTerminalSerializer, setTerminalZoom, stepTerminalZoom, terminalView } from '../../model/terminal';
 import type { TerminalInstance } from '../../model/terminal';
-import { allTerminals } from '../../model/sessions';
+import { allSessionCtxs, allTerminals } from '../../model/sessions';
 import { isShellSkippingChord } from '../../model/commands';
 import { imeProbe, openUrl } from '../../model/window';
 import { registerPathLinks } from './terminalPathLinks';
@@ -83,8 +83,14 @@ watch(
       // 열리기 전(pending)의 done 은 호출을 미뤄 ack 를 묶어둔다 — 배경 세션의 폭주 출력은
       // 데몬 flow control(미ack 고수위)이 막는다
       inst.session.onData((chunk, done) => {
+        // 바닥 신호 (ticket agent-hooks-status): 출력 = 활동. 벨은 열린 xterm 이면 onBell(정확), 아직 안 열렸으면
+        // 청크에서 OSC 종결자가 아닌 BEL 을 찾는다 (한 번도 안 본 탭에도 벨 배지가 붙게)
+        agentOf(inst)?.noteOutput(inst);
         if (b.term) b.term.write(chunk, done);
-        else b.pending.push([chunk, done]);
+        else {
+          if (hasBareBell(chunk)) agentOf(inst)?.noteBell(inst);
+          b.pending.push([chunk, done]);
+        }
       });
       bindings.set(inst.id, b);
     }
@@ -97,6 +103,17 @@ watch(
   },
   { flush: 'sync', immediate: true },
 );
+
+/** OSC(`ESC ]…BEL`) 종결자가 아닌 BEL — 열리지 않은 터미널의 벨 판정용 (청크 경계에 걸친 OSC 는 오탐 가능, 드물다) */
+const PENDING_BELL = /(?:^|[^\x1b\]][^\x1b]*?)\x07/;
+function hasBareBell(chunk: string): boolean {
+  return PENDING_BELL.test(chunk.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, ''));
+}
+
+/** 인스턴스를 소유한 세션의 에이전트 상태 모듈 — 바닥 신호(활동·벨·입력)를 그 세션에 알린다 */
+function agentOf(inst: TerminalInstance) {
+  return allSessionCtxs().find((c) => c.terminals.terminals.list.some((t) => t.id === inst.id))?.terminals.agent ?? null;
+}
 
 function copyText(text: string, refocus?: () => void): void {
   if (navigator.clipboard?.writeText) {
@@ -420,8 +437,10 @@ function open(inst: TerminalInstance, b: Binding): void {
   //      한정해 붙여넣기(\e[200~…) 본문의 "NaN" 은 건드리지 않는다
   term.onData((d) => {
     if (NAN_MOUSE_REPORT.test(d)) return;
+    agentOf(inst)?.noteInput(inst, d);
     inst.session.write(d);
   });
+  term.onBell(() => agentOf(inst)?.noteBell(inst));
   term.onResize(({ cols, rows }) => inst.session.resize(cols, rows));
   b.term = term;
   b.fit = fit;

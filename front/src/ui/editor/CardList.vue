@@ -2,7 +2,9 @@
 import type { Tab } from '../../model/editors';
 import { closeCard, editors, setActiveCard } from '../../model/editors';
 import { requestKillTerminal, terminals } from '../../model/terminal';
+import { instanceDot } from '../../model/agent';
 import FileIcon from '../widgets/FileIcon.vue';
+import TerminalBadge from './TerminalBadge.vue';
 
 // 카드가 있는 탭의 오른쪽 세로 목록 (ticket terminal-tab-panes) — 첫 항목은 탭 자신(닫기 없음, 탭 × 로만), 그 아래 카드들.
 // 카드 추가 진입점은 팔레트뿐(Tab: New Terminal Card) — 여기엔 선택·닫기만 있다
@@ -36,6 +38,7 @@ function onClose(card: Tab, e: MouseEvent) {
       <span v-else-if="item.kind === 'folder'" class="codicon codicon-folder card-icon" />
       <FileIcon v-else :name="iconName(item)" />
       <span class="card-label">{{ item.name }}</span>
+      <TerminalBadge v-if="item.kind === 'terminal'" :inst="terminals.list.find((t) => t.id === item.term)" :dot="instanceDot(item.term)" />
       <span v-if="i > 0" class="card-close" title="Close" @click.stop="onClose(item, $event)">
         <span class="codicon" :class="item.dirty ? 'codicon-circle-filled' : 'codicon-close'" />
       </span>
