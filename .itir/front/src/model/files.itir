@@ -1,5 +1,5 @@
 import { ctx, viewOf } from './ctx'
-import { errText } from './notifications'
+import { errText, notify } from './notifications'
 import { DirEntry, QuickOpenResult, ThinBackend } from '../backend/types'
 
 role: 탐색기 파일 트리 — lazy 디렉토리 로드, 외부 변경 시 로드된 디렉토리만 병합 리프레시. 세션별 팩토리(createFiles) + 활성 세션 전달 shim — UI 는 종전 이름 그대로 활성 세션에 작용한다
@@ -9,8 +9,10 @@ export val files
 
 export type FilesSnapshot
 
-export fn createFiles(backend) {
-  role: 세션별 트리 모듈 생성 — 트리·펼침·선택 집합(selected + 포커스 selectedPath, Shift 앵커)·로딩 상태가 팩토리 클로저에 산다 (한 페이지에 세션 여럿). 인스턴스 전용 expandPaths(paths)는 펼침 집합 복원(ticket workspace-state-restore) — 얕은 경로부터 자식을 읽어 expanded 에 넣고 사라진 경로·읽기 실패는 건너뛴다 (shim 없음, workspaceState.restoreWorkspace 가 ctx 로 부른다). 초기 로드(initFiles)는 루트 readDir 만 — 빠른 열기 목록은 나르지 않는다 (와이어 v12). onDirLoaded: 디렉토리 나열(readDir) 결과 구독 — SCM 이 repo 표식으로 하위 저장소를 즉시 등록한다 (session 조립 지점에서 연결). loading(루트 첫 로드, 진행 막대)·slowDirs(자식 로드 800ms 초과 디렉토리, twistie 스피너 — VS Code asyncDataTree slow 규칙)·pendingFocus(트리 키보드 포커스 요청 — 터미널 경로 링크가 디렉토리를 reveal 한 뒤 세운다, ExplorerView 가 소비, ticket terminal-path-links)
+export type ExtraRoot
+
+export fn createFiles(backend, base?) {
+  role: 세션별 트리 모듈 생성 — 트리·펼침·선택 집합(selected + 포커스 selectedPath, Shift 앵커)·로딩 상태가 팩토리 클로저에 산다 (한 페이지에 세션 여럿). base(기본 '' = 워크스페이스 루트)는 트리 루트의 루트 상대 경로이고 반환값에 실려 나간다 — 추가 탐색기 섹션(ExtraRoot, ticket explorer-extra-roots)은 워크스페이스 안 폴더를 base 로 하는 별도 인스턴스라 펼침·선택이 섹션마다 독립이고, 메인 인스턴스의 files.extraRoots 에 살며 refreshDir·loadedDirPaths·refreshTree·collapseAll 이 섹션 트리로도 전달된다 (감시·파일 조작 갱신이 섹션에 그대로 닿는다). 활성 세션의 메인 인스턴스는 shim mainTree(viewOf 프록시)로도 나가 공용 트리 컴포넌트가 섹션 트리와 같은 모양으로 받는다. 인스턴스 전용 expandPaths(paths)는 펼침 집합 복원(ticket workspace-state-restore) — 얕은 경로부터 자식을 읽어 expanded 에 넣고 사라진 경로·읽기 실패는 건너뛴다 (shim 없음, workspaceState.restoreWorkspace 가 ctx 로 부른다). 초기 로드(initFiles)는 루트 readDir 만 — 빠른 열기 목록은 나르지 않는다 (와이어 v12). onDirLoaded: 디렉토리 나열(readDir) 결과 구독 — SCM 이 repo 표식으로 하위 저장소를 즉시 등록한다 (session 조립 지점에서 연결). loading(루트 첫 로드, 진행 막대)·slowDirs(자식 로드 800ms 초과 디렉토리, twistie 스피너 — VS Code asyncDataTree slow 규칙)·pendingFocus(트리 키보드 포커스 요청 — 터미널 경로 링크가 디렉토리를 reveal 한 뒤 세운다, ExplorerView 가 소비, ticket terminal-path-links)
 }
 export fn parentOf(path) {
   role: 부모 디렉토리 경로 (루트는 '') — 순수 함수, 세션 무관
@@ -60,6 +62,16 @@ export fn selectAll() {
 export fn selectedNodes() -> TreeNode[] {
   role: 선택된 노드 — 보이는 순서, 트리에 실재하는 것만 (접힘·리프레시로 사라진 경로는 걸러진다). 삭제·드래그·메뉴가 이걸로 읽는다
 }
+export fn addExtraRoot(abs, rootPath) {
+  role: 추가 탐색기 섹션 추가 (ticket explorer-extra-roots) — abs 를 루트로 하는 createFiles 인스턴스를 만들어 활성 세션 files.extraRoots 에 드롭 순서로 push. 워크스페이스 안 폴더만 된다 (사용자 결정 2026-09-14) — base 가 늘 루트 상대라 파일 조작·감시 갱신·git 표식·트리 간 드래그 이동이 메인 트리와 같은 통로를 그대로 쓴다. 워크스페이스 밖·루트 자신·중복 abs 는 조용히 무시(알림 없음), 첫 나열 실패는 알리고 만들지 않는다. workspaceState 가 abs 목록을 순서째 기억·복원한다
+}
+export fn removeExtraRoot(abs) {
+  role: 추가 탐색기 섹션 제거 (헤더 x)
+}
+export fn moveExtraRoot(fromAbs, toIndex) {
+  role: 추가 탐색기 섹션 순서 바꾸기 (헤더 드래그) — from 을 목록의 toIndex 자리(UI 삽입선 위치, 0 = 맨 위, 길이 = 맨 아래 = Download 바로 위)로 옮긴다. 메인 트리는 위, Download 뷰는 아래 고정이라 섹션들 사이에서만 움직인다. 배열 순서가 곧 저장 순서다
+}
+export val mainTree
 export fn acquireDir(path) {
   role: 폴더 탭(FolderView) 열의 나열 참조 — files.listing (path → {entries|null(로드 중), error?}) 을 참조 계수로 든다. 0→1 에 readDir, 이미 있으면 왕복 없음 (부모·현재·미리보기 열과 여러 폴더 탭이 같은 경로를 공유). 트리와 별개라 임의 경로를 나열한다. refreshDir 는 listing 에 있는 경로를 트리의 로드된 디렉토리와 같게 갱신하고(실패는 error 로 보인다) loadedDirPaths 에도 포함되어 감시·fileops·전체 리프레시가 같은 경로로 닿는다 (ticket explorer-folder-tab)
 }

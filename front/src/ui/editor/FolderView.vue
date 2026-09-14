@@ -16,6 +16,7 @@ import FolderPreview from './FolderPreview.vue';
 import { typeOf } from './folderFmt';
 import InlineNameInput from '../widgets/InlineNameInput.vue';
 import { confirm, confirming } from '../../model/dialog';
+import { endEditorDrag, startFileDrag } from './tabDnd';
 
 // 폴더 탭 — 상태(현재 폴더 path·이력·정렬·스타일)는 탭(FolderTab)과 editors.folderView(커서)에 있고
 // 이 컴포넌트는 스타일에 따라 다르게 그린다: columns(yazi 3열: 부모/현재/미리보기) ·
@@ -283,6 +284,15 @@ function menuFor(entry: DirEntry | null): ContextMenuItem[] {
     ...viewItems,
   ];
 }
+/** 폴더 행 드래그 (ticket explorer-extra-roots) — 탐색기 사이드바 하단 드롭 존이 추가 탐색기 섹션으로 받고, 편집기
+ *  드롭 존은 폴더 탭으로 연다. 워크스페이스 밖(절대 경로)도 그대로 실린다. 파일 행은 끌지 않는다 (ponytail).
+ *  dragend 는 루트 요소가 버블로 받아 진행 상태를 지운다 */
+function onRowDragStart(entry: DirEntry, e: DragEvent): void {
+  selectEntry(entry);
+  e.dataTransfer?.setData('text/plain', entry.path);
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'copyMove';
+  startFileDrag(entry.path, 'folder', [entry.path]);
+}
 function onRowContextMenu(entry: DirEntry | null, e: MouseEvent): void {
   if (entry) selectEntry(entry);
   openContextMenu(e.clientX, e.clientY, menuFor(entry));
@@ -371,6 +381,7 @@ watch(
     @keydown="onKeydown"
     @focus="focused = true"
     @blur="focused = false"
+    @dragend="endEditorDrag()"
   >
     <div class="toolbar">
       <span class="nav codicon codicon-arrow-left" :class="{ disabled: !canBack }" title="Back (Alt+Left)" @click="goBack()" />
@@ -408,6 +419,7 @@ watch(
         @click="(e) => parent !== null && goTo(parent, e)"
         @dblclick="(e) => parent !== null && goTo(parent, e)"
         @contextmenu="() => {}"
+        @dragstart="onRowDragStart"
       />
       <!-- 현재 폴더 — 스타일별 -->
       <FolderColumn
@@ -421,6 +433,7 @@ watch(
         @click="selectEntry"
         @dblclick="enter"
         @contextmenu="onRowContextMenu"
+        @dragstart="onRowDragStart"
       >
         <template #input><InlineNameInput initial="" :validate="validateName" :external-error="opError" @commit="commitEdit" @cancel="cancelEdit" @input="opError = null" /></template>
         <template #rename><InlineNameInput :initial="editing?.initial ?? ''" :select-stem="cursor?.kind === 'file'" :validate="validateName" :external-error="opError" @commit="commitEdit" @cancel="cancelEdit" @input="opError = null" /></template>
@@ -437,6 +450,7 @@ watch(
         @click="selectEntry"
         @dblclick="enter"
         @contextmenu="onRowContextMenu"
+        @dragstart="onRowDragStart"
         @sort="(k) => setFolderSort(groupId, tabId, k)"
       >
         <template #input><InlineNameInput initial="" :validate="validateName" :external-error="opError" @commit="commitEdit" @cancel="cancelEdit" @input="opError = null" /></template>
@@ -454,6 +468,7 @@ watch(
         @click="selectEntry"
         @dblclick="enter"
         @contextmenu="onRowContextMenu"
+        @dragstart="onRowDragStart"
       >
         <template #input><InlineNameInput initial="" :validate="validateName" :external-error="opError" @commit="commitEdit" @cancel="cancelEdit" @input="opError = null" /></template>
         <template #rename><InlineNameInput :initial="editing?.initial ?? ''" :select-stem="cursor?.kind === 'file'" :validate="validateName" :external-error="opError" @commit="commitEdit" @cancel="cancelEdit" @input="opError = null" /></template>

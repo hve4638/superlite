@@ -58,14 +58,14 @@ const overlay = computed<Overlay | null>(() => {
 <template>
   <!-- 단일 루트 — 부모(EditorGroupView)가 v-show 로 덱과 바꿔 보이므로 fragment 면 안 된다 -->
   <div class="tab-body">
-  <!-- URL 탭은 목록의 모든 URL 탭을 마운트한 채 v-show 로 활성 것만 보인다 — v-if 로 갈아 끼우면 탭을 오갈 때마다
-       iframe 이 파괴되어 페이지를 처음부터 다시 로드한다 (browser-tab-iframe) -->
+  <!-- URL·preview 탭은 목록의 모든 해당 탭을 마운트한 채 v-show 로 활성 것만 보인다 — v-if 로 갈아 끼우면 탭을 오갈
+       때마다 iframe 이 파괴되어 페이지를 처음부터 다시 로드한다 (browser-tab-iframe, tab-switch-view-reload) -->
   <template v-for="t in holder.tabs" :key="t.id">
     <UrlView v-if="t.kind === 'url'" v-show="t.id === holder.activeTabId" :group-id="groupId" :tab-id="t.id" :url="t.url" @focus="emit('focus')" />
+    <HtmlPreview v-else-if="t.kind === 'preview'" v-show="t.id === holder.activeTabId" :path="t.path" @focus="emit('focus')" />
   </template>
-  <!-- overlay 종류별 뷰 (hex·preview 는 path 키라 탭 전환 시 컴포넌트가 갈린다) -->
+  <!-- overlay 종류별 뷰 (hex 는 path 키라 탭 전환 시 컴포넌트가 갈린다) -->
   <HexView v-if="overlay?.kind === 'hex'" :key="overlay.path" :path="overlay.path" />
-  <HtmlPreview v-else-if="overlay?.kind === 'preview'" :key="overlay.path" :path="overlay.path" @focus="emit('focus')" />
   <TerminalView v-else-if="overlay?.kind === 'terminal'" :key="overlay.term" :term="overlay.term" :active="active" />
   <!-- 폴더 탭 — 탭 안 이동은 id 가 바뀌므로 key 를 두지 않는다 (같은 인스턴스가 path 변화를 따라간다) -->
   <FolderView v-else-if="overlay?.kind === 'folder'" :group-id="groupId" :tab-id="overlay.tabId" :path="overlay.path" />

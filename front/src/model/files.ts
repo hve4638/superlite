@@ -1,7 +1,7 @@
-import { reactive } from '@vue/reactivity';
+import { markRaw, reactive } from '@vue/reactivity';
 import type { DirEntry, QuickOpenResult, ThinBackend } from '../backend/types';
 import { ctx, viewOf } from './ctx';
-import { errText } from './notifications';
+import { errText, notify } from './notifications';
 
 export interface TreeNode {
   name: string;
@@ -15,6 +15,17 @@ export interface TreeNode {
 export interface FilesSnapshot {
   root: TreeNode[];
   expanded: string[];
+}
+
+/** 추가 탐색기 섹션 (ticket explorer-extra-roots) — 드롭한 폴더를 루트로 하는 독립 트리 인스턴스.
+ *  워크스페이스 안 폴더만 된다 (사용자 결정 2026-09-14) — 경로가 전부 루트 상대라 파일 조작·감시 갱신·
+ *  git 표식이 메인 트리와 같은 통로를 그대로 쓴다. abs 는 저장·중복 판정 키(절대 경로, '/' 구분),
+ *  base 는 트리 루트의 루트 상대 경로 */
+export interface ExtraRoot {
+  abs: string;
+  base: string;
+  name: string;
+  tree: ReturnType<typeof createFiles>;
 }
 
 export function parentOf(path: string): string {
@@ -72,9 +83,14 @@ function sortEntries(entries: DirEntry[]): DirEntry[] {
   });
 }
 
-/** 세션별 탐색기 트리 모듈 — 상태는 팩토리 안에 산다 (한 페이지에 세션 여럿) */
-export function createFiles(backend: ThinBackend) {
+/** 세션별 탐색기 트리 모듈 — 상태는 팩토리 안에 산다 (한 페이지에 세션 여럿).
+ *  base: 트리 루트 경로 ('' = 워크스페이스 루트). 추가 탐색기 섹션은 폴더 경로(루트 상대 또는 절대)를
+ *  base 로 하는 별도 인스턴스다 — 펼침·선택·로드 상태가 섹션마다 독립 (ticket explorer-extra-roots) */
+export function createFiles(backend: ThinBackend, base = '') {
   const files = reactive({
+    /** 추가 탐색기 섹션 — 메인 인스턴스(base '')에만 있다. 드롭 순서. refreshDir·loadedDirPaths·refreshTree·
+     *  collapseAll 이 여기로도 전달된다 (감시·파일 조작 갱신이 섹션에 닿게). 트리 자체는 markRaw */
+    extraRoots: [] as ExtraRoot[],
     root: [] as TreeNode[],
     expanded: new Set<string>(),
     /** 포커스 행 — 키보드·rename·새 파일 위치의 기준이자 Shift 범위 선택의 끝점 */
@@ -119,7 +135,7 @@ export function createFiles(backend: ThinBackend) {
   /** 루트 첫 로드 — 병합으로 넣는다: 창 이동 핸드오프의 트리 스냅샷(restore)이 먼저 들어와 있으면 그 노드·
    *  펼침·로드된 자식을 보존해야 한다 (ticket window-detach-reload). 실패는 그대로 던진다 (원격 접속 실패 판정) */
   async function initFiles(): Promise<void> {
-    const entries = await readDir('');
+    const entries = await readDir(base);
     mergeChildren(null, entries);
     files.loading = false;
   }
@@ -220,8 +236,9 @@ export function createFiles(backend: ThinBackend) {
    * 하위의 펼침·로드 상태를 보존한다. path='' 는 루트. 미로드 디렉터리는 무시.
    */
   async function refreshDir(path: string): Promise<void> {
-    const node = path === '' ? null : findNode(path);
-    const inTree = path === '' || (node !== null && node.kind === 'directory' && node.children !== null);
+    for (const x of files.extraRoots) void x.tree.refreshDir(path);
+    const node = path === base ? null : findNode(path);
+    const inTree = path === base || (node !== null && node.kind === 'directory' && node.children !== null);
     const listed = files.listing.has(path);
     if (!inTree && !listed) return;
     let entries: DirEntry[];
@@ -262,7 +279,7 @@ export function createFiles(backend: ThinBackend) {
   /** 로드된(children 있는) 디렉터리 경로 전체 + 폴더 탭 나열 경로. 루트('') 포함. 전체 리프레시·
    *  fileops 의 최근접 로드 조상 판정용. */
   function loadedDirPaths(): string[] {
-    const out = [''];
+    const out = [base];
     const walk = (nodes: TreeNode[]) => {
       for (const n of nodes) {
         if (n.kind === 'directory' && n.children) {
@@ -273,6 +290,7 @@ export function createFiles(backend: ThinBackend) {
     };
     walk(files.root);
     for (const p of files.listing.keys()) if (!out.includes(p)) out.push(p);
+    for (const x of files.extraRoots) for (const p of x.tree.loadedDirPaths()) if (!out.includes(p)) out.push(p);
     return out;
   }
 
@@ -286,6 +304,7 @@ export function createFiles(backend: ThinBackend) {
   /** 모두 접기 — 펼침 집합만 비운다. 로드된 자식은 유지되어 재펼침에 왕복이 없다 */
   function collapseAll(): void {
     files.expanded.clear();
+    for (const x of files.extraRoots) x.tree.collapseAll();
   }
 
   /** 경로를 트리에 드러낸다 — 조상 디렉토리를 차례로 로드·펼치고 선택한다 (VS Code explorer.autoReveal).
@@ -372,10 +391,47 @@ export function createFiles(backend: ThinBackend) {
     return out;
   }
 
+  // ---- 추가 탐색기 섹션 (ticket explorer-extra-roots) — 메인 인스턴스 전용
+  /** 섹션 추가 — abs 는 절대 경로, rootPath 는 워크스페이스 root. 워크스페이스 밖·루트 자신·이미 있는
+   *  폴더는 조용히 무시한다 (사용자 결정 2026-09-14: 밖 폴더 드롭은 알림 없이 아무 일도 없음).
+   *  첫 나열 실패(사라진 폴더 등)는 알리고 섹션을 만들지 않는다 — 저장본에서도 그대로 빠진다 */
+  async function addExtraRoot(abs: string, rootPath: string): Promise<void> {
+    abs = abs.replace(/\\/g, '/').replace(/\/+$/, '');
+    if (!rootPath) return;
+    const rel = toWorkspacePath(abs, rootPath);
+    // toWorkspacePath 는 루트 밖이면 절대 경로를 그대로 돌려준다 — 그게 곧 "밖" 판정이다
+    if (rel === '' || isAbsPath(rel) || files.extraRoots.some((x) => x.abs === abs)) return;
+    const tree = createFiles(backend, rel);
+    try {
+      await tree.initFiles();
+    } catch (e) {
+      notify('warning', `Could not add explorer for ${abs}: ${errText(e)}`);
+      return;
+    }
+    if (files.extraRoots.some((x) => x.abs === abs)) return; // 나열 중 같은 폴더가 먼저 들어왔다
+    files.extraRoots.push({ abs, base: rel, name: rel.slice(rel.lastIndexOf('/') + 1), tree: markRaw(tree) });
+  }
+  function removeExtraRoot(abs: string): void {
+    const i = files.extraRoots.findIndex((x) => x.abs === abs);
+    if (i !== -1) files.extraRoots.splice(i, 1);
+  }
+  /** 섹션 순서 바꾸기 (헤더 드래그) — from 섹션을 목록의 toIndex 자리(삽입선 위치, 0 = 맨 위,
+   *  길이 = 맨 아래)로 옮긴다. 자기 자신을 빼고 나면 뒤쪽 자리는 하나씩 당겨진다. 배열 순서가 곧 저장 순서다 */
+  function moveExtraRoot(fromAbs: string, toIndex: number): void {
+    const from = files.extraRoots.findIndex((x) => x.abs === fromAbs);
+    if (from === -1 || toIndex < 0 || toIndex > files.extraRoots.length) return;
+    const to = toIndex > from ? toIndex - 1 : toIndex;
+    if (to === from) return;
+    files.extraRoots.splice(to, 0, ...files.extraRoots.splice(from, 1));
+  }
+
   return {
     files, initFiles, snapshot, restore, toggleDir, refreshDir, loadedDirPaths, onDirLoaded,
     quickOpen, invalidateQuickOpen, refreshTree, collapseAll, visibleNodes, revealPath, expandPaths,
     acquireDir, releaseDir, select, toggleSelect, rangeSelect, selectAll, selectedNodes,
+    addExtraRoot, removeExtraRoot, moveExtraRoot,
+    /** 이 트리 루트의 루트 상대 경로 — 공용 트리 컴포넌트(FileTree)가 "루트 행" 판정에 쓴다 */
+    base,
   };
 }
 
@@ -395,3 +451,9 @@ export const toggleSelect = (path: string): void => ctx().files.toggleSelect(pat
 export const rangeSelect = (path: string): void => ctx().files.rangeSelect(path);
 export const selectAll = (): void => ctx().files.selectAll();
 export const selectedNodes = (): TreeNode[] => ctx().files.selectedNodes();
+export const addExtraRoot = (abs: string, rootPath: string): Promise<void> => ctx().files.addExtraRoot(abs, rootPath);
+export const removeExtraRoot = (abs: string): void => ctx().files.removeExtraRoot(abs);
+export const moveExtraRoot = (fromAbs: string, toIndex: number): void => ctx().files.moveExtraRoot(fromAbs, toIndex);
+/** 활성 세션의 메인 트리 모듈 — 공용 트리 컴포넌트가 인스턴스 하나를 받으므로 섹션 트리와 같은 모양이 필요하다.
+ *  viewOf 프록시라 세션 전환이 그대로 반영된다 */
+export const mainTree = viewOf(() => ctx().files);

@@ -10,6 +10,8 @@ export type QuickInputMode = 'files' | 'commands' | 'folder';
 /** 창 이동 핸드오프의 레이아웃 몫 — 부위 크기·표시 여부만 (오버레이는 나르지 않는다) */
 export interface WorkbenchSnapshot {
   sideBarVisible: boolean;
+  /** 고정(pin) — 참이면 사이드바가 편집기와 가로 자리를 나눠 쓰고, 거짓(기본)이면 편집기 위에 떠 있다 (ticket floating-sidebar) */
+  sideBarPinned: boolean;
   sideBarWidth: number;
   activeViewlet: ViewletId;
 }
@@ -38,6 +40,7 @@ export function createWorkbench(backend: ThinBackend) {
     rootPath: '',
 
     sideBarVisible: true,
+    sideBarPinned: false,
     sideBarWidth: 300,
     activeViewlet: 'explorer' as ViewletId,
 
@@ -62,6 +65,10 @@ export function createWorkbench(backend: ThinBackend) {
 
   function toggleSideBar(): void {
     workbench.sideBarVisible = !workbench.sideBarVisible;
+  }
+
+  function toggleSideBarPinned(): void {
+    workbench.sideBarPinned = !workbench.sideBarPinned;
   }
 
   /**
@@ -98,8 +105,8 @@ export function createWorkbench(backend: ThinBackend) {
   }
 
   function snapshot(): WorkbenchSnapshot {
-    const { sideBarVisible, sideBarWidth, activeViewlet } = workbench;
-    return { sideBarVisible, sideBarWidth, activeViewlet };
+    const { sideBarVisible, sideBarPinned, sideBarWidth, activeViewlet } = workbench;
+    return { sideBarVisible, sideBarPinned, sideBarWidth, activeViewlet };
   }
 
   function restore(s: WorkbenchSnapshot): void {
@@ -107,7 +114,7 @@ export function createWorkbench(backend: ThinBackend) {
   }
 
   return {
-    workbench, initWorkbench, toggleSideBar, showViewlet,
+    workbench, initWorkbench, toggleSideBar, toggleSideBarPinned, showViewlet,
     openQuickInput, closeQuickInput, openContextMenu, closeContextMenu, snapshot, restore,
   };
 }
@@ -119,7 +126,7 @@ export const workbench = viewOf(() => ctx().workbench.workbench);
 /** 서브 창의 사이드바(+액티비티바) 표시 — 창 단위 상태. 세션의 sideBarVisible 은 건드리지 않아
  *  세션 스냅샷(핸드오프)에 실리지 않는다 — 서브 창에서 잠시 펼친 것이 메인 창의 세션에 번지지
  *  않는다 (ticket window-secondary-no-sidebar). 기본 접힘 — VS Code auxiliary window 처럼 편집기 위주 */
-export const subShell = reactive({ sideBarVisible: false });
+export const subShell = reactive({ sideBarVisible: false, sideBarPinned: false });
 
 // 서브 창의 세션은 트리·SCM 을 미뤄 둔다(lazy) — 사이드바를 펼치는 순간(활성 세션이 바뀌어도) 그 세션의
 // 트리·SCM 을 읽는다. 이미 읽은 세션은 무동작 (ticket window-detach-reload)
@@ -135,6 +142,23 @@ if (subWindow) {
 /** 이 창에서 사이드바를 그리는가 — 메인 창은 세션 상태, 서브 창은 창 단위 상태 */
 export function sideBarShown(): boolean {
   return subWindow ? subShell.sideBarVisible : workbench.sideBarVisible;
+}
+
+/** 사이드바 고정 여부 — 메인 창은 세션 상태, 서브 창은 창 단위 상태. 거짓이면 플로팅 (ticket floating-sidebar) */
+export function sideBarPinned(): boolean {
+  return subWindow ? subShell.sideBarPinned : workbench.sideBarPinned;
+}
+
+export function toggleSideBarPinned(): void {
+  if (subWindow) subShell.sideBarPinned = !subShell.sideBarPinned;
+  else ctx().workbench.toggleSideBarPinned();
+}
+
+/** 플로팅 사이드바 접기 — 사이드바 밖(편집기 영역) 클릭 때. 고정 상태면 무동작 */
+export function hideFloatingSideBar(): void {
+  if (sideBarPinned()) return;
+  if (subWindow) subShell.sideBarVisible = false;
+  else ctx().workbench.workbench.sideBarVisible = false;
 }
 
 /** 액티비티바 — 메인 창은 늘 그린다 (사이드바를 접어도 남는다, VS Code 동일). 서브 창은 사이드바와 함께 */

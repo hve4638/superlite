@@ -27,6 +27,9 @@ const src = ref(props.url);
 /** 새로고침은 프레임을 다시 만든다 — src 재대입은 프레임 안 현재 문서와 같으면 무시될 수 있다 */
 const frameKey = ref(0);
 const error = ref('');
+/** 현재 항해의 load 를 받았는가 — 받기 전에는 프레임 바탕을 흰색 대신 편집기 배경색으로 둔다 (흰 번쩍임 방지).
+ *  숨기지는 않는다 — load 는 하위 리소스까지 끝나야 오므로 느린 리소스 하나에 페이지 전체가 가려진다 */
+const loaded = ref(false);
 /** 마지막으로 load 를 받은 프레임 요소 — 요소가 바뀌었으면 그 프레임의 첫 로드 (urlNav 가 세지 않는다) */
 let loadedEl: HTMLIFrameElement | null = null;
 
@@ -86,6 +89,7 @@ function submit(): void {
 function reload(): void {
   if (src.value === '') return;
   onFrameGone(props.tabId);
+  loaded.value = false;
   frameKey.value++;
   diagNav(src.value);
 }
@@ -94,6 +98,7 @@ function onLoad(): void {
   const first = el !== loadedEl;
   pushUrlDiag(props.tabId, `load#${navNo} ${Math.round(performance.now() - navAt)}ms since nav (first=${first})`);
   loadedEl = el;
+  loaded.value = true;
   const w = el?.contentWindow;
   // cross-origin 이면 location 접근이 던진다 — 성공하면 앱 origin 문서가 프레임에 들어온 것 (about:blank 제외)
   let reached: string | null = null;
@@ -114,6 +119,7 @@ function onLoad(): void {
 watch(() => props.url, (u) => {
   input.value = u;
   error.value = '';
+  loaded.value = false;
   src.value = u;
   if (u !== '') diagNav(u);
 });
@@ -173,6 +179,7 @@ onBeforeUnmount(() => {
       ref="frame"
       :key="frameKey"
       class="frame"
+      :class="{ loaded }"
       :src="src"
       sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
       :title="url"
@@ -235,6 +242,9 @@ onBeforeUnmount(() => {
   flex: 1;
   min-height: 0;
   border: 0;
+  background: var(--vscode-editor-background);
+}
+.frame.loaded {
   background: #fff;
 }
 .empty {

@@ -35,6 +35,10 @@ export interface WorkspaceState {
   activeGroupId: number;
   nextGroupId: number;
   expanded: string[];
+  /** 추가 탐색기 섹션의 폴더 (절대 경로, 드롭 순서 — ticket explorer-extra-roots). 섹션 안 펼침은 기억하지 않는다 */
+  extraRoots?: string[];
+  /** 사이드바 고정(pin) 여부 (ticket floating-sidebar). 없으면 기본 플로팅 */
+  sideBarPinned?: boolean;
   views: [string, unknown][];
   /** active: 저장 시점에 그 그룹의 활성 탭이 이 터미널이었다 (groups 의 activeTabId 는 문서 탭으로 대체돼 있다) */
   terminals: {
@@ -98,6 +102,8 @@ function serialize(ctx: SessionCtx, sub: boolean): SubSnapshot {
     activeGroupId: s.activeGroupId,
     nextGroupId: s.nextGroupId,
     expanded: [...ctx.files.files.expanded],
+    extraRoots: ctx.files.files.extraRoots.map((x) => x.abs),
+    sideBarPinned: ctx.workbench.workbench.sideBarPinned,
     views: [...ctx.editors.editors.viewStates].filter(([p]) => open.has(p)),
     terminals,
     ...(sub ? { fontZoom: fontZoom() } : {}),
@@ -167,7 +173,8 @@ export async function restoreWorkspace(kind: StoreKind, id: string, root: string
   // 창 이동 핸드오프(세션 통째)가 먼저 도착해 이미 탭이 있으면 그쪽이 진실 — 덮지 않는다
   if (ctx.editors.editors.groups.some((g) => g.tabs.length > 0)) return;
   const tasks: Promise<unknown>[] = [];
-  if (s && s.groups.length > 0) tasks.push(applyWorkspaceState(ctx, s));
+  // 탭이 없던 워크스페이스도 추가 탐색기 섹션은 되살린다 (applyWorkspaceState 는 빈 그룹 목록을 세우면 안 된다)
+  if (s) tasks.push(s.groups.length > 0 ? applyWorkspaceState(ctx, s) : restoreExtraRoots(ctx, s));
   // 보조창 — 저장된 자리·크기에 서브 창을 만들고 'restore' 핸드오프로 채운다 (sessions.applyHandoff).
   // fromSession 은 이 세션(원본) — native 가 미러 세션을 만들고 toSession 을 채운다. 저장한 label 의 서브 창이
   // 아직 살아 있으면(다른 세션의 탭을 가진 채 남은 창, ticket sub-window-restore-broken) 새 창을 겹쳐 만들지
@@ -205,7 +212,8 @@ export async function applyWorkspaceState(ctx: SessionCtx, s: WorkspaceState): P
   // 터미널만 있던 pane 은 터미널을 뺀 빈 그룹으로 저장돼 있다 — restore 는 원래 빈 그룹을 남기므로 그 자리에 다시 붙인다
   ctx.editors.restore({ groups: s.groups, layout: s.layout, activeGroupId: s.activeGroupId, nextGroupId: s.nextGroupId, docs: [] });
   for (const [p, v] of s.views) ctx.editors.editors.viewStates.set(p, v);
-  const tasks: Promise<unknown>[] = [ctx.files.expandPaths(s.expanded)];
+  ctx.workbench.workbench.sideBarPinned = s.sideBarPinned ?? false;
+  const tasks: Promise<unknown>[] = [ctx.files.expandPaths(s.expanded), restoreExtraRoots(ctx, s)];
   const termGroups = new Set(s.terminals.map((t) => t.groupId));
   if (s.terminals.length > 0) {
     const wanted = s.terminals.map((t) => t.tmux);
@@ -271,6 +279,11 @@ export async function applyWorkspaceState(ctx: SessionCtx, s: WorkspaceState): P
     if (failed.length > 0) notify('warning', `Skipped ${failed.length} missing file(s): ${failed.join(', ')}`);
   }));
   await Promise.allSettled(tasks);
+}
+
+/** 추가 탐색기 섹션 복원 — 드롭 순서대로 차례로 (addExtraRoot 가 순서대로 push 한다). 사라진 폴더는 addExtraRoot 가 알리고 건너뛴다 */
+async function restoreExtraRoots(ctx: SessionCtx, s: WorkspaceState): Promise<void> {
+  for (const abs of s.extraRoots ?? []) await ctx.files.addExtraRoot(abs, ctx.workbench.workbench.rootPath);
 }
 
 // ---- 추적·저장

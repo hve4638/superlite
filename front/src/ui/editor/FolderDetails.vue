@@ -22,6 +22,8 @@ const emit = defineEmits<{
   dblclick: [entry: DirEntry];
   contextmenu: [entry: DirEntry | null, e: MouseEvent];
   sort: [key: FolderSortKey];
+  /** 폴더 행 드래그 시작 (ticket explorer-extra-roots) */
+  dragstart: [entry: DirEntry, e: DragEvent];
 }>();
 
 const ROW_H = 22;
@@ -102,6 +104,8 @@ function outsideRows(e: Event): boolean {
               v-else-if="row.entry"
               class="row"
               :class="{ cursor: row.entry.path === cursor, editing: row.entry.path === renaming }"
+              :draggable="row.entry.kind === 'directory'"
+              @dragstart="emit('dragstart', row.entry, $event)"
               @click="emit('click', row.entry)"
               @dblclick="emit('dblclick', row.entry)"
               @contextmenu.prevent="emit('contextmenu', row.entry, $event)"

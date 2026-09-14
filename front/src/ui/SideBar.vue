@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { workbench } from '../model/workbench';
+import { sideBarPinned, toggleSideBarPinned, workbench } from '../model/workbench';
 import { runSearch, clearSearch, collapseAllResults } from '../model/search';
 import { refreshHosts } from '../model/remote';
 import { collapseAll, refreshTree } from '../model/files';
@@ -83,6 +83,13 @@ const actions = computed(() => {
           :class="a.icon"
           :title="a.label"
           @click="a.run()"
+        />
+        <!-- 고정/해제 — 플로팅(기본)은 편집기 위에 떠 있고, 고정하면 자리를 나눠 쓴다 (ticket floating-sidebar) -->
+        <span
+          class="codicon"
+          :class="sideBarPinned() ? 'codicon-pinned' : 'codicon-pin'"
+          :title="sideBarPinned() ? 'Unpin Side Bar' : 'Pin Side Bar'"
+          @click="toggleSideBarPinned()"
         />
         <span
           v-if="workbench.activeViewlet !== 'search'"

@@ -30,6 +30,8 @@ const emit = defineEmits<{
   click: [entry: DirEntry];
   dblclick: [entry: DirEntry];
   contextmenu: [entry: DirEntry | null, e: MouseEvent];
+  /** 폴더 행 드래그 시작 — 탐색기 사이드바의 추가 탐색기 드롭 존·편집기 드롭 존이 받는다 (ticket explorer-extra-roots) */
+  dragstart: [entry: DirEntry, e: DragEvent];
 }>();
 
 const ROW_H = 22;
@@ -99,6 +101,8 @@ function outsideRows(e: Event): boolean {
             v-else-if="row.entry"
             class="row"
             :class="{ cursor: row.entry.path === cursor, highlight: row.entry.path === highlight, editing: row.entry.path === renaming }"
+            :draggable="row.entry.kind === 'directory'"
+            @dragstart="emit('dragstart', row.entry, $event)"
             @click="emit('click', row.entry)"
             @dblclick="emit('dblclick', row.entry)"
             @contextmenu.prevent="emit('contextmenu', row.entry, $event)"
