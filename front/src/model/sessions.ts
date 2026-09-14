@@ -1,7 +1,7 @@
 import { effect, reactive, watch } from '@vue/reactivity';
 import type { ThinBackend } from '../backend/types';
 import { activeCtx } from './ctx';
-import type { SplitSide, TabHandoff } from './editors';
+import type { OpenRequest, SplitSide, TabHandoff } from './editors';
 import { notify } from './notifications';
 import { createSessionCtx, type SessionCtx, type SessionSnapshot } from './session';
 import { applyFontZoom, fontZoom, type FontZoom, type TerminalInstance, type TerminalSnapshot } from './terminal';
@@ -890,14 +890,15 @@ function applyHandoff(h: Handoff): void {
 
 // ---- 창 간 열기 우선순위 (ticket editor-group-open-priority, 2026-09-13). 그룹 우선순위는 세션 컨텍스트(창) 안의 것이라
 // 다른 창의 그룹은 openTarget 이 볼 수 없다. 각 창이 세션마다 "이 창의 최고 순위(그룹 순위의 최솟값 — high 0·보통 1·low 2)" 를
-// 같은 묶음(메인 + 서브)의 창들에 알리고, 열기(openFile·openFileAt — 탐색기·퀵오픈·터미널 링크·검색)는 이 창보다 순위가 엄격히
-// 높은 창이 있으면 그중 가장 높은 창(같으면 가장 최근에 알린 창)으로 넘긴다. 순위가 같으면 이 창에서 연다. 세션은 세션 키
-// (tab.id — 서브 창도 원본 id 를 키로 쓴다; daemonSession 의 미러 id 는 창마다 달라 대조에 쓸 수 없다)로 맞춘다.
-// URL·Hex·diff 등 다른 열기는 창을 넘지 않는다
+// 같은 묶음(메인 + 서브)의 창들에 알리고, 그룹을 지정하지 않은 열기(editors.OpenRequest — 파일·diff·내부 URL 탭·폴더 탭·설정·
+// 다운로드)는 이 창보다 순위가 엄격히 높은 창이 있으면 그중 가장 높은 창(같으면 가장 최근에 알린 창)으로 넘긴다. 순위가 같으면
+// 이 창에서 연다. 세션은 세션 키(tab.id — 서브 창도 원본 id 를 키로 쓴다; daemonSession 의 미러 id 는 창마다 달라 대조에 쓸 수
+// 없다)로 맞춘다. 자기 탭을 바꾸는 열기(Hex·HTML 프리뷰 전환)는 창을 넘지 않는다 (사용자 결정 2026-09-14)
 
 /** rank null = 이 창에서 그 세션이 빠졌다 (기록 삭제) */
 type PriorityNotice = { window: string; session: string; rank: number | null; ts: number };
-type OpenFileRequest = { session: string; path: string; preview?: boolean; line?: number };
+/** 이벤트 이름은 파일 전용이던 때의 open-file-request 그대로 (native forward 허용 목록) — 종류는 kind 로 싣는다 */
+type OpenFileRequest = OpenRequest & { session: string };
 
 /** 다른 창이 알린 최고 순위 — 키 "창\n세션키", 값은 순위와 알린 시각 */
 const remoteRank = new Map<string, { rank: number; ts: number }>();
@@ -935,11 +936,11 @@ function bindOpenPriority(tab: SessionTab, ctx: SessionCtx): void {
   watch(() => bestRank(ctx), (rank) => {
     if (ctxs.get(id) === ctx) broadcastPriority(id, rank);
   }, { immediate: true });
-  ctx.editors.setRemoteOpener((path, o) => !receivingOpen && openInOtherWindow(id, ctx, path, o));
+  ctx.editors.setRemoteOpener((req) => !receivingOpen && openInOtherWindow(id, ctx, req));
 }
 
 /** 이 창보다 순위가 높은 다른 창이 있으면 거기로 열기를 보낸다 — 보냈으면 true. 창이 사라져 실패하면 잊고 이 창에서 연다 */
-function openInOtherWindow(id: string, ctx: SessionCtx, path: string, o: { preview?: boolean; line?: number }): boolean {
+function openInOtherWindow(id: string, ctx: SessionCtx, req: OpenRequest): boolean {
   const mine = bestRank(ctx);
   let best: { window: string; rank: number; ts: number } | null = null;
   for (const [key, r] of remoteRank) {
@@ -949,19 +950,27 @@ function openInOtherWindow(id: string, ctx: SessionCtx, path: string, o: { previ
   }
   if (best === null) return false;
   const toWindow = best.window;
-  const payload: OpenFileRequest = { session: id, path, ...o };
+  const payload: OpenFileRequest = { ...req, session: id };
   void tauri!.core.invoke('forward', { toWindow, event: 'open-file-request', payload }).catch(() => {
     remoteRank.delete(`${toWindow}\n${id}`);
-    void openHere(ctx, path, o);
+    void openHere(ctx, req);
   });
   return true;
 }
 
-/** 넘기지 않고 이 창 컨텍스트에서 연다 — openElsewhere 판정은 openFile·openFileAt 시작의 동기 구간이라 플래그로 막힌다 */
-function openHere(ctx: SessionCtx, path: string, o: { preview?: boolean; line?: number }): Promise<unknown> {
+/** 넘기지 않고 이 창 컨텍스트에서 연다 — openElsewhere 판정은 각 열기 함수 시작의 동기 구간이라 플래그로 막힌다 */
+function openHere(ctx: SessionCtx, req: OpenRequest): unknown {
+  const e = ctx.editors;
   receivingOpen = true;
   try {
-    return o.line !== undefined ? ctx.editors.openFileAt(path, o.line) : ctx.editors.openFile(path, { preview: o.preview });
+    switch (req.kind) {
+      case 'file': return req.line !== undefined ? e.openFileAt(req.path, req.line) : e.openFile(req.path, { preview: req.preview });
+      case 'diff': return e.openDiff(req.path, { deleted: req.deleted, commit: req.commit, from: req.from });
+      case 'url': return e.openUrl(req.url);
+      case 'folder': return e.openFolderTab(req.path);
+      case 'settings': return e.openSettings();
+      case 'downloads': return e.openDownloads();
+    }
   } finally {
     receivingOpen = false;
   }
@@ -972,7 +981,7 @@ function onOpenFileRequest(p: OpenFileRequest): void {
   const tab = sessions.list.find((t) => t.id === p.session);
   const ctx = tab && ctxs.get(tab.id);
   if (!tab || !ctx) return;
-  void openHere(ctx, p.path, p);
+  void openHere(ctx, p);
   activateSession(tab.id);
   void tauri?.window.getCurrentWindow().setFocus();
 }

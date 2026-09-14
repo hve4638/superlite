@@ -105,6 +105,17 @@ export async function imeProbe(): Promise<string | null> {
   return (await tauri.core.invoke('ime_probe')) as string;
 }
 
+/**
+ * 웹뷰 캐시 비우기 (ticket url-tab-stale-content) — URL 탭 새로고침의 Ctrl+클릭이 프레임을 다시 만들기 전에
+ * 기다린다 (app/src/main clear_webview_cache). cross-origin 프레임은 부모가 캐시 무시 재로드를 시킬 방법이
+ * 없어 캐시 자체를 비우는 길밖에 없다. Windows 앱만 실제로 비운다 — 웹·리눅스는 무동작이라 그냥 재생성이고,
+ * 그 환경은 dev 확인용이라 여기까지다 (사용자 결정 2026-09-13). 범위는 웹뷰 프로필 전체
+ */
+export async function clearWebviewCache(): Promise<void> {
+  if (!tauri) return;
+  await tauri.core.invoke('clear_webview_cache');
+}
+
 /** 이 창의 웹뷰 줌 — 레벨·저장·적용은 native (set_zoom) 몫, 부른 창에만 적용된다 (ticket zoom-per-window). 웹은 브라우저 줌이 있어 무동작 */
 /** URL 열기의 단일 진입점 (터미널 링크 Ctrl+클릭, 앞으로 생길 링크) — 사용자 설정의 분기 규칙(settings.urlTargetOf,
  *  ticket user-settings)으로 내부 URL 탭(editors.openUrl)과 외부 브라우저(openExternal)를 가른다 */

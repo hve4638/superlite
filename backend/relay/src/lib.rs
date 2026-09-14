@@ -113,8 +113,12 @@ pub async fn serve(listener: TcpListener, roots: SessionRoots, token: Option<Str
         .route("/nvim", get(nvim::nvim_handler));
     if let Some(dist) = &dist {
         // 정적 dist 만 authed 를 거치지 않는다 — 번들에 비밀이 없고, 토큰은 앱이 URL 로 주입한다
+        // gzip (ticket url-tab-slow-first-load): 원격 PC 에서 캐시 없이 열면 비압축 번들 약 5MB 를 받느라 load 가 2초를 넘었다
         app = app.fallback_service(
-            Router::new().fallback_service(ServeDir::new(dist)).layer(axum::middleware::from_fn(dist_cache_control)),
+            Router::new()
+                .fallback_service(ServeDir::new(dist))
+                .layer(axum::middleware::from_fn(dist_cache_control))
+                .layer(tower_http::compression::CompressionLayer::new()),
         );
     }
     let app = app.with_state(App { roots, token, spares: Arc::default() });

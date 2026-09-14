@@ -378,6 +378,10 @@ function open(inst: TerminalInstance, b: Binding): void {
     () => {
       term.scrollToBottom();
       syncTextArea();
+      // 임시 진단 (ticket term-ime-window-topright) — 조합 시작마다 diag 한 줄 + native 포커스 창·조합 창 후보(ime_probe).
+      //      Windows 구식 조합 창이 뜨는 순간 그 주인 창·프로세스를 가른다. 원인 확정 뒤 지운다
+      diag('comp');
+      void imeProbe().then((p) => p !== null && pushImeDiag(`  native ${p}`));
     },
     true,
   );

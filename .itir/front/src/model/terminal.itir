@@ -53,7 +53,7 @@ export fn killListedTerminal(tmuxId) {
 }
 export val imeDiag
 export fn pushImeDiag(line) {
-  role: 임시 IME 진단 (ticket term-ime-toggle-stuck) — terminalHost 가 한/영 keydown 때 활성 요소·textarea/조합 상자 위치·버퍼 상태·포커스 이후 경과와 native ime_probe 결과를 한 줄씩 넣는다 (상한 60, console 에도 남김). 팔레트 'Developer: Copy IME Diagnostics' 가 클립보드로 복사한다. 원인이 확정되면 지운다
+  role: 임시 IME 진단 (ticket term-ime-toggle-stuck) — terminalHost 가 한/영 keydown 때와 조합 시작(compositionstart, ticket term-ime-window-topright) 때 활성 요소·textarea/조합 상자 위치·버퍼 상태·포커스 이후 경과와 native ime_probe 결과를 한 줄씩 넣는다 (상한 200, console 에도 남김). 팔레트 'Developer: Copy IME Diagnostics' 가 첫 줄에 복사 시각을 붙여 클립보드로 복사한다 (쓰기 실패로 옛 내용이 붙여져도 알아보게). 원인이 확정되면 지운다
 }
 export fn renameListedTerminal(tmuxId, name) {
   role: 세션 이름 변경 + 열린 탭 제목 갱신

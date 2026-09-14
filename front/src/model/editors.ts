@@ -220,6 +220,16 @@ export interface EditorGroup extends TabHolder {
 
 export type OpenPriority = 'high' | 'low';
 
+/** 다른 창으로 넘기는 열기 (setRemoteOpener) — 그룹을 지정하지 않은 열기 중 자기 탭을 바꾸는 것(Hex·HTML 프리뷰 전환)을
+ *  뺀 전부. 받은 창이 종류별 열기 함수로 되돌린다 (sessions.openHere) */
+export type OpenRequest =
+  | { kind: 'file'; path: string; preview?: boolean; line?: number }
+  | { kind: 'diff'; path: string; deleted?: boolean; commit?: string; from?: string }
+  | { kind: 'url'; url: string }
+  | { kind: 'folder'; path: string }
+  | { kind: 'settings' }
+  | { kind: 'downloads' };
+
 /** 화면 배치 트리 — 리프는 그룹 id, 분기는 행(row: 좌우)/열(column: 상하) 컨테이너.
  *  그룹 순회는 flat 한 editors.groups 로 하고, 이 트리는 배치·분할 위치만 담당한다. */
 export interface LayoutBranch {
@@ -649,12 +659,12 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
   /** 다른 창으로 열기 넘김 (ticket editor-group-open-priority, 다중 창) — sessions 가 등록한 훅이 이 창의 최고 순위보다
    *  높은 그룹을 가진 같은 묶음의 다른 창으로 열기를 보낸다. true 면 넘겼으니 여기서는 열지 않는다.
    *  editors 가 창·세션을 모르기 위한 seam (setTerminalCloser 와 같은 꼴) */
-  let remoteOpener: ((path: string, opts: { preview?: boolean; line?: number }) => boolean) | null = null;
-  function setRemoteOpener(fn: (path: string, opts: { preview?: boolean; line?: number }) => boolean): void {
+  let remoteOpener: ((req: OpenRequest) => boolean) | null = null;
+  function setRemoteOpener(fn: (req: OpenRequest) => boolean): void {
     remoteOpener = fn;
   }
-  function openElsewhere(path: string, opts: { preview?: boolean; line?: number }): boolean {
-    return remoteOpener?.(path, opts) ?? false;
+  function openElsewhere(req: OpenRequest): boolean {
+    return remoteOpener?.(req) ?? false;
   }
 
   /** 그룹을 지정하지 않은 열기의 대상 그룹 (ticket editor-group-open-priority) — 순위(high > 보통 > low)가 가장
@@ -745,7 +755,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
     path: string,
     opts?: { preview?: boolean; groupId?: number; focus?: boolean; source?: boolean },
   ): Promise<boolean> {
-    if (opts?.groupId === undefined && openElsewhere(path, { preview: opts?.preview })) return true;
+    if (opts?.groupId === undefined && openElsewhere({ kind: 'file', path, preview: opts?.preview })) return true;
     const group = opts?.groupId !== undefined
       ? editors.groups.find((g) => g.id === opts.groupId) ?? openTarget()
       : openTarget();
@@ -798,7 +808,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
 
   /** 파일을 열고 지정 라인으로 이동 (검색 결과 클릭). line 은 1-based. */
   async function openFileAt(path: string, line: number): Promise<void> {
-    if (openElsewhere(path, { preview: true, line })) return;
+    if (openElsewhere({ kind: 'file', path, preview: true, line })) return;
     // 열기 실패 시 reveal 을 남기면 다음 성공적 열기 때 엉뚱한 스크롤이 튄다
     if (!(await openFile(path, { preview: true, source: true }))) return;
     editors.pendingReveal = { path, line };
@@ -809,6 +819,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
    *  읽기 전용 편집기로 보여 준다 (MonacoHost 가 분기). 문서를 만들지 않아 dirty·저장 경로가 없다.
    *  commit: 그 커밋의 부모 대비 diff — 양쪽 다 git 내용(문서 없음, 읽기 전용), 탭 라벨은 짧은 해시 */
   async function openDiff(path: string, opts?: { deleted?: boolean; commit?: string; from?: string }): Promise<void> {
+    if (openElsewhere({ kind: 'diff', path, ...opts })) return;
     let dirty = false;
     if (!opts?.deleted && !opts?.commit) {
       try {
@@ -838,6 +849,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
   /** URL 탭 열기 — 활성 그룹의 활성 탭 오른쪽에 새 탭. url 이 없으면 빈 탭(주소칸에 포커스, UrlView 몫). 같은 URL 의 탭이
    *  있어도 새로 연다 (주소칸으로 URL 이 바뀌므로 중복 판정에 의미가 없다) */
   function openUrl(url = ''): void {
+    if (openElsewhere({ kind: 'url', url })) return;
     const group = openTarget();
     const id = `url:${Math.random().toString(36).slice(2, 10)}`;
     markUrlTabOpen(id);
@@ -863,6 +875,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
 
   /** 설정 탭 (ticket user-settings) — 창에 하나. 어느 그룹에 있든 그것을 활성화, 없으면 활성 그룹에 연다 */
   function openSettings(): void {
+    if (openElsewhere({ kind: 'settings' })) return;
     const id = tabIdOf('settings', '');
     for (const g of editors.groups) {
       if (g.tabs.some((t) => t.id === id)) return setActiveTab(g.id, id);
@@ -876,6 +889,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
 
   /** 다운로드 기록 탭 (ticket cli-control-discussion) — 설정 탭과 같이 창에 하나 */
   function openDownloads(): void {
+    if (openElsewhere({ kind: 'downloads' })) return;
     const id = tabIdOf('downloads', '');
     for (const g of editors.groups) {
       if (g.tabs.some((t) => t.id === id)) return setActiveTab(g.id, id);
@@ -900,6 +914,7 @@ export function createEditors(backend: ThinBackend, isActive: () => boolean = ()
   /** 폴더 탭 열기 — 탐색기 폴더 드래그 드롭(중앙)·탭바 폴더 버튼(루트). 같은 폴더 탭이 그 그룹에
    *  있으면 활성화만. 나열은 FolderView 가 files.acquireDir 로 한다 (창 이동·복원·재열기 수렴) */
   function openFolderTab(path: string, opts: { groupId?: number; index?: number } = {}): void {
+    if (opts.groupId === undefined && openElsewhere({ kind: 'folder', path })) return;
     const id = tabIdOf('folder', path);
     // 그룹 지정이 없으면(메뉴·타이틀바 클릭) 어느 그룹에든 이미 열린 같은 폴더 탭으로 포커스만 옮긴다
     const existing = opts.groupId === undefined ? editors.groups.find((g) => g.tabs.some((t) => t.id === id)) : undefined;

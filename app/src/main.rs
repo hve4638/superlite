@@ -540,6 +540,50 @@ fn new_window_label(state: &AppState) -> String {
     format!("w{}", state.next_window.fetch_add(1, Ordering::SeqCst) + 1)
 }
 
+/// next_window 의 시작값 — 저장된 서브 창 label(w<n>)의 최대 번호. 이번 실행의 새 창이 지난 실행의 저장본과
+/// 같은 label 을 받지 않게 한다: 복원(workspaceState.restoreWorkspace)은 저장한 label 의 창이 살아 있으면 그
+/// 창에 탭을 보내는데, 실행마다 w1 부터 다시 발급하면 앞 세션의 복원이 방금 만든 창을 옛 창으로 오인해
+/// 합치고 앞 세션의 subs 가 소실됐다 (ticket sub-window-restore-label-collision)
+fn label_seed(p: &Persisted) -> usize {
+    p.workspaces
+        .iter()
+        .flat_map(|w| &w.subs)
+        .filter_map(|s| s.label.strip_prefix('w')?.parse::<usize>().ok())
+        .max()
+        .unwrap_or(0)
+}
+
+/// 논리 px 작업 영역 (x, y, w, h)
+type Area = (f64, f64, f64, f64);
+
+/// 보조창 복원 자리를 화면 안으로 — 제목줄 가운데 점이 든 작업 영역 안으로 창을 물린다. 그런 영역이 없으면
+/// 첫 영역(주 모니터). 영역보다 큰 창은 왼쪽·위를 맞춘다. SLACK 은 Windows 의 보이지 않는 크기 조절
+/// 테두리(스냅한 창의 저장 x 가 -7 쯤)를 보정 대상으로 치지 않기 위한 여유
+fn fit_on_screen(x: f64, y: f64, w: f64, h: f64, areas: &[Area]) -> (f64, f64) {
+    const SLACK: f64 = 8.0;
+    let (px, py) = (x + w / 2.0, y + 16.0);
+    let Some(&(ax, ay, aw, ah)) =
+        areas.iter().find(|(ax, ay, aw, ah)| px >= *ax && px < ax + aw && py >= *ay && py < ay + ah).or(areas.first())
+    else {
+        return (x, y);
+    };
+    let fit = |v: f64, len: f64, start: f64, span: f64| {
+        if v + len > start + span + SLACK { (start + span - len).max(start) } else if v < start - SLACK { start } else { v }
+    };
+    (fit(x, w, ax, aw), fit(y, h, ay, ah))
+}
+
+/// 모니터 작업 영역들(논리 px) — 주 모니터가 먼저
+fn screen_areas(app: &tauri::AppHandle) -> Vec<Area> {
+    let area = |m: &tauri::window::Monitor| {
+        let (r, s) = (m.work_area(), m.scale_factor());
+        (r.position.x as f64 / s, r.position.y as f64 / s, r.size.width as f64 / s, r.size.height as f64 / s)
+    };
+    let mut areas: Vec<Area> = app.primary_monitor().ok().flatten().iter().map(area).collect();
+    areas.extend(app.available_monitors().unwrap_or_default().iter().map(area));
+    areas
+}
+
 /// 'Open Folder' 경로 퀵인풋의 시작 경로 — 열린 워크스페이스가 없을 때(빈 세션) 쓴다.
 /// front 가 navigator 로 OS 를 추측하면 웹(리눅스 서버)에서 틀리므로, 데몬과 같은
 /// 머신인 native 가 정한다. Windows 는 시스템 드라이브 루트(예: `C:/`), 그 외는 `/`. boot_info 로 전달
@@ -642,6 +686,70 @@ fn disable_browser_accelerator_keys(window: &tauri::WebviewWindow) {
             eprintln!("superlite: 브라우저 가속키 해제 실패: {e}");
         }
     });
+}
+
+/// URL 탭 강제 새로고침용 캐시 비우기 (ticket url-tab-stale-content) — front 가 URL 탭 새로고침을 Ctrl+클릭했을 때
+/// 프레임을 다시 만들기 직전에 부른다. Windows 만 실제로 동작한다 — 웹·리눅스(dev 확인용)는 무동작이고
+/// front 는 그대로 프레임만 다시 만든다 (사용자 결정 2026-09-13).
+/// WHY: cross-origin iframe 은 부모가 캐시 무시 재로드를 시킬 방법이 없다. location.reload 는 부를 수 없고,
+///      부모 창에서 같은 주소를 캐시 무시로 미리 받아 둬도 소용이 없다 — 브라우저가 캐시를 (최상위 사이트,
+///      프레임 사이트) 쌍으로 나눠 보관해 부모가 채운 항목과 프레임이 쓰는 항목이 다르다 (playwright 실측
+///      2026-09-13). 주소에 임시 쿼리를 붙이는 우회는 사이트가 보는 URL 을 바꾸므로 쓰지 않았다.
+#[tauri::command]
+async fn clear_webview_cache(window: tauri::WebviewWindow) -> Result<(), String> {
+    #[cfg(windows)]
+    return win_cache::clear(window);
+    #[cfg(not(windows))]
+    {
+        let _ = window;
+        Ok(())
+    }
+}
+
+/// WebView2 프로필의 디스크 캐시 비우기 (Windows 전용, ticket url-tab-stale-content).
+/// WHY: 범위가 프로필 전체다 — origin 하나만 고르는 공개 API 가 없다 (Profile8 까지 확인). 앱 자산 캐시도
+///      함께 비워져 다음 로드가 조금 느려지지만 캐시라 다시 채워진다. 1.0.1245.22 이전 런타임은 인터페이스가
+///      없어 cast 가 실패하고, 그 사유가 front 에 그대로 올라간다
+#[cfg(windows)]
+mod win_cache {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        ICoreWebView2Profile2, ICoreWebView2_13, COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE,
+    };
+    use webview2_com::ClearBrowsingDataCompletedHandler;
+    use windows_core::Interface;
+
+    /// 커맨드가 async 라 이 함수는 async 런타임 스레드에서 돌고, with_webview 는 클로저를 창 스레드로 보낸다 —
+    /// 완료까지 여기서 막고 기다려도 교착하지 않는다. 완료 핸들러도 창 스레드가 부른다.
+    /// 응답이 없으면 5초에 포기한다 — front 가 새로고침 자체를 못 하는 상태로 남지 않게
+    pub fn clear(window: tauri::WebviewWindow) -> Result<(), String> {
+        let (tx, rx) = mpsc::channel::<Result<(), String>>();
+        let fail = tx.clone();
+        window
+            .with_webview(move |webview| {
+                let started = (|| -> Result<(), String> {
+                    let core = unsafe { webview.controller().CoreWebView2() }.map_err(|e| e.to_string())?;
+                    let profile = unsafe { core.cast::<ICoreWebView2_13>().map_err(|e| e.to_string())?.Profile() }
+                        .map_err(|e| e.to_string())?;
+                    let profile2 = profile.cast::<ICoreWebView2Profile2>().map_err(|e| e.to_string())?;
+                    // 핸들러 인자는 HRESULT 가 아니라 이미 풀린 windows Result (webview2-com ClosureArg)
+                    let done = ClearBrowsingDataCompletedHandler::create(Box::new(move |r: windows_core::Result<()>| {
+                        let _ = tx.send(r.map_err(|e| e.to_string()));
+                        Ok(())
+                    }));
+                    unsafe { profile2.ClearBrowsingData(COREWEBVIEW2_BROWSING_DATA_KINDS_DISK_CACHE, &done) }
+                        .map_err(|e| e.to_string())
+                })();
+                // 시작 자체가 실패하면 완료 핸들러가 불리지 않는다 — 여기서 사유를 보낸다
+                if let Err(e) = started {
+                    let _ = fail.send(Err(e));
+                }
+            })
+            .map_err(|e| e.to_string())?;
+        rx.recv_timeout(Duration::from_secs(5)).unwrap_or_else(|_| Err("캐시 비우기 응답 없음 (5초)".into()))
+    }
 }
 
 /// 창 아이콘 (Windows 전용, ticket app-icon-quality). tao 는 창 아이콘을 ICO 첫 항목(16px)의 RGBA 로
@@ -860,26 +968,94 @@ mod win_ime {
             let _ = GetGUIThreadInfo(0, &mut gti);
             (gti.hwndFocus, GetForegroundWindow())
         };
-        let class = |h: HWND| -> String {
-            if h.0.is_null() {
-                return "null".to_string();
-            }
-            let mut buf = [0u16; 64];
-            let n = unsafe { GetClassNameW(h, &mut buf) }.max(0) as usize;
-            String::from_utf16_lossy(&buf[..n])
-        };
         let inside = !focus.0.is_null() && (focus == hwnd || unsafe { IsChild(hwnd, focus) }.as_bool());
         let opens: Vec<String> = ime_windows(hwnd)
             .iter()
             .map(|&h| ime_control(h, IMC_GETOPENSTATUS, 0).map_or("?".to_string(), |r| (r != 0).to_string()))
             .collect();
+        let me = std::process::id();
+        let c = gti.rcCaret;
         format!(
-            "fg={} focus={}{} ime=[{}]",
+            "fg={} focus={}{} ime=[{}] {} caret={}@{},{} near=[{}]",
             fg == hwnd,
             class(focus),
             if inside { "(inside)" } else { "(OUTSIDE)" },
-            opens.join(",")
+            opens.join(","),
+            proc_desc(pid_of(focus), me),
+            class(gti.hwndCaret),
+            c.left,
+            c.top,
+            near_windows(hwnd, me).join("; ")
         )
+    }
+
+    fn class(h: HWND) -> String {
+        if h.0.is_null() {
+            return "null".to_string();
+        }
+        let mut buf = [0u16; 64];
+        let n = unsafe { GetClassNameW(h, &mut buf) }.max(0) as usize;
+        String::from_utf16_lossy(&buf[..n])
+    }
+
+    fn pid_of(h: HWND) -> u32 {
+        use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+        let mut pid = 0u32;
+        unsafe { GetWindowThreadProcessId(h, Some(&mut pid)) };
+        pid
+    }
+
+    /// "pid=<pid>(<exe 이름>)" — 자기 프로세스는 me
+    fn proc_desc(pid: u32, me: u32) -> String {
+        use windows::core::PWSTR;
+        use windows::Win32::Foundation::CloseHandle;
+        use windows::Win32::System::Threading::{
+            OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        if pid == me {
+            return format!("pid={pid}(me)");
+        }
+        let path = unsafe {
+            OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok().and_then(|p| {
+                let mut buf = [0u16; 260];
+                let mut n = buf.len() as u32;
+                let ok = QueryFullProcessImageNameW(p, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut n).is_ok();
+                let _ = CloseHandle(p);
+                ok.then(|| String::from_utf16_lossy(&buf[..n as usize]))
+            })
+        };
+        let name = path.as_deref().and_then(|s| s.rsplit('\\').next()).unwrap_or("?");
+        format!("pid={pid}({name})")
+    }
+
+    /// 진단 (ticket term-ime-window-topright, 임시): 구식 조합 창 후보 — 화면 (0,0) 이나 이 창 왼쪽 위에서 80px 안에
+    /// 보이는 작은(1000x300 이하) 최상위 창의 클래스·소유 프로세스·화면 좌표. 조합 창이 뜬 순간 주인을 가른다
+    fn near_windows(hwnd: HWND, me: u32) -> Vec<String> {
+        use windows::Win32::Foundation::RECT;
+        use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindowRect, IsWindowVisible};
+        let mut own = RECT::default();
+        let _ = unsafe { GetWindowRect(hwnd, &mut own) };
+        let mut tops: Vec<HWND> = Vec::new();
+        unsafe extern "system" fn collect(h: HWND, lp: LPARAM) -> BOOL {
+            unsafe { (*(lp.0 as *mut Vec<HWND>)).push(h) };
+            BOOL(1)
+        }
+        let _ = unsafe { EnumWindows(Some(collect), LPARAM(&mut tops as *mut Vec<HWND> as isize)) };
+        let near = |r: &RECT, x: i32, y: i32| (r.left - x).abs() <= 80 && (r.top - y).abs() <= 80;
+        tops.into_iter()
+            .filter_map(|h| {
+                if h == hwnd || !unsafe { IsWindowVisible(h) }.as_bool() {
+                    return None;
+                }
+                let mut r = RECT::default();
+                unsafe { GetWindowRect(h, &mut r) }.ok()?;
+                let (w, ht) = (r.right - r.left, r.bottom - r.top);
+                if w <= 0 || ht <= 0 || w > 1000 || ht > 300 || !(near(&r, 0, 0) || near(&r, own.left, own.top)) {
+                    return None;
+                }
+                Some(format!("{} {} {},{} {}x{}", class(h), proc_desc(pid_of(h), me), r.left, r.top, w, ht))
+            })
+            .collect()
     }
 }
 
@@ -1432,6 +1608,11 @@ async fn detach_tabs(
     deliver_handoff(&app, &state, &label, handoff);
     // 보조창 복원은 저장된 레벨(±ZOOM_MAX 클램프), 그 외는 출처 창 값을 물려받는다
     let zoom = zoom.map_or_else(|| zoom_of(&state, window.label()), |z| z.clamp(-ZOOM_MAX, ZOOM_MAX));
+    // 보조창 복원(size 있음)은 저장 자리가 지금 화면 밖일 수 있다 (모니터 구성 변경) — 화면 안으로 물린다
+    let (x, y) = match size {
+        Some((w, h)) => fit_on_screen(x, y, w, h, &screen_areas(&app)),
+        None => (x, y),
+    };
     match build_window(&app, &state, &label, Some((x, y)), size, zoom) {
         Err(e) => {
             // 롤백 — 생기지 않은 창의 세션·미러·핸드오프를 지운다 (front 는 실패를 받아 탭을 되돌린다)
@@ -1546,8 +1727,9 @@ fn list_subs(state: tauri::State<AppState>, window: tauri::WebviewWindow) -> Vec
 /// 창 간 메시지 중계 — 대상 창의 드롭이 출처 창에 이동을 요청하거나(…-move-request), 출처
 /// 창이 살아 있는 대상 창에 에디터·터미널 탭 핸드오프를 보낼 때(tabs-handoff), 메인 창이 서브
 /// 창에 세션의 탭 회수를 요청하고(session-recall) 서브가 응답할 때(session-recalled) 쓴다.
-/// 열기 우선순위(ticket editor-group-open-priority)는 high 그룹 보유를 묶음의 창들에 알리고(open-priority,
-/// 늦게 뜬 창의 open-priority-query) high 그룹이 있는 창으로 파일 열기를 넘긴다(open-file-request).
+/// 열기 우선순위(ticket editor-group-open-priority)는 창별 최고 순위를 묶음의 창들에 알리고(open-priority,
+/// 늦게 뜬 창의 open-priority-query) 순위가 더 높은 창으로 열기를 넘긴다(open-file-request — 파일·diff·내부 URL·
+/// 폴더·설정·다운로드, 종류는 payload 의 kind. 파일 전용이던 때의 이름을 이 허용 목록 때문에 그대로 둔다).
 /// native 는 payload 내용을 모른다
 #[tauri::command]
 fn forward(app: tauri::AppHandle, to_window: String, event: String, payload: serde_json::Value) -> Result<(), String> {
@@ -1697,8 +1879,8 @@ async fn get_workspace_state(
     let (kept, taken): (Vec<SubWorkspaceEntry>, Vec<SubWorkspaceEntry>) =
         std::mem::take(&mut w.subs).into_iter().partition(|s| reloading.contains(&s.label));
     w.subs = kept;
-    // 비운 것이 있을 때만 파일에 반영한다
-    let changed = !taken.is_empty();
+    // 비우기는 메모리에만 — 파일에는 되살아난 서브 창이 자기 몫을 다시 저장할 때(추적 첫 실행) 함께 반영된다.
+    // 그 전에 창 생성이 실패하거나 앱이 죽어도 다음 기동에 저장본이 남아 있다 (ticket sub-window-restore-label-collision)
     let subs: Vec<serde_json::Value> = taken
         .into_iter()
         .map(|s| {
@@ -1714,11 +1896,7 @@ async fn get_workspace_state(
             v
         })
         .collect();
-    let out = serde_json::json!({ "state": w.state.clone(), "subs": subs });
-    if changed {
-        save_state(state.state_file.as_deref(), &p);
-    }
-    Ok(Some(out))
+    Ok(Some(serde_json::json!({ "state": w.state.clone(), "subs": subs })))
 }
 
 /// 워크스페이스 상태 저장 — front 가 변경 디바운스·닫기 시점에 통째로 보낸다 (root 는 세션 id 로 안다).
@@ -2274,6 +2452,7 @@ fn main() {
             set_zoom,
             set_ime,
             ime_probe,
+            clear_webview_cache,
             get_workspace_state,
             set_workspace_state,
             set_workspace_sub_state,
@@ -2361,7 +2540,7 @@ fn main() {
                 groups: Mutex::default(),
                 zooms: Mutex::default(),
                 focus: Mutex::default(),
-                next_window: AtomicUsize::new(0),
+                next_window: AtomicUsize::new(label_seed(&persisted)),
                 persisted: Mutex::new(persisted),
                 state_file,
             });
@@ -2452,6 +2631,39 @@ mod tests {
         );
         let abs = if cfg!(windows) { "D:\\x" } else { "/x" };
         assert_eq!(second_launch_root(&["superlite".into(), abs.into()], cwd), Some(PathBuf::from(abs)));
+    }
+
+    #[test]
+    fn label_seed_skips_saved_sub_labels() {
+        // ticket sub-window-restore-label-collision 의 증거 형태 — 서로 다른 실행에서 저장된 두 root 의 서브 창이 모두 w1
+        let sub = |label: &str| serde_json::json!({ "label": label, "x": -6.5, "y": 713.5, "w": 1280.0, "h": 752.0, "state": {} });
+        let p: Persisted = serde_json::from_value(serde_json::json!({
+            "version": 2,
+            "workspaces": [
+                { "root": "ssh://omc/a", "state": null, "subs": [sub("w1")] },
+                { "root": "ssh://omc/b", "state": null, "subs": [sub("w1"), sub("w7"), sub("main")] },
+                { "root": "/c", "state": null },
+            ],
+        }))
+        .unwrap();
+        assert_eq!(label_seed(&p), 7);
+        assert_eq!(label_seed(&Persisted::default()), 0);
+    }
+
+    #[test]
+    fn fit_on_screen_pulls_restored_window_inside() {
+        let fhd: Area = (0.0, 0.0, 1920.0, 1040.0);
+        let right: Area = (1920.0, 0.0, 1920.0, 1040.0);
+        // 증거의 자리 — 아래가 작업 영역을 넘으면 위로 물린다. x 의 -6.5 는 보이지 않는 테두리라 그대로
+        assert_eq!(fit_on_screen(-6.5, 713.5, 1280.0, 752.0, &[fhd]), (-6.5, 288.0));
+        // 안에 있으면 그대로, 오른쪽 모니터의 창은 그 모니터 기준
+        assert_eq!(fit_on_screen(100.0, 100.0, 800.0, 600.0, &[fhd, right]), (100.0, 100.0));
+        assert_eq!(fit_on_screen(3300.0, 100.0, 800.0, 600.0, &[fhd, right]), (3040.0, 100.0));
+        // 어느 화면에도 없으면(떼어 낸 모니터) 첫 영역으로, 영역보다 크면 왼쪽·위를 맞춘다
+        assert_eq!(fit_on_screen(5000.0, 2000.0, 800.0, 600.0, &[fhd, right]), (1120.0, 440.0));
+        assert_eq!(fit_on_screen(-3000.0, -500.0, 2500.0, 1200.0, &[fhd]), (0.0, 0.0));
+        // 모니터 정보를 못 얻으면 그대로
+        assert_eq!(fit_on_screen(5.0, 6.0, 7.0, 8.0, &[]), (5.0, 6.0));
     }
 
     #[test]

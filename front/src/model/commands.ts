@@ -240,7 +240,11 @@ export function setupCommands(): void {
   register({
     id: 'developer.copyImeDiagnostics',
     title: 'Developer: Copy IME Diagnostics',
-    run: () => void navigator.clipboard?.writeText(imeDiag.join('\n') || '(no entries)'),
+    // 첫 줄 복사 시각(UTC, 기록 줄과 같은 기준) — 클립보드 쓰기가 실패해 옛 내용이 붙여져도 알아볼 수 있게
+    run: () =>
+      void navigator.clipboard?.writeText(
+        `copied ${new Date().toISOString().slice(11, 23)}\n${imeDiag.join('\n') || '(no entries)'}`,
+      ),
   });
   // 임시 (ticket url-tab-slow-first-load) — editors.urlDiag 를 클립보드로
   register({

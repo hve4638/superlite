@@ -14,7 +14,8 @@
 // 입력한 URL 기준. 뒤로/앞으로는 부모 history 를 움직이되 urlNav 장부로 앱 페이지를 떠나지 않게 한다.
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { editors, navigateUrlTab, pushUrlDiag } from '../../model/editors';
-import { openExternal } from '../../model/window';
+import { errText, notify } from '../../model/notifications';
+import { clearWebviewCache, openExternal } from '../../model/window';
 import { canGoBack, canGoForward, goBack, goForward, onFrameGone, onFrameLoad } from './urlNav';
 
 const props = defineProps<{ groupId: number; tabId: string; url: string }>();
@@ -83,11 +84,15 @@ function submit(): void {
     return;
   }
   input.value = u;
-  if (u === props.url) reload();
+  if (u === props.url) void reload();
   else navigateUrlTab(props.tabId, u);
 }
-function reload(): void {
+/** hard(새로고침 아이콘 Ctrl+클릭)면 프레임을 다시 만들기 전에 웹뷰 캐시를 비운다 — cross-origin 프레임은
+ *  부모가 캐시 무시 재로드를 시킬 수 없다 (주소에 임시 쿼리를 붙이는 우회는 사이트가 보는 URL 을 바꿔 쓰지 않는다).
+ *  비우기가 실패해도 새로고침 자체는 한다 — 사유만 알린다 */
+async function reload(hard = false): Promise<void> {
   if (src.value === '') return;
+  if (hard) await clearWebviewCache().catch((e: unknown) => notify('error', `Clearing cache failed: ${errText(e)}`));
   onFrameGone(props.tabId);
   loaded.value = false;
   frameKey.value++;
@@ -159,7 +164,12 @@ onBeforeUnmount(() => {
     <div class="bar">
       <span class="nav codicon codicon-arrow-left" :class="{ disabled: !canGoBack(tabId) }" title="Back" @click="goBack(tabId)" />
       <span class="nav codicon codicon-arrow-right" :class="{ disabled: !canGoForward(tabId) }" title="Forward" @click="goForward(tabId)" />
-      <span class="nav codicon codicon-refresh" :class="{ disabled: src === '' }" title="Reload" @click="reload()" />
+      <span
+        class="nav codicon codicon-refresh"
+        :class="{ disabled: src === '' }"
+        title="Reload (Ctrl+Click to clear cache)"
+        @click="void reload($event.ctrlKey)"
+      />
       <input
         ref="addr"
         v-model="input"

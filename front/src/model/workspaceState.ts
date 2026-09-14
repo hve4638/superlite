@@ -178,14 +178,17 @@ export async function restoreWorkspace(kind: StoreKind, id: string, root: string
   // 보조창 — 저장된 자리·크기에 서브 창을 만들고 'restore' 핸드오프로 채운다 (sessions.applyHandoff).
   // fromSession 은 이 세션(원본) — native 가 미러 세션을 만들고 toSession 을 채운다. 저장한 label 의 서브 창이
   // 아직 살아 있으면(다른 세션의 탭을 가진 채 남은 창, ticket sub-window-restore-broken) 새 창을 겹쳐 만들지
-  // 않고 그 창에 핸드오프를 보낸다 — 자리·배율은 그 창의 것을 따른다 (미러는 서브가 ensure_mirror 로 만든다)
-  const live = loaded.subs.length > 0 ? ((await tauri?.core.invoke('list_subs').catch(() => [])) as string[] | undefined) ?? [] : [];
+  // 않고 그 창에 핸드오프를 보낸다 — 자리·배율은 그 창의 것을 따른다 (미러는 서브가 ensure_mirror 로 만든다).
+  // label 일치가 곧 같은 창인 것은 native 가 새 label 을 저장본의 최대 번호 뒤에서 발급하기 때문이다 — 지난 실행의
+  // 저장본 label 은 이번 실행의 어떤 창과도 겹치지 않는다 (ticket sub-window-restore-label-collision)
+  const live =loaded.subs.length > 0 ? ((await tauri?.core.invoke('list_subs').catch(() => [])) as string[] | undefined) ?? [] : [];
   for (const sub of loaded.subs) {
     const { label, x, y, w, h, zoom, fontZoom: fz, ...state } = sub;
     const call = live.includes(label)
       ? tauri?.core.invoke('forward', { toWindow: label, event: 'tabs-handoff', payload: { kind: 'restore', fromSession: id, toSession: id, state } })
       : tauri?.core.invoke('detach_tabs', { root, x, y, size: [w, h], zoom, handoff: { kind: 'restore', fromSession: id, state, fontZoom: fz } });
-    tasks.push(call?.catch((e: unknown) => notify('warning', `Could not restore a detached window: ${String(e)}`)) ?? Promise.resolve());
+    // sticky — 넘겨받은 저장본은 이 창이 되살아나 다시 저장해야 남는다. 실패를 놓치면 보조창이 말없이 사라진다
+    tasks.push(call?.catch((e: unknown) => notify('warning', `Could not restore a detached window: ${String(e)}`, undefined, { sticky: true })) ?? Promise.resolve());
   }
   await Promise.allSettled(tasks);
 }

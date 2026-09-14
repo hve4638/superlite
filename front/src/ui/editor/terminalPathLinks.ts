@@ -2,7 +2,7 @@ import type { IBufferLine, ILink, Terminal } from '@xterm/xterm';
 import { detectLinks, type LinkOs, type ParsedLink } from './terminalLinkParsing';
 import type { TerminalInstance } from '../../model/terminal';
 import type { SessionCtx } from '../../model/session';
-import { allSessionCtxs, rootOfBackend } from '../../model/sessions';
+import { allSessionCtxs } from '../../model/sessions';
 import { isAbsPath, toWorkspacePath } from '../../model/files';
 import { showViewlet } from '../../model/workbench';
 
@@ -133,7 +133,9 @@ export function registerPathLinks(linkTerm: Terminal, term: Terminal, inst: Term
 
   async function linksFor(y: number, line: LogicalLine): Promise<ILink[]> {
     const ctx = ctxOf(inst);
-    const root = ctx ? rootOfBackend(ctx.backend) : null;
+    // 데몬 쪽 절대 root — 세션 탭 root 는 원격이면 `ssh://host/...` 라 stat 경로 공간이 아니다
+    // (ticket term-path-links-root-fallback-gap: 원격에서 root 기준 폴백이 전부 실패했다)
+    const root = ctx?.workbench.workbench.rootPath || null;
     if (!ctx || root === null) return [];
     const os = osOf(root);
     const parsed = detectLinks(line.text, os).filter((p) => p.path.length <= MAX_PATH_LENGTH);

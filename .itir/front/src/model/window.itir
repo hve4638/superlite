@@ -22,7 +22,10 @@ export fn setIme(enabled) {
   role: OS 입력기(IME) 전환 — native set_ime 커맨드 호출. vim 모드가 non-insert 로 들어갈 때 false(영문 강제, 그때 상태를 native 가 창 단위로 기억), insert 진입·vim 모드 해제에 true(복원). 편집기 안에서는 OS IME 를 이길 수 없어 VSCodeVim 의 im-select 처럼 밖에서 바꾼다 (app/src/main set_ime, ticket editor-vim-ime-imswitch). Windows 앱만 — 웹·다른 OS 는 무동작
 }
 export fn imeProbe() -> string {
-  role: IME 진단 (ticket term-ime-toggle-stuck, 임시) — native ime_probe 호출 (전경 창·키보드 포커스 HWND·IME 열림 상태 한 줄). 터미널이 한/영 keydown 때 imeDiag 에 남긴다. 웹·다른 OS 는 null. 원인 확정 뒤 지운다
+  role: IME 진단 (ticket term-ime-toggle-stuck, 임시) — native ime_probe 호출 (전경 창·키보드 포커스 HWND·IME 열림 상태·포커스 프로세스·캐럿·조합 창 후보 한 줄). 터미널이 한/영 keydown 때와 조합 시작 때(ticket term-ime-window-topright) imeDiag 에 남긴다. 웹·다른 OS 는 null. 원인 확정 뒤 지운다
+}
+export fn clearWebviewCache() {
+  role: 웹뷰 캐시 비우기 (app/src/main clear_webview_cache) — URL 탭 새로고침의 Ctrl+클릭이 프레임 재생성 전에 기다린다. cross-origin 프레임은 부모가 캐시 무시 재로드를 시킬 수 없어 캐시 자체를 비우는 길밖에 없다. Windows 앱만 실제로 비운다 — 웹·리눅스는 무동작(그냥 재생성), 그 환경은 dev 확인용이라 여기까지 (사용자 결정 2026-09-13). 범위는 웹뷰 프로필 전체
 }
 export fn openUrl(url) {
   role: URL 열기의 단일 진입점 (터미널 링크 Ctrl+클릭 ticket terminal-links, 앞으로 생길 링크) — 사용자 설정의 분기 규칙(settings.urlTargetOf, ticket user-settings)이 내부면 활성 세션의 URL 탭(ctx().editors.openUrl), 외부면 openExternal

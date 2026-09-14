@@ -184,6 +184,7 @@ pub fn read_ssh_config() -> Result<String, String> {
 pub fn write_ssh_config(content: &str) -> Result<(), String> {
     let p = ssh_config_path().ok_or("홈 폴더 없음")?;
     let dir = p.parent().unwrap();
+    #[cfg(unix)]
     let fresh = !p.exists();
     if !dir.is_dir() {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;

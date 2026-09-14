@@ -502,6 +502,6 @@ export const answerCloseRequest = (id: number, close: boolean): Promise<void> =>
 export const imeDiag: string[] = [];
 export function pushImeDiag(line: string): void {
   imeDiag.push(line);
-  if (imeDiag.length > 60) imeDiag.shift();
+  if (imeDiag.length > 200) imeDiag.shift();
   console.log('[ime]', line);
 }
