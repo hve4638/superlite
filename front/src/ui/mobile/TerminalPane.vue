@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import {
-  attachTerminal, click, fitTerminal, focusTerminal, mods, pressKey, setTermFont, TERMINAL_BACKGROUND, termFont, toggleMod, wheel,
+  attachTerminal, click, fitTerminal, focusTerminal, mods, pressKey, setTermFont, TERMINAL_BACKGROUND, termFont, toggleKeyboard, toggleMod, wheel,
   type BarKey, type Mod,
 } from './termHost';
 
 // 터미널 탭 본문 (ticket mobile-shell) — 편집기 영역(EditorArea)의 터미널 탭이 활성일 때. xterm / 키바(수정키·키·마우스 모드 토글).
 // 제스처 (사용자 확정 2026-09-14): 한 손가락 끌기 = 스크롤(마우스 모드면 포인터 이동), 탭 = 포커스(마우스 모드면 클릭),
+// 더블탭 = 소프트 키보드 켜기·끄기 (사용자 결정 2026-09-15 — 탭·스크롤은 키보드를 띄우지 않는다; 마우스 모드에서도 두 탭이 각각
+// 클릭으로도 나간다, 충돌은 실사용으로 본다),
 // 두 손가락 = 핀치 확대·축소 또는 두 손가락 끌기 스크롤. 마우스 모드는 터미널 영역 안에 갇힌 가상 포인터 — 터치패드처럼
 // 끌어서 옮기고 탭이 클릭 (tmux·TUI 의 마우스 액션용). 다른 탭으로 옮겨도 스크롤백은 termHost 바인딩에 남는다 —
 // detach 는 탭 줄의 × (model closeTab → disposeTerminal)
@@ -40,6 +42,9 @@ onBeforeUnmount(() => {
 //      document 수준 Gesture(터치→스크롤)가 겹치지 않게
 const TAP_MOVE = 8;
 const TAP_MS = 350;
+const DOUBLE_TAP_MS = 300;
+const DOUBLE_TAP_MOVE = 24;
+let lastTap: { x: number; y: number; at: number } | null = null;
 let start: { x: number; y: number; at: number } | null = null;
 let last: { x: number; y: number } | null = null;
 let moved = false;
@@ -112,6 +117,10 @@ function onEnd(e: TouchEvent): void {
     } else {
       focusTerminal(props.term);
     }
+    const now = Date.now();
+    const dbl = lastTap && now - lastTap.at < DOUBLE_TAP_MS && Math.hypot(start.x - lastTap.x, start.y - lastTap.y) < DOUBLE_TAP_MOVE;
+    lastTap = dbl ? null : { x: start.x, y: start.y, at: now };
+    if (dbl) toggleKeyboard(props.term);
   }
   if (e.touches.length === 0) {
     start = null;

@@ -8,7 +8,7 @@ import { reactive } from 'vue';
  */
 export type Tab = 'files' | 'sessions' | 'scm' | 'editor' | 'workspace';
 
-/** keyboard: 소프트 키보드가 올라와 있는가 — App 이 뷰포트 높이로 판정해 쓴다. 하단 바 숨김과 터미널의 키보드 가드(termHost)가 읽는다 */
+/** keyboard: 소프트 키보드가 올라와 있는가 — App 이 뷰포트 높이로 판정해 쓴다. 하단 바 숨김과 터미널의 키보드 토글 상태(termHost)가 읽는다 */
 export const nav = reactive({ tab: 'sessions' as Tab, keyboard: false });
 
 export function goTo(tab: Tab): void {

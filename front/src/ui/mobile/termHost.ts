@@ -157,7 +157,7 @@ function open(inst: TerminalInstance, b: Binding): void {
   term.onResize(({ cols, rows }) => inst.session.resize(cols, rows));
   b.term = term;
   b.fit = fit;
-  armKeyboardGuard(inst.id);
+  term.textarea!.inputMode = 'none';
 }
 
 /** 인스턴스의 xterm 을 host 에 붙인다 (처음이면 연다) */
@@ -179,29 +179,27 @@ export function fitTerminal(id: number): void {
   }
 }
 
-/** 키보드 가드 (사용자 요청 2026-09-15: 스크롤 뒤 손을 떼면 키보드가 올라온다 — 탭에서만 올라와야 한다). xterm 의 숨은 textarea 에
- *  inputmode=none 을 두면 어떤 경로로 포커스가 가도 소프트 키보드가 뜨지 않는다. 명시적 탭(focusTerminal)만 text 로 바꾸고
- *  포커스한다 — 이미 포커스된 채면 blur 뒤 다시 (같은 요소 focus() 는 무동작이라 키보드가 안 뜬다). 키보드가 내려가면(App 의
- *  판정 nav.keyboard) 다시 none 으로 무장해 다음 잡음 포커스가 키보드를 못 올린다 */
-function textareaOf(id: number): HTMLTextAreaElement | null {
-  return bindings.get(id)?.term?.textarea ?? null;
-}
-function armKeyboardGuard(id: number): void {
-  const ta = textareaOf(id);
-  if (ta) ta.inputMode = 'none';
-}
+/** 포커스만 준다 — 키바·키 입력은 포커스가 필요하지만 소프트 키보드는 띄우지 않는다 (사용자 결정 2026-09-15: 탭·스크롤 뒤 손 떼기
+ *  어느 경로로 포커스가 가도 키보드가 뜨면 안 된다). xterm 의 숨은 textarea 를 inputmode=none 으로 두면 포커스돼도 키보드가 안 뜬다 */
 export function focusTerminal(id: number): void {
+  bindings.get(id)?.term?.focus();
+}
+/** 소프트 키보드 토글 (더블탭) — 켤 때는 inputmode 를 text 로 바꾸고 다시 포커스(이미 포커스된 요소의 focus() 는 무동작이라 blur 뒤),
+ *  끌 때는 blur 로 키보드를 내리고 none 으로 되돌린 채 다시 포커스해 키바는 계속 쓴다. 켜진 상태의 기준은 inputmode 가 text 인지 —
+ *  Android 뒤로가기 등으로 키보드가 내려가면(nav.keyboard) none 으로 되돌려 다음 더블탭이 켜기가 되게 한다 */
+export function toggleKeyboard(id: number): void {
   const b = bindings.get(id);
   const ta = b?.term?.textarea;
   if (!b?.term || !ta) return;
   if (document.activeElement === ta) ta.blur();
-  ta.inputMode = 'text';
+  ta.inputMode = ta.inputMode === 'text' ? 'none' : 'text';
   b.term.focus();
 }
 watch(
   () => nav.keyboard,
   (up) => {
-    if (!up) for (const id of bindings.keys()) armKeyboardGuard(id);
+    if (up) return;
+    for (const b of bindings.values()) if (b.term?.textarea) b.term.textarea.inputMode = 'none';
   },
 );
 
